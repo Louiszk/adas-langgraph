@@ -1,0 +1,14 @@
+Design an agentic system that acts as an automatic data analyst.
+
+The system should take all CSV and JSON files from the 'sandbox/workspace/data/input/' folder and a text description of an analysis task provided under the state key 'analysis_task'.
+
+The system should generate code dynamically using pandas and matplotlib to perform the analysis. A final response must be provided under the state key 'final_answer'.  
+The results, including TXT, CSV, and JSON files and any plots, must be saved in the 'sandbox/workspace/data/output/' folder.  
+The system must be robust and remain generalizable to perform any specified data analysis.
+
+--- Specific Validation Instructions ---
+For validation, please include the generation of a single CSV 'sandbox/workspace/data/input/test.csv' at the top of your code block. No other input files exist yet.  
+Your test cases should include:
+- plotting a distribution and saving it as PNG
+- transforming the data and saving it as CSV
+- calculating column sums and saving them as JSON

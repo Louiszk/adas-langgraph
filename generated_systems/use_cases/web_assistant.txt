@@ -1,0 +1,42 @@
+Design an agentic system that answers questions using the live web.
+
+Based on a question provided under the state key 'question', the system should gather information online.
+The final answer should be saved under the state key 'answer', and the relevant webpages must be saved under the state key 'sources' as a list of tuples `(title, link)`.
+The system should break the query into its relevant parts, search those parts, and scrape linked pages when helpful.
+It should always answer truthfully, including cases where it cannot find sources or relevant information.
+The system must be robust and remain generalizable to answer any specified question.
+
+You can include the Serper API with this code:
+```
+from dotenv import get_key
+import requests
+import json
+
+api_key = get_key('sandbox/workspace/.env', 'SERPER_API_KEY')
+
+url_news = 'https://google.serper.dev/news'
+url_search = 'https://google.serper.dev/search'
+payload = json.dumps({'q': topic, 'tbs': 'qdr:y', 'page': page_index})
+headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+response = requests.post(url_search, headers=headers, data=payload, timeout=10)
+results = response.json()['organic'] # list[dict] with keys: 'title', 'link', 'snippet', 'date'
+# results = response.json()['news']  # list[dict] with keys: 'title', 'link', 'snippet', 'date'
+```
+
+When the question cannot be answered with the snippets only, each link can be scraped with the following code.
+Scraping is costly, so only scrape if the corresponding snippet is relevant.
+
+```
+url = 'https://scrape.serper.dev'
+payload = json.dumps({'url': page_url})
+response = requests.post(url, headers=headers, data=payload, timeout=10)
+full_page = response.text
+```
+
+--- Specific Validation Instructions ---
+Your test cases should include:
+- exploring which iPhones were released in 2025 -> must include iPhone 17 and iPhone Air
+- assessing who won the 2025 Nobel Prize in Physics -> John Clarke, Michel H. Devoret, and John M. Martinis
+- identifying Gemini 3.0 Pro's performance on GPQA Diamond without tools, compared to GPT-5 Pro -> 91.9% vs. 88.4%
+
+

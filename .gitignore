@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+adasvenv/
+adasvenv2/
+
+# Environment
+.env
+
+# Data & Logs
+/data
+*.json
+*.jsonl
+*.log
+
+# ADAS Framework Artifacts
+/materialized_meta_system
+/generated_systems/*.py
+/generated_systems/*.pkl

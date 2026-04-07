@@ -1,0 +1,42 @@
+Design an agentic system that acts as a research assistant.
+
+Given an analysis task provided under the state key 'analysis_task', the system should perform a literature analysis.
+The final textual output must be saved under the state key 'response', and the relevant papers must be saved under the state key 'sources' as a list of tuples `(title, link)`.
+The system should run search terms based on the task, filter the results, and retrieve abstracts or full texts when required.
+It should always answer truthfully, including cases where it cannot find sources or relevant information.
+The system must be robust and remain generalizable to perform any specified literature analysis.
+
+You can include Serper Scholar search with the following code:
+```
+from dotenv import get_key
+import requests
+import json
+
+api_key = get_key('sandbox/workspace/.env', 'SERPER_API_KEY')
+url = 'https://google.serper.dev/scholar'
+payload = json.dumps({'q': query, 'page': page_index})
+headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+response = requests.post(url, headers=headers, data=payload, timeout=10)
+results = response.json()['organic']  # list[dict] with keys 'title', 'link', 'pdfUrl'/'htmlUrl', 'snippet', 'publicationInfo', 'year', 'citedBy', 'id', 'authors', 'venue'
+```
+
+Each 'link' can be scraped to extract abstracts. If available, the 'pdfUrl' or 'htmlUrl' provides access to the full text.
+Scraping is expensive, so only perform it when the paper and its snippet appear relevant to the task.
+You can scrape pages with the following code; PDFs are automatically converted to text.
+
+```
+url = 'https://scrape.serper.dev'
+payload = json.dumps({'url': page_url})
+headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+response = requests.post(url, headers=headers, data=payload, timeout=10)
+full_page = response.text # str
+```
+
+--- Specific Validation Instructions ---
+For validation, incorporate a `LargeLanguageModel` instance from `adas_core.llm_wrapper` to assess the analysis based on the task.
+Set up the language model correctly to give a fair judgment; avoid heuristics for assessing the analysis.
+Provide the LLM with the current date to avoid hallucinations and the rejection of recent papers.
+Your test cases should include:
+- identifying two survey papers on diffusion language models
+- summarizing the abstracts of two recent papers on neurosymbolic AI
+- explaining the detailed methodology of the paper 'LSTM and CNN application for core-collapse supernova search in gravitational wave real data'
