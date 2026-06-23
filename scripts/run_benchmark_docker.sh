@@ -35,6 +35,7 @@ fi
 # Setup Python Environment
 # NOTE: Adjust this line to match your local environment name or use 'source venv/bin/activate'
 echo "Loading environment..."
+# shellcheck disable=SC1091
 source "$HOME"/.bashrc # Or path to your conda hook
 if command -v conda &> /dev/null; then
     eval "$(conda shell.bash hook)"

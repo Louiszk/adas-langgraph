@@ -25,6 +25,7 @@ done
 echo "-----------------------------------------"
 
 echo "Loading environment..."
+# shellcheck disable=SC1091
 source "$HOME"/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate py311
