@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Change working directory to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 # --- Configuration ---
 UNIQUE_ID=${RANDOM} # Use Random ID for local execution
@@ -35,7 +35,7 @@ fi
 # Setup Python Environment
 # NOTE: Adjust this line to match your local environment name or use 'source venv/bin/activate'
 echo "Loading environment..."
-source $HOME/.bashrc # Or path to your conda hook
+source "$HOME"/.bashrc # Or path to your conda hook
 if command -v conda &> /dev/null; then
     eval "$(conda shell.bash hook)"
     conda activate py311 || echo "Warning: Conda env 'py311' not found, using current python."
@@ -189,9 +189,7 @@ test_system() {
             fi
 
             read -ra reqs <<< "$dependencies"
-            docker exec "$builder_cid" pip install "${reqs[@]}"
-
-            if [ $? -ne 0 ]; then
+            if ! docker exec "$builder_cid" pip install "${reqs[@]}"; then
                 echo "  !!ERROR: pip install failed inside the builder container. Stopping build."
                 docker stop "$builder_cid"; docker rm "$builder_cid"
                 return 1
@@ -268,15 +266,15 @@ parse_combinations
 echo "Expanded ${#COMBINATIONS[@]} combinations into ${#EXPANDED_COMBINATIONS[@]} specific test cases"
 
 SUMMARY_FILE="${RESULTS_DIR}/test_summary.txt"
-echo "Local Benchmark Test Summary ($(date))" > $SUMMARY_FILE
-echo "Job ID: ${UNIQUE_ID}" >> $SUMMARY_FILE
+echo "Local Benchmark Test Summary ($(date))" > "$SUMMARY_FILE"
+echo "Job ID: ${UNIQUE_ID}" >> "$SUMMARY_FILE"
 if [ ${#COMBINATIONS[@]} -gt 0 ]; then
-    echo "Testing specific combinations:" >> $SUMMARY_FILE
+    echo "Testing specific combinations:" >> "$SUMMARY_FILE"
     for combo in "${COMBINATIONS[@]}"; do
-        echo "  - $combo" >> $SUMMARY_FILE
+        echo "  - $combo" >> "$SUMMARY_FILE"
     done
 fi
-echo "=========================================" >> $SUMMARY_FILE
+echo "=========================================" >> "$SUMMARY_FILE"
 
 declare -A test_statuses
 initial_dir=$PWD
@@ -294,21 +292,21 @@ done
 
 for key in "${!type_benchmark_map[@]}"; do
     benchmark=${key##*_}
-    type=${key%_$benchmark}
-    iterations=(${type_benchmark_map[$key]})
+    type=${key%_"$benchmark"}
+    read -ra iterations <<< "${type_benchmark_map[$key]}"
     ADAS_DIR="ADAS_$type"
 
     if [ ! -d "$initial_dir/$ADAS_DIR" ]; then
-        echo "!!! ERROR: Directory for type '$type' not found: $initial_dir/$ADAS_DIR. Skipping." | tee -a $SUMMARY_FILE
+        echo "!!! ERROR: Directory for type '$type' not found: $initial_dir/$ADAS_DIR. Skipping." | tee -a "$SUMMARY_FILE"
         for iter in "${iterations[@]}"; do
             test_statuses["${type}_${benchmark}${iter}_gpt"]="FAILED_DIR_NOT_FOUND"
         done
         continue
     fi
 
-    pushd "$initial_dir/$ADAS_DIR" > /dev/null
+    pushd "$initial_dir/$ADAS_DIR" > /dev/null || exit
     echo ""
-    echo ">>> Testing Approach: ${type}, Benchmark: ${benchmark} (in $PWD) <<<" | tee -a $SUMMARY_FILE
+    echo ">>> Testing Approach: ${type}, Benchmark: ${benchmark} (in $PWD) <<<" | tee -a "$SUMMARY_FILE"
 
     cleanup_counter=0
     for iter in "${iterations[@]}"; do
@@ -319,32 +317,32 @@ for key in "${!type_benchmark_map[@]}"; do
         fi
 
         SYSTEM_NAME="${type}_${benchmark}${iter}_gpt"
-        echo -n "  - ${SYSTEM_NAME}: " | tee -a $SUMMARY_FILE
+        echo -n "  - ${SYSTEM_NAME}: " | tee -a "$SUMMARY_FILE"
 
         test_system "$type" "$benchmark" "$iter"
         test_exit_code=$?
 
         if [ $test_exit_code -eq 0 ]; then
-            echo "WORKING" >> $SUMMARY_FILE
+            echo "WORKING" >> "$SUMMARY_FILE"
             test_statuses["$SYSTEM_NAME"]="WORKING"
         else
-            echo "FAILED" >> $SUMMARY_FILE
+            echo "FAILED" >> "$SUMMARY_FILE"
             test_statuses["$SYSTEM_NAME"]="FAILED"
         fi
         sleep 5
     done
-    popd > /dev/null
+    popd > /dev/null || exit
 done
 
 echo "Generating CSV summary..."
 CSV_FILE="${RESULTS_DIR}/results_summary.csv"
-echo "approach,benchmark,iteration,status" > $CSV_FILE
+echo "approach,benchmark,iteration,status" > "$CSV_FILE"
 
 for combo in "${EXPANDED_COMBINATIONS[@]}"; do
     read -r type benchmark iter <<< "$combo"
     SYSTEM_NAME="${type}_${benchmark}${iter}_gpt"
     STATUS=${test_statuses["$SYSTEM_NAME"]:-"FAILED_UNKNOWN"}
-    echo "${type},${benchmark},${iter},${STATUS}" >> $CSV_FILE
+    echo "${type},${benchmark},${iter},${STATUS}" >> "$CSV_FILE"
 done
 
 echo "CSV summary generated: $CSV_FILE"

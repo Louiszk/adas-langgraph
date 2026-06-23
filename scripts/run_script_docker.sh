@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Change working directory to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --job-name=adas_run
@@ -32,7 +32,8 @@ fi
 echo "Running with TYPE=$TYPE, BENCHMARK=$BENCHMARK, RANGE=$START-$END"
 
 # --- Environment Setup ---
-source $HOME/.bashrc
+# shellcheck disable=SC1091
+source "$HOME"/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate py311
 
@@ -42,7 +43,7 @@ if [ ! -d "$TARGET_DIR" ]; then
     exit 1
 fi
 
-cd "$TARGET_DIR"
+cd "$TARGET_DIR" || exit
 echo "Changed directory to $(pwd)"
 
 PROBLEM_PATH=""
@@ -101,23 +102,23 @@ echo "--- Preparing Custom Base Image '$BASE_IMAGE_NAME' for Job $UNIQUE_ID ---"
 BUILDER_NAME="adas-builder-${UNIQUE_ID}"
 
 echo "--> Step 1: Starting builder container ('$BUILDER_NAME')..."
-cid=$(docker run -d --name $BUILDER_NAME python:3.11-slim sleep 3600)
+cid=$(docker run -d --name "$BUILDER_NAME" python:3.11-slim sleep 3600)
 if [ -z "$cid" ]; then echo "!!ERROR: Failed to start builder container."; exit 1; fi
 
 echo "--> Step 2: Installing core dependencies..."
-docker exec $cid pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
+docker exec "$cid" pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
 
 echo "--> Step 3: Committing to image '$BASE_IMAGE_NAME'..."
-docker commit $cid $BASE_IMAGE_NAME
+docker commit "$cid" "$BASE_IMAGE_NAME"
 
 echo "--> Step 4: Cleaning up builder container..."
-docker stop $cid
-docker rm $cid
+docker stop "$cid"
+docker rm "$cid"
 
 echo "--- Custom Base Image is Ready ---"
 
 # --- Main Experiment Loop ---
-for i in $(seq $START $END)
+for i in $(seq "$START" "$END")
 do
     echo "========================================================="
     echo "           Running Experiment $i of $END"

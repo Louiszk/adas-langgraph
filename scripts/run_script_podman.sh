@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Change working directory to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 # SLURM CONFIGURATIONS HERE
 
 # --- Configuration ---
@@ -31,7 +31,8 @@ fi
 echo "Running with TYPE=$TYPE, BENCHMARK=$BENCHMARK, RANGE=$START-$END"
 
 # --- Environment Setup ---
-source $HOME/.bashrc
+# shellcheck disable=SC1091
+source "$HOME"/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate py311
 
@@ -40,7 +41,7 @@ if [ ! -d "$TARGET_DIR" ]; then
     echo "Error: Directory '$TARGET_DIR' does not exist."
     exit 1
 fi
-cd "$TARGET_DIR"
+cd "$TARGET_DIR" || exit
 echo "Changed directory to $(pwd)"
 
 PROBLEM_PATH=""
@@ -59,7 +60,7 @@ fi
 # Create a job-specific runtime directory for the socket.
 unset XDG_RUNTIME_DIR
 export XDG_RUNTIME_DIR=/tmp/$USER/podman-run-${UNIQUE_ID}
-mkdir -p $XDG_RUNTIME_DIR/podman
+mkdir -p "$XDG_RUNTIME_DIR"/podman
 PODMAN_SOCKET="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
 export ADAS_PODMAN_SOCKET=$PODMAN_SOCKET
 
@@ -91,7 +92,7 @@ trap podman_service_cleanup EXIT INT TERM
 # Start a job-specific Podman service in the background.
 echo "--- Starting Podman REST API service for Job $UNIQUE_ID ---"
 echo "--> Service socket: $PODMAN_SOCKET"
-podman system service --time=0 $PODMAN_SOCKET &
+podman system service --time=0 "$PODMAN_SOCKET" &
 PODMAN_PID=$! # Capture the Process ID of the background service
 
 # CRITICAL: Wait for the service to initialize before trying to connect.
@@ -114,22 +115,22 @@ echo "--- Preparing Custom Base Image '$BASE_IMAGE_NAME' for Job $UNIQUE_ID ---"
 # Use the unique ID for the builder container name.
 BUILDER_NAME="adas-builder-${UNIQUE_ID}"
 echo "--> Step 1: Starting builder container ('$BUILDER_NAME')..."
-cid=$(podman run -d --name $BUILDER_NAME python:3.11-slim sleep 3600)
+cid=$(podman run -d --name "$BUILDER_NAME" python:3.11-slim sleep 3600)
 if [ -z "$cid" ]; then echo "!!ERROR: Failed to start builder container."; exit 1; fi
 
 echo "--> Step 2: Installing core dependencies..."
-podman exec $cid pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
+podman exec "$cid" pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
 
 echo "--> Step 3: Committing to image '$BASE_IMAGE_NAME'..."
-podman commit $cid $BASE_IMAGE_NAME
+podman commit "$cid" "$BASE_IMAGE_NAME"
 
 echo "--> Step 4: Cleaning up builder container..."
-podman stop $cid
-podman rm $cid
+podman stop "$cid"
+podman rm "$cid"
 echo "--- Custom Base Image is Ready ---"
 
 # --- Main Experiment Loop ---
-for i in $(seq $START $END)
+for i in $(seq "$START" "$END")
 do
     echo "========================================================="
     echo "           Running Experiment $i of $END"

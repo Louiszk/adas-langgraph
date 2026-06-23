@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Change working directory to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 # 1. Names of the generated systems to run
 SYSTEM_NAMES=(
@@ -31,7 +31,8 @@ BASE_IMAGE_NAME="adas-base-job:${UNIQUE_ID}"
 
 # --- Environment Setup ---
 # Adjust this section to match your local environment (Conda or Venv)
-source $HOME/.bashrc
+# shellcheck disable=SC1091
+source "$HOME"/.bashrc
 if command -v conda &> /dev/null; then
     eval "$(conda shell.bash hook)"
     conda activate py311 || echo "Warning: Conda env 'py311' not found, using current python."
@@ -55,8 +56,7 @@ mkdir -p data/output
 
 if [ -n "$DATA_GEN_SCRIPT" ] && [ -f "$DATA_GEN_SCRIPT" ]; then
     echo "--- Running Data Generation Script: $DATA_GEN_SCRIPT ---"
-    python "$DATA_GEN_SCRIPT"
-    if [ $? -ne 0 ]; then
+    if ! python "$DATA_GEN_SCRIPT"; then
         echo "Error: Data generation failed."
         exit 1
     fi
@@ -86,14 +86,14 @@ echo "--- Preparing Base Image '$BASE_IMAGE_NAME' ---"
 cid=$(docker run -d --name "adas-base-${UNIQUE_ID}" python:3.11-slim sleep 3600)
 
 # 2. Install core libraries
-docker exec $cid pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
+docker exec "$cid" pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
 
 # 3. Commit to create the base image
-docker commit $cid $BASE_IMAGE_NAME
+docker commit "$cid" "$BASE_IMAGE_NAME"
 
 # 4. Cleanup builder container
-docker stop $cid >/dev/null
-docker rm $cid >/dev/null
+docker stop "$cid" >/dev/null
+docker rm "$cid" >/dev/null
 
 # ==============================================================================
 #  MAIN LOOP

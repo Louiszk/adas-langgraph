@@ -31,6 +31,11 @@ jobs:
       run: |
         source adasvenv/bin/activate
         ruff check .
+
+    - name: Run Shellcheck
+      run: |
+        source adasvenv/bin/activate
+        shellcheck scripts/*.sh
       
     - name: Run Pyright
       run: |

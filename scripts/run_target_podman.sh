@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Change working directory to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 # SLURM CONFIGURATIONS HERE
 
 # 1. Names of the generated systems to run (Space separated list inside parentheses)
@@ -32,7 +32,8 @@ UNIQUE_ID=${SLURM_JOB_ID:-$$}
 BASE_IMAGE_NAME="adas-base-job:${UNIQUE_ID}"
 
 # --- Environment Setup ---
-source $HOME/.bashrc
+# shellcheck disable=SC1091
+source "$HOME"/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate py311
 
@@ -49,8 +50,7 @@ mkdir -p data/output
 
 if [ -n "$DATA_GEN_SCRIPT" ] && [ -f "$DATA_GEN_SCRIPT" ]; then
     echo "--- Running Data Generation Script: $DATA_GEN_SCRIPT ---"
-    python "$DATA_GEN_SCRIPT"
-    if [ $? -ne 0 ]; then
+    if ! python "$DATA_GEN_SCRIPT"; then
         echo "Error: Data generation failed."
         exit 1
     fi
@@ -60,7 +60,7 @@ fi
 #  PODMAN SERVICE MANAGEMENT
 unset XDG_RUNTIME_DIR
 export XDG_RUNTIME_DIR=/tmp/$USER/podman-run-${UNIQUE_ID}
-mkdir -p $XDG_RUNTIME_DIR/podman
+mkdir -p "$XDG_RUNTIME_DIR"/podman
 PODMAN_SOCKET="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
 export ADAS_PODMAN_SOCKET=$PODMAN_SOCKET
 
@@ -79,16 +79,16 @@ podman_service_cleanup() {
 trap podman_service_cleanup EXIT INT TERM
 
 echo "--- Starting Podman Service ---"
-podman system service --time=0 $PODMAN_SOCKET &
+podman system service --time=0 "$PODMAN_SOCKET" &
 PODMAN_PID=$!
 sleep 5
 
 echo "--- Preparing Base Image '$BASE_IMAGE_NAME' ---"
 # 1. Create Standard Base Image (Created once, reused for all systems)
 cid=$(podman run -d --name "adas-base-${UNIQUE_ID}" python:3.11-slim sleep 3600)
-podman exec $cid pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
-podman commit $cid $BASE_IMAGE_NAME
-podman stop $cid; podman rm $cid
+podman exec "$cid" pip install "langgraph==0.4.8" "langchain_openai==0.3.32" "python-dotenv==1.0.1" "dill==0.3.9"
+podman commit "$cid" "$BASE_IMAGE_NAME"
+podman stop "$cid"; podman rm "$cid"
 
 # Iterate through the array of systems
 for SYSTEM_NAME in "${SYSTEM_NAMES[@]}"; do
