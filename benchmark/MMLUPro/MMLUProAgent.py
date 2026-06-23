@@ -41,32 +41,36 @@ You are a Computer Science expert solving multiple-choice questions.
 Example: The correct answer is X
 """
 
+
 class AgentState(TypedDict):
     question: str
     options: List[str]
     solution: str
-    subsets: List[List[int]] 
+    subsets: List[List[int]]
     voter_outputs: Annotated[List[Dict[str, str]], operator.add]
 
+
 graph = StateGraph(AgentState)
+
 
 def create_subsets_node(state):
     options = state["options"]
     num_options = len(options)
     indices = list(range(num_options))
-    
+
     run1_indices = indices.copy()
     random.shuffle(run1_indices)
     subset_1 = run1_indices[:5]
     subset_2 = run1_indices[5:]
-    
+
     return {"subsets": [subset_1, subset_2, indices, indices]}
+
 
 def run_voter(state: AgentState, subset_index: int, voter_name: str) -> Dict[str, str]:
     options_list = state["options"]
     target_indices = state["subsets"][subset_index]
     all_letters = [chr(65 + i) for i in range(len(options_list))]
-    
+
     formatted_options = ""
     for idx in target_indices:
         if idx < len(options_list) and options_list[idx]:
@@ -77,13 +81,13 @@ def run_voter(state: AgentState, subset_index: int, voter_name: str) -> Dict[str
     llm = LargeLanguageModel(temperature=0)
     response = llm.invoke([SystemMessage(content=voter_prompt), HumanMessage(content=problem_text)])
     response_text = response.content
-    
+
     matches = re.findall(r"final answer is (None|[A-J])", response_text, re.IGNORECASE)
     if matches:
         decision = matches[-1].capitalize()
     else:
         last_lines = "\n".join(response_text.split("\n")[-2:])
-        letter_matches = list(re.finditer(r'(?<![A-Za-z])([A-J])(?![A-Za-z])', last_lines))
+        letter_matches = list(re.finditer(r"(?<![A-Za-z])([A-J])(?![A-Za-z])", last_lines))
         decision = letter_matches[-1].group(1) if letter_matches else "None"
 
     return {"voter_name": voter_name, "decision": decision, "reasoning": response_text}
@@ -91,39 +95,51 @@ def run_voter(state: AgentState, subset_index: int, voter_name: str) -> Dict[str
 
 def voter_1(state):
     return {"voter_outputs": [run_voter(state, 0, "Expert 1")]}
+
+
 def voter_2(state):
     return {"voter_outputs": [run_voter(state, 1, "Expert 2")]}
+
+
 def voter_3(state):
     return {"voter_outputs": [run_voter(state, 2, "Expert 3")]}
+
+
 def voter_4(state):
     return {"voter_outputs": [run_voter(state, 3, "Expert 4")]}
+
 
 def finalize_node(state):
     votes = state["voter_outputs"]
     votes.sort(key=lambda x: x["voter_name"])
-    
+
     print(f"Decisions: {[v['voter_name'] + ': ' + v['decision'] for v in votes]}")
-    
+
     decisions = [vote["decision"] for vote in votes]
     valid_decisions = [d for d in decisions if d != "None"]
-    
+
     final_answer = "A"
-    
+
     if not valid_decisions:
         options_list = state["options"]
         all_letters = [chr(65 + i) for i in range(len(options_list))]
         formatted_all = "".join([f"{all_letters[i]}: {opt}\n" for i, opt in enumerate(options_list) if opt])
-        
+
         judge_text = f"--- Question ---\n{state['question']}\n\n--- All Options ---\n{formatted_all}"
-        
+
         judge_llm = LargeLanguageModel(temperature=0)
-        response = judge_llm.invoke([SystemMessage(content=blind_judge_prompt), HumanMessage(content=judge_text)])
-        
+        response = judge_llm.invoke(
+            [
+                SystemMessage(content=blind_judge_prompt),
+                HumanMessage(content=judge_text),
+            ]
+        )
+
         last_lines = "\n".join(response.content.split("\n")[-2:])
-        matches = list(re.finditer(r'(?<![A-Za-z])([A-J])(?![A-Za-z])', last_lines))
+        matches = list(re.finditer(r"(?<![A-Za-z])([A-J])(?![A-Za-z])", last_lines))
         if matches:
             final_answer = matches[-1].group(1)
-        
+
     else:
         double_one = decisions[0] != "None" and decisions[0] in decisions[2:]
         double_two = decisions[1] != "None" and decisions[1] in decisions[2:]
@@ -133,32 +149,35 @@ def finalize_node(state):
         elif double_one and not double_two:
             final_answer = decisions[0]
         elif double_two and not double_one:
-            final_answer = decisions[1] 
+            final_answer = decisions[1]
         elif double_full_experts:
             final_answer = decisions[2]
         else:
             options_list = state["options"]
             all_letters = [chr(65 + i) for i in range(len(options_list))]
             formatted_all = "".join([f"{all_letters[i]}: {opt}\n" for i, opt in enumerate(options_list) if opt])
-            
+
             reasoning_context = ""
             for v in votes:
                 if v["decision"] != "None":
                     reasoning_context += f"--- {v['voter_name']} Reasoning ---\n{v['reasoning']}"
-            
+
             judge_text = (
-                f"--- Question ---\n{state['question']}\n\n"
-                f"--- All Options ---\n{formatted_all}\n\n"
-                f"{reasoning_context}"
+                f"--- Question ---\n{state['question']}\n\n--- All Options ---\n{formatted_all}\n\n{reasoning_context}"
             )
-            
+
             judge_llm = LargeLanguageModel(temperature=0)
-            response = judge_llm.invoke([SystemMessage(content=context_judge_prompt), HumanMessage(content=judge_text)])
+            response = judge_llm.invoke(
+                [
+                    SystemMessage(content=context_judge_prompt),
+                    HumanMessage(content=judge_text),
+                ]
+            )
             print(response.content)
-            
+
             last_lines = "\n".join(response.content.split("\n")[-2:])
-            matches = list(re.finditer(r'(?<![A-Za-z])([A-J])(?![A-Za-z])', last_lines))
-            if matches: 
+            matches = list(re.finditer(r"(?<![A-Za-z])([A-J])(?![A-Za-z])", last_lines))
+            if matches:
                 final_answer = matches[-1].group(1)
             else:
                 final_answer = valid_decisions[0]

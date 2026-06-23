@@ -3,6 +3,7 @@ import threading
 from typing import List, Tuple, Dict, Any, Optional
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 from langchain_core.tools import BaseTool
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from config import settings
@@ -10,7 +11,10 @@ from config import settings
 load_dotenv()
 _metrics_lock = threading.Lock()
 
-def execute_tool_calls(response: AIMessage, available_tools: Dict[str, BaseTool]) -> Tuple[List[ToolMessage], Dict[str, Any]]:
+
+def execute_tool_calls(
+    response: AIMessage, available_tools: Dict[str, BaseTool]
+) -> Tuple[List[ToolMessage], Dict[str, Any]]:
     """Execute available tool calls from the response."""
     tool_messages = []
     tool_results = {}
@@ -51,7 +55,7 @@ def execute_tool_calls(response: AIMessage, available_tools: Dict[str, BaseTool]
                 ToolMessage(
                     content="Malformed tool call: missing name",
                     tool_call_id=tool_id,
-                    name=None
+                    name=None,
                 )
             )
             continue
@@ -67,17 +71,26 @@ def execute_tool_calls(response: AIMessage, available_tools: Dict[str, BaseTool]
                 tool_messages.append(ToolMessage(content=error_message, tool_call_id=tool_id, name=tool_name))
                 tool_results[tool_name] = error_message
         else:
-            tool_messages.append(ToolMessage(content=f"Tool {tool_name} not found.", tool_call_id=tool_id, name=tool_name))
+            tool_messages.append(
+                ToolMessage(
+                    content=f"Tool {tool_name} not found.",
+                    tool_call_id=tool_id,
+                    name=tool_name,
+                )
+            )
 
     return tool_messages, tool_results
 
 
-def get_model(wrapper: str, model_name: str, temperature: float, is_meta: bool, reasoning_effort: Optional[str] = None) -> Any:
+def get_model(
+    wrapper: str,
+    model_name: str,
+    temperature: float,
+    is_meta: bool,
+    reasoning_effort: Optional[str] = None,
+) -> Any:
     """Return an initialized LLM wrapper for the requested provider/model."""
-    api_keys = {
-        "openai": "OPENAI_API_KEY",
-        "perplexity": "PERPLEXITY_API_KEY"
-    }
+    api_keys = {"openai": "OPENAI_API_KEY", "perplexity": "PERPLEXITY_API_KEY"}
 
     if wrapper not in api_keys:
         raise ValueError(f"Invalid wrapper: '{wrapper}'. Supported: {', '.join(api_keys.keys())}")
@@ -90,8 +103,13 @@ def get_model(wrapper: str, model_name: str, temperature: float, is_meta: bool, 
     # If this is a target model, check allowed list shape defensively
     if not is_meta:
         allowed_models = settings.allowed_target_models or []
-        if not any(isinstance(m, dict) and m.get("wrapper") == wrapper and m.get("model_name") == model_name for m in allowed_models):
-            raise ValueError(f"ERROR: Model {model_name} is not available. Allowed Models: {settings.allowed_target_models}")
+        if not any(
+            isinstance(m, dict) and m.get("wrapper") == wrapper and m.get("model_name") == model_name
+            for m in allowed_models
+        ):
+            raise ValueError(
+                f"ERROR: Model {model_name} is not available. Allowed Models: {settings.allowed_target_models}"
+            )
 
     try:
         if wrapper == "openai":
@@ -99,23 +117,18 @@ def get_model(wrapper: str, model_name: str, temperature: float, is_meta: bool, 
                 return ChatOpenAI(
                     model=model_name,
                     reasoning_effort=reasoning_effort,
-                    verbosity="low",
-                    api_key=api_key
+                    api_key=SecretStr(api_key),
                 )
-            return ChatOpenAI(
-                        model=model_name,
-                        temperature=temperature,
-                        api_key=api_key
-                    )
-        
+            return ChatOpenAI(model=model_name, temperature=temperature, api_key=SecretStr(api_key))
+
         if wrapper == "perplexity":
             return ChatOpenAI(
-                    model="sonar",
-                    temperature=temperature,
-                    api_key=api_key,
-                    base_url="https://api.perplexity.ai"
+                model="sonar",
+                temperature=temperature,
+                api_key=SecretStr(api_key),
+                base_url="https://api.perplexity.ai",
             )
-        
+
         raise ValueError(f"Unsupported wrapper: {wrapper}")
     except Exception as e:
         raise RuntimeError(f"Failed to initialize {wrapper} model: {str(e)}") from e
@@ -123,21 +136,35 @@ def get_model(wrapper: str, model_name: str, temperature: float, is_meta: bool, 
 
 class LargeLanguageModel:
     usage_metrics = {
-        "meta_usage": {"overall": {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}},
-        "target_usage": {"overall": {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}},
+        "meta_usage": {
+            "overall": {
+                "llm_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            }
+        },
+        "target_usage": {
+            "overall": {
+                "llm_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            }
+        },
     }
 
-    token_counter = ChatOpenAI(model="gpt-4o", api_key="x") # gpt-4o uses the same tokenizer as the gpt-4.1 series
+    token_counter = ChatOpenAI(model="gpt-4o", api_key=SecretStr("x"))
 
     def __init__(
-            self,
-            temperature: float = 0.2,
-            wrapper: str = "openai",
-            model_name: str = "gpt-4.1-mini",
-            name: Optional[str] = None,
-            is_meta: bool = False,
-            reasoning_effort: Optional[str] = None
-            ) -> None:
+        self,
+        temperature: float = 0.2,
+        wrapper: str = "openai",
+        model_name: str = "gpt-4.1-mini",
+        name: Optional[str] = None,
+        is_meta: bool = False,
+        reasoning_effort: Optional[str] = None,
+    ) -> None:
         self.name = name if name else model_name
         self.model_name = model_name
         self.model = get_model(wrapper, model_name, temperature, is_meta, reasoning_effort)
@@ -145,14 +172,17 @@ class LargeLanguageModel:
 
     def _ensure_usage_entry(self, usage_type: str) -> None:
         LargeLanguageModel.usage_metrics.setdefault(usage_type, {})
-        LargeLanguageModel.usage_metrics[usage_type].setdefault(self.name, {
-            "llm_calls": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0
-        })
+        LargeLanguageModel.usage_metrics[usage_type].setdefault(
+            self.name,
+            {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        )
 
-    def bind_tools(self, tool_objects: List[Any], function_call_type: str = "normal", parallel_tool_calls: bool = True) -> "LargeLanguageModel":
+    def bind_tools(
+        self,
+        tool_objects: List[Any],
+        function_call_type: str = "normal",
+        parallel_tool_calls: bool = True,
+    ) -> "LargeLanguageModel":
         if not tool_objects:
             return self
 
@@ -169,9 +199,12 @@ class LargeLanguageModel:
 
         return self
 
-    def invoke(self, messages_input: List[Any], count_metrics: bool = True, is_meta: bool = False) -> Any:
-        if not isinstance(messages_input, list):
-            raise ValueError("INVOKE ERROR: The LargeLanguageModel instance must be invoked with a list containing the messages.")
+    def invoke(
+        self,
+        messages_input: List[Any],
+        count_metrics: bool = True,
+        is_meta: bool = False,
+    ) -> Any:
 
         converted_messages = []
         for msg in messages_input:
@@ -190,7 +223,7 @@ class LargeLanguageModel:
                     converted_messages.append(ToolMessage(content=content, tool_call_id=msg.get("tool_call_id")))
             else:
                 converted_messages.append(msg)
-        
+
         messages_input = converted_messages
 
         def _get_call_id(call: Any) -> Optional[Any]:
@@ -214,18 +247,27 @@ class LargeLanguageModel:
                     if getattr(msg, "tool_call_id"):
                         tool_message_ids.add(msg.tool_call_id)
                 else:
-                    raise ValueError("INVOKE ERROR: A ToolMessage did not contain the 'tool_call_id' attribute. Do NOT construct ToolMessages manually.")
+                    raise ValueError(
+                        "INVOKE ERROR: A ToolMessage did not contain the 'tool_call_id' attribute. Do NOT construct ToolMessages manually."
+                    )
 
         missing_tool_msgs = ai_tool_call_ids - tool_message_ids
         if missing_tool_msgs:
-            raise ValueError(f"INVOKE ERROR: AIMessages contain tool_call IDs with no corresponding ToolMessages: {missing_tool_msgs}")
+            raise ValueError(
+                f"INVOKE ERROR: AIMessages contain tool_call IDs with no corresponding ToolMessages: {missing_tool_msgs}"
+            )
 
         # Filter out orphaned ToolMessages from trimming
-        messages_input = [msg for msg in messages_input if not isinstance(msg, ToolMessage) or getattr(msg, "tool_call_id") in ai_tool_call_ids]
+        messages_input = [
+            msg
+            for msg in messages_input
+            if not isinstance(msg, ToolMessage) or getattr(msg, "tool_call_id") in ai_tool_call_ids
+        ]
 
         # Filter out empty messages to avoid client errors
         messages = [
-            msg for msg in messages_input
+            msg
+            for msg in messages_input
             if getattr(msg, "content", None)
             or getattr(msg, "tool_calls", None)
             or getattr(msg, "invalid_tool_calls", None)

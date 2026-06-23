@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.pyright]
+typeCheckingMode = "standard"
+reportUnreachable = true
+venvPath = "."
+venv = "adasvenv"
+

@@ -1,8 +1,11 @@
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
+from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.decorator_logic import find_code_blocks
+
 # Will be rendered in build.py
 agentic_system_documentation = ""
 function_signatures = ""
 code_related_tools = {}
-find_code_blocks = None
 
 # Prompts with tips from https://cookbook.openai.com/examples/gpt4-1_prompting_guide
 
@@ -38,10 +41,13 @@ Remember to always structure your output according to the required format and ex
 """
 
 # System Prompts
-validation_prompt = '''
+validation_prompt = (
+    """
 You validate agentic systems for a given task by writing Python code.
 
-''' + agentic_system_documentation + '''
+"""
+    + agentic_system_documentation
+    + '''
 
 # Validation
 - Generate a single markdown code block specifically for validating the target system you are designing.
@@ -104,6 +110,7 @@ def validate_target_system_output(input_index: int, final_state: Dict[str, Any])
         return False, f"Expected '{expected_solution}' in the solution, got '{solution}'."
 ```
 '''
+)
 
 hardening_prompt = """
 The system has already been tested against and passed the following test cases:
@@ -173,20 +180,27 @@ Use `START` and `END` as special markers for setting entry and exit points with 
 """
 
 
-meta_agent = '''
+meta_agent = (
+    """
 You are an expert AI software engineer specializing in the design and implementation of agentic systems using LangGraph.
 You create correct, robust systems that tackle any task on the given domain or problem autonomously.
 You reason about implementation decisions methodically and follow instructions with precision.
 You are deeply familiar with advanced prompting techniques and Python programming.
 
-''' + agentic_system_documentation + '''
+"""
+    + agentic_system_documentation
+    + """
 
 # Implementation Phase
 Ensure your implementation is grounded in the available information. Do not make things up.
 
 ## Decorator Tools
-''' + function_signatures + '''
-''' + decorator_tool_prompt + '''
+"""
+    + function_signatures
+    + """
+"""
+    + decorator_tool_prompt
+    + """
 
 ## **Workflow Rules**
 1.  **Setup First**: Use `@@set_imports` to define all necessary Python imports and `@@set_state` for the `AgentState`. State attributes cannot be accessed or updated until defined here.
@@ -226,25 +240,24 @@ Only conclude the design process after you have confirmed that the system is com
 @@decorator_name(...)
 # ... other decorators
 ```
-'''
+"""
+)
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
-from adas_core.llm_wrapper import LargeLanguageModel
-    
+
 def parse_validation_code(response):
     response_content = response.content
     if isinstance(response_content, list):
         # Handles response API format
         content_parts = []
         for item in response_content:
-            if isinstance(item, dict) and 'text' in item:
-                content_parts.append(str(item.get('text', '')))
+            if isinstance(item, dict) and "text" in item:
+                content_parts.append(str(item.get("text", "")))
             else:
                 content_parts.append(str(item))
         response_content = " ".join(content_parts)
 
     print(response_content)
-    potential_code_blocks = [code['content'] for code in find_code_blocks(response_content)]
+    potential_code_blocks = [str(code["content"]) for code in find_code_blocks(response_content)]
     validation_errors = []
 
     for block in potential_code_blocks:
@@ -255,11 +268,11 @@ def parse_validation_code(response):
                 "HumanMessage": HumanMessage,
                 "ToolMessage": ToolMessage,
                 "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage
+                "AIMessage": AIMessage,
             }
             exec(block, temp_namespace)
-            test_cases = temp_namespace.get('TARGET_SYSTEM_TEST_CASES')
-            validator_func = temp_namespace.get('validate_target_system_output')
+            test_cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES")
+            validator_func = temp_namespace.get("validate_target_system_output")
 
             # Perform the validation checks
             if isinstance(test_cases, list) and len(test_cases) == 3 and callable(validator_func):
@@ -273,5 +286,3 @@ def parse_validation_code(response):
 
     print("WARNING: No valid validation code block was found in the response.")
     return None, validation_errors
-
-  
