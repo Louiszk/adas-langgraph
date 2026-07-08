@@ -223,10 +223,10 @@ def upsert_component(
             return "ERROR: You must provide the function implementation below the decorator."
 
         func, parsed_function_code = target_agentic_system.get_function(function_code, component_type)
-        if func is None:
-            return "ERROR: Could not parse a valid function from the provided code."
         if parsed_function_code.startswith("ERROR:"):
             return parsed_function_code
+        if func is None:
+            return "ERROR: Could not parse a valid function from the provided code."
 
         # Check if component exists
         component_exists = False

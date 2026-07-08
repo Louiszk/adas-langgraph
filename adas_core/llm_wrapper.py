@@ -169,6 +169,7 @@ class LargeLanguageModel:
         self.model_name = model_name
         self.model = get_model(wrapper, model_name, temperature, is_meta, reasoning_effort)
         self.wrapper = wrapper
+        self.is_meta = is_meta
 
     def _ensure_usage_entry(self, usage_type: str) -> None:
         LargeLanguageModel.usage_metrics.setdefault(usage_type, {})
@@ -282,7 +283,7 @@ class LargeLanguageModel:
             raise RuntimeError(f"Model invocation failed: {repr(e)}") from e
 
         if count_metrics:
-            usage_type = "meta_usage" if is_meta else "target_usage"
+            usage_type = "meta_usage" if (is_meta or getattr(self, "is_meta", False)) else "target_usage"
             self._ensure_usage_entry(usage_type)
 
             with _metrics_lock:

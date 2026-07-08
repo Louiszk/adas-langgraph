@@ -7,6 +7,8 @@ from typing import TypedDict, Tuple, Dict, List, Any, Callable, Optional
 from langgraph.graph import START, END
 from adas_core.helpers import validate_node_router_signature
 
+ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
+
 
 def _extract_top_level_names(ast_module: ast.Module) -> set[str]:
     names = set()
@@ -180,7 +182,7 @@ class VirtualAgenticSystem:
         func: Callable,
         func_source_code: Optional[str] = None,
     ) -> bool:
-        if name in ["START", "__start__", START, "END", "__end__", END]:
+        if name in ENDPOINTS:
             raise ValueError("START and END are reserved names for the endpoints of the graph.")
 
         if not func_source_code:
@@ -292,7 +294,7 @@ class VirtualAgenticSystem:
 
     def delete_node(self, name: str) -> bool:
         """Delete a node and all associated edges."""
-        if name in ["START__start__", START, "END", "__end__", END]:
+        if name in ENDPOINTS:
             raise ValueError("Deletion of endpoints is not allowed")
         if name not in self.nodes:
             return False
