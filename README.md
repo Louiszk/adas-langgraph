@@ -83,36 +83,29 @@ python run_design.py --reinstall --keep-template
 
 ### Running Scripts
 
-The repository includes shell scripts in the `scripts/` directory to automate the design loop and run the generated systems for specific use cases (e.g., Data Analyst). These scripts are available for both Docker and Podman + SLURM.
+The repository includes a central Python engine (`scripts/orchestrator.py`) and thin SLURM shell wrappers in the `scripts/` directory to automate system generation, benchmarking, and target execution across Docker and Podman environments.
 
-#### 1. Iterative System Design
-Use these scripts from the `scripts/` folder to generate multiple versions of an agentic system for a specific use case.
+#### 1. Python Orchestrator (`scripts/orchestrator.py`)
+The orchestrator manages base and temporary container builds via the Docker Python SDK, dependency parsing from JSON metrics files, execution timeout enforcement, and CSV/text result aggregation.
 
-* **Docker:** `scripts/run_script_docker.sh`
-* **Podman:** `scripts/run_script_podman.sh`
+* **Run Benchmarks:**
+  ```bash
+  python scripts/orchestrator.py --task benchmark --benchmark mmlu --type ablationC --iterations 1-16
+  ```
+* **Iterative System Design:**
+  ```bash
+  python scripts/orchestrator.py --task design --benchmark gsm --type ablationC --iterations 1-10
+  ```
+* **Run Target Systems:**
+  ```bash
+  python scripts/orchestrator.py --task target --system-names data_analyst_gpt5_v0 --state '{"messages": []}'
+  ```
 
-**Configuration:**
-Open the script and modify the variables to target specific benchmarks and iterations.
-
-#### 2. Running Generated Systems
-Use these scripts from the `scripts/` folder to execute specific versions of your generated systems with a defined input state.
-
-* **Docker:** `scripts/run_target_docker.sh`
-* **Podman:** `scripts/run_target_podman.sh`
-
-**Configuration:**
-Edit the `SYSTEM_NAMES` array and `INPUT_STATE` to define what to run:
-
-```bash
-# List of generated system names to execute
-SYSTEM_NAMES=(
-    "data_analyst_gpt4_v1"
-    "data_analyst_gpt4_v2"
-)
-
-# Initial state for the agents
-INPUT_STATE='{"analysis_task": "Create a heatmap showing..."}'
-```
+#### 2. HPC / SLURM Wrappers
+Thin wrappers isolate SLURM `#SBATCH` directives and environment activation from application logic:
+* `scripts/slurm_benchmark.sh`: Submits benchmark jobs via `sbatch scripts/slurm_benchmark.sh`.
+* `scripts/slurm_design.sh`: Submits system design jobs via `sbatch scripts/slurm_design.sh`.
+* `scripts/slurm_target.sh`: Submits target execution jobs via `sbatch scripts/slurm_target.sh`.
 
 ---
 

@@ -68,10 +68,21 @@ def main():
         default="python:3.11-slim",
         help="The base container image to use for the sandbox.",
     )
+    parser.add_argument(
+        "--container",
+        choices=["auto", "docker", "podman"],
+        default="auto",
+        help="Container runtime to use (auto tries Docker first, then Podman).",
+    )
 
     args = parser.parse_args()
 
-    session = StreamingSandboxSession(image=args.base_image, keep_template=args.keep_template, verbose=True)
+    session = StreamingSandboxSession(
+        image=args.base_image,
+        keep_template=args.keep_template,
+        verbose=True,
+        container_type=args.container,
+    )
 
     try:
         session.open()
