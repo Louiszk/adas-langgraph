@@ -202,3 +202,7 @@ def create_meta_system():
     materialize_system(meta_system, output_dir="materialized_meta_system")
     print("----- Materialized Meta System -----")
     return meta_system
+
+
+if __name__ == "__main__":
+    create_meta_system()

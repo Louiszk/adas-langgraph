@@ -105,7 +105,7 @@ class TestSecurityAndMalformedInputRejection:
     def test_install_package_accepts_valid_package_formats(self, meta_state: dict):
         """Contract: install_package allows standard package names and version specifiers."""
         # Pre-excluded package to verify format check passes before installation check
-        res = install_package(package_name="langgraph==0.4.8", state=meta_state)
+        res = install_package(package_name="langgraph==1.2.9", state=meta_state)
         assert "is already installed" in res
 
 

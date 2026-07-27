@@ -1,9 +1,9 @@
 # Settings
 
 dependencies = [
-    "langgraph==0.4.8",
-    "langchain_openai==0.3.32",
-    "python-dotenv==1.0.1",
+    "langgraph==1.2.9",
+    "langchain_openai==1.4.1",
+    "python-dotenv==1.2.2",
     "dill==0.3.9",
 ]
 max_iterations = 60  # Maximum number of steps the meta system should perform (e.g., LLM calls)

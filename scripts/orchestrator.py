@@ -72,9 +72,9 @@ class ContainerManager:
         """Create a custom base image with core dependencies installed if it does not exist."""
         if core_packages is None:
             core_packages = [
-                "langgraph==0.4.8",
-                "langchain_openai==0.3.32",
-                "python-dotenv==1.0.1",
+                "langgraph==1.2.9",
+                "langchain_openai==1.4.1",
+                "python-dotenv==1.2.2",
                 "dill==0.3.9",
             ]
 

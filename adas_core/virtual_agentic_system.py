@@ -69,7 +69,7 @@ class VirtualAgenticSystem:
         self.edges = []  # List[(source, target)]
         self.conditional_edges = {}  # source_node -> {condition_code: str, path_map: dict}
 
-        self.packages_info = ["langchain-core-0.3.75", "langgraph 0.4.8"]
+        self.packages_info = ["langchain-core 1.5.1", "langgraph 1.2.9"]
         self.installed_packages = {}
         self.base_imports = [
             "from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls",
@@ -394,9 +394,11 @@ class VirtualAgenticSystem:
                 f"ERROR: executing function or import code for '{function_name}': {repr(e)}",
             )
 
-        if function_name in func_exec_globals and callable(func_exec_globals[function_name]):
-            new_function = func_exec_globals[function_name]
-            return new_function, isolated_function_code
+        if function_name in func_exec_globals:
+            target_obj = func_exec_globals[function_name]
+            if callable(target_obj) or hasattr(target_obj, "invoke"):
+                return target_obj, isolated_function_code
+            return None, f"ERROR: Symbol '{function_name}' is not callable or a tool object"
         else:
             return None, f"ERROR: Function '{function_name}' not found after execution"
 

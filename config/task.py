@@ -12,6 +12,6 @@
 # The state must contain the attribute "solution": "str", where only the final solution is saved.
 # """
 
-# Example: use one of the benchmark prompts
-with open("generated_systems/GSMHard/prompts.txt", "r") as prompt_file:
+# Example: use one of the usecase prompts
+with open("generated_systems/use_cases/data_analyst.txt", "r") as prompt_file:
     problem_statement = prompt_file.read()
