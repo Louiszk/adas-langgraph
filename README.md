@@ -14,6 +14,8 @@ Manual engineering of complex, multi-agent workflows is time-intensive and limit
 * **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent makes targeted updates to individual nodes, tools, and edges, making the design process highly scalable for complex systems.
 * **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends or infinite loops), and improves target system accuracy.
 
+* **Example Design Session Trace:** View a complete, step-by-step design log of an automatic Data Analyst agent in [assets/example_trace.md](assets/example_trace.md).
+
 ## Repository Structure
 
 * `adas_core/`: The core logic, including the `VirtualAgenticSystem` representation, AST-based materialization, and custom LLM wrappers.

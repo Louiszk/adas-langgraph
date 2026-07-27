@@ -85,12 +85,12 @@ def execute_tool_calls(
 def get_model(
     wrapper: str,
     model_name: str,
-    temperature: float,
+    temperature: Optional[float],
     is_meta: bool,
     reasoning_effort: Optional[str] = None,
 ) -> Any:
     """Return an initialized LLM wrapper for the requested provider/model."""
-    api_keys = {"openai": "OPENAI_API_KEY", "perplexity": "PERPLEXITY_API_KEY"}
+    api_keys = {"openai": "OPENAI_API_KEY"}
 
     if wrapper not in api_keys:
         raise ValueError(f"Invalid wrapper: '{wrapper}'. Supported: {', '.join(api_keys.keys())}")
@@ -113,21 +113,19 @@ def get_model(
 
     try:
         if wrapper == "openai":
-            if reasoning_effort:
+            if reasoning_effort is not None:
                 return ChatOpenAI(
                     model=model_name,
                     reasoning_effort=reasoning_effort,
                     api_key=SecretStr(api_key),
                 )
-            return ChatOpenAI(model=model_name, temperature=temperature, api_key=SecretStr(api_key))
-
-        if wrapper == "perplexity":
-            return ChatOpenAI(
-                model="sonar",
-                temperature=temperature,
-                api_key=SecretStr(api_key),
-                base_url="https://api.perplexity.ai",
-            )
+            if temperature is not None:
+                return ChatOpenAI(
+                    model=model_name,
+                    temperature=temperature,
+                    api_key=SecretStr(api_key),
+                )
+            return ChatOpenAI(model=model_name, api_key=SecretStr(api_key))
 
         raise ValueError(f"Unsupported wrapper: {wrapper}")
     except Exception as e:
@@ -154,16 +152,16 @@ class LargeLanguageModel:
         },
     }
 
-    token_counter = ChatOpenAI(model="gpt-4o", api_key=SecretStr("x"))
+    token_counter = ChatOpenAI(model="gpt-5.4", api_key=SecretStr("x"))
 
     def __init__(
         self,
-        temperature: float = 0.2,
+        temperature: Optional[float] = None,
         wrapper: str = "openai",
-        model_name: str = "gpt-4.1-mini",
+        model_name: str = "gpt-5.4-mini",
         name: Optional[str] = None,
         is_meta: bool = False,
-        reasoning_effort: Optional[str] = None,
+        reasoning_effort: Optional[str] = "none",
     ) -> None:
         self.name = name if name else model_name
         self.model_name = model_name

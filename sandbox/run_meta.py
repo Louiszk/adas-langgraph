@@ -3,7 +3,7 @@ import sys
 import json
 import dill as pickle
 import time
-from typing import Optional, cast
+from typing import Optional, cast, Any
 
 sys.path.append("/sandbox/workspace")
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
@@ -75,7 +75,7 @@ def main():
         processed_msg_count = 0
         print("Streaming meta system execution...")
 
-        for output in workflow.stream(inputs, config={"recursion_limit": 999}):
+        for output in workflow.stream(cast(Any, inputs), config={"recursion_limit": 999}):
             metrics["iterations"] += 1
 
             for out in output.values():

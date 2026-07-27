@@ -211,6 +211,7 @@ Ensure your implementation is grounded in the available information. Do not make
 6.  **Code as Memory**: Document all key decisions and insights as brief comments within the code of each component.
 7.  **Modularity**: Keep the code organized by placing system prompts or reusable helper functions in the utility section.
 8.  **Efficiency**: Do not execute redundant decorators that create or update components with identical code.
+9.  **Mandatory Action**: Every turn must execute at least one decorator call. Never submit a turn without executing any decorators.
 
 ## **Error Handling**
 - A decorator call that fails will return an error message. Any subsequent decorator calls *within the same response* will be skipped.
@@ -229,7 +230,6 @@ Only conclude the design process after you have confirmed that the system is com
 - Summarize your progress and previous actions briefly.
 
 ## Reasoning
-- Use explicit chain-of-thought to think step-by-step.
 - Reflect on your previous actions and any feedback from the system.
 - Determine the next logical step based on your analysis and the overall goal.
 

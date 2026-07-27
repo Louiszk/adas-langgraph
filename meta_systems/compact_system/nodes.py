@@ -61,7 +61,6 @@ def validation_function(state: Dict[str, Any]) -> Dict[str, Any]:
     level = "more" if steps <= 1 else "maximally"
 
     llm = LargeLanguageModel(
-        temperature=0.4,
         reasoning_effort=reasoning_effort,
         wrapper=validation_wrapper,
         model_name=validation_model,

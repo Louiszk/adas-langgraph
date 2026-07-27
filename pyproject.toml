@@ -1,10 +1,25 @@
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "adasvenv",
+    "materialized_meta_system",
+    "generated_systems",
+]
 
 [tool.pyright]
 typeCheckingMode = "standard"
 reportUnreachable = true
 venvPath = "."
 venv = "adasvenv"
-
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "adasvenv/**",
+    "materialized_meta_system/**",
+    "generated_systems/**",
+]

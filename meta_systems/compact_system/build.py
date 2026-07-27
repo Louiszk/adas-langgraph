@@ -27,7 +27,7 @@ from meta_systems.compact_system.nodes import (
     tool_execution,
 )
 from langchain_core.messages import AIMessage
-from meta_systems.compact_system.utilities import function_signatures, code_related_tools
+from meta_systems.compact_system.tools import function_signatures, code_related_tools
 from meta_systems.compact_system.documentation import agentic_system_documentation
 from meta_systems.compact_system.configurations import MAX_HARDENING_STEPS
 
@@ -66,10 +66,19 @@ def create_meta_system():
         f"agentic_system_documentation = {repr(agentic_system_documentation)}",
         f"code_related_tools = {repr(code_related_tools)}",
     ]
+    cleaned_utilities_lines = [
+        line
+        for line in utilities_content.split("\n")[5:]
+        if not (
+            line.startswith("agentic_system_documentation =")
+            or line.startswith("function_signatures =")
+            or line.startswith("code_related_tools =")
+        )
+    ]
     self_contained_content = "\n".join(
         imported_variables
         + configurations_content.split("\n")
-        + utilities_content.split("\n")[5:]
+        + cleaned_utilities_lines
         + [textwrap.dedent(inspect.getsource(ignored_nodes_message))]
     )
 
