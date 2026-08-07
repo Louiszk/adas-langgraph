@@ -661,7 +661,6 @@ class Orchestrator:
                 image_to_use,
                 "--container",
                 self.args.container,
-                "--keep-template",
             ]
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))

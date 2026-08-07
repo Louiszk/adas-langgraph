@@ -13,7 +13,7 @@ class StreamingSandboxSession:
         self,
         image=None,
         dockerfile=None,
-        keep_template=False,
+        keep_template=True,
         stream=True,
         verbose=True,
         runtime_configs=None,
@@ -251,7 +251,12 @@ def setup_sandbox_environment(session, reinstall=False):
         pattern="*.pkl",
     )
 
-    if reinstall:
+    check_deps = session.execute_command("python -c 'import dill, langgraph'")
+    deps_stderr = getattr(check_deps, "stderr", "") if check_deps else ""
+    deps_exit_code = getattr(check_deps, "exit_code", 1) if check_deps else 1
+    deps_missing = check_deps is None or deps_exit_code != 0 or "Error" in deps_stderr or "Traceback" in deps_stderr
+
+    if reinstall or deps_missing:
         logger.info("Installing dependencies in sandbox...")
         session.execute_command(f"pip install {' '.join(settings.dependencies)}")
 

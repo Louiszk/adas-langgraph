@@ -60,9 +60,11 @@ def main():
         help="Name of the system to benchmark (e.g., 'benchmark.FEVER.FEVERBaseline')",
     )
     parser.add_argument(
-        "--keep-template",
-        action="store_true",
-        help="Keep the image after the session is closed",
+        "--no-keep-template",
+        dest="keep_template",
+        action="store_false",
+        default=True,
+        help="Delete the base image after the session is closed (default: keep image)",
     )
     parser.add_argument("--reinstall", action="store_true", help="Reinstall dependencies")
     parser.add_argument(

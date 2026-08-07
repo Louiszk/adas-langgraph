@@ -71,17 +71,17 @@ docker --version
 
 The meta system is an agentic system that can design other agentic systems.
 
-**First-time run:**
+**Run design:**
 ```bash
-python run_design.py --reinstall --keep-template
+python run_design.py
 ```
-*Set the `--keep-template` flag in the first run to commit the installed packages to the image.*
+*Dependencies are automatically verified and installed inside the sandbox on demand, and base container images are preserved in local cache by default.*
 
 **Options:**
 * `--name`: Target system name
 * `--problem`: Problem statement to solve
-* `--reinstall`: Reinstall dependencies (should be set for the first run).
-* `--keep-template`: Keep the image template.
+* `--reinstall`: Force re-installation of dependencies.
+* `--no-keep-template`: Remove the base image from local cache after the session closes (image is kept by default).
 
 ### Running Scripts
 

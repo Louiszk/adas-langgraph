@@ -58,9 +58,11 @@ def main() -> None:
         help="Force re-installation of dependencies in the sandbox.",
     )
     parser.add_argument(
-        "--keep-template",
-        action="store_true",
-        help="Keep the sandbox image template after the session is closed.",
+        "--no-keep-template",
+        dest="keep_template",
+        action="store_false",
+        default=True,
+        help="Delete the sandbox image template after the session is closed (default: keep image).",
     )
     parser.add_argument(
         "--base-image",
