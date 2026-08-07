@@ -3,6 +3,9 @@ import codecs
 import glob
 from config import settings
 from llm_sandbox import create_session, SandboxBackend
+from adas_core.logging_config import get_logger
+
+logger = get_logger("sandbox")
 
 
 class StreamingSandboxSession:
@@ -41,7 +44,7 @@ class StreamingSandboxSession:
             raise ValueError(f"Unknown container type: {container_type}")
 
         if self.verbose:
-            print(f"Using {backend.value} as container runtime")
+            logger.info(f"Using {backend.value} as container runtime")
 
         # Prepare the arguments for the create_session factory
         session_kwargs = {
@@ -58,11 +61,11 @@ class StreamingSandboxSession:
         if backend == SandboxBackend.PODMAN:
             socket_path = os.environ.get("ADAS_PODMAN_SOCKET")
             if socket_path:
-                print(f"--> Connecting Podman client to isolated service socket: {socket_path}")
+                logger.info(f"Connecting Podman client to isolated service socket: {socket_path}")
                 # 'base_url' is the kwarg the internal PodmanClient uses for the socket
                 session_kwargs["base_url"] = socket_path
             else:
-                print("--> WARNING: ADAS_PODMAN_SOCKET not set. Connecting to default Podman service.")
+                logger.warning("ADAS_PODMAN_SOCKET not set. Connecting to default Podman service.")
 
         # Use the library's factory to create the correct session instance
         self.session = create_session(backend=backend, **session_kwargs)
@@ -87,7 +90,7 @@ class StreamingSandboxSession:
         try:
             return self.session.copy_to_runtime(src, dest)
         except Exception as e:
-            print(f"Exception during copying to runtime: {repr(e)}")
+            logger.error(f"Exception during copying to runtime: {repr(e)}")
             return None
 
     def copy_from_runtime(self, src, dest):
@@ -120,7 +123,7 @@ class StreamingSandboxSession:
         """
         if not os.path.isdir(src_dir):
             if self.verbose:
-                print(f"Warning: Source directory '{src_dir}' not found, skipping copy.")
+                logger.warning(f"Source directory '{src_dir}' not found, skipping copy.")
             return
 
         self.execute_command(f"mkdir -p {dest_dir}")
@@ -129,11 +132,11 @@ class StreamingSandboxSession:
 
         if not files_to_copy:
             if self.verbose:
-                print(f"No files found in '{src_dir}' matching pattern '{pattern}'.")
+                logger.info(f"No files found in '{src_dir}' matching pattern '{pattern}'.")
             return
 
         if self.verbose:
-            print(f"Copying {len(files_to_copy)} files from '{src_dir}' to sandbox '{dest_dir}'...")
+            logger.info(f"Copying {len(files_to_copy)} files from '{src_dir}' to sandbox '{dest_dir}'...")
 
         for src_path in files_to_copy:
             if os.path.isfile(src_path):
@@ -155,13 +158,13 @@ class StreamingSandboxSession:
 
         if not file_list_str.strip():
             if self.verbose:
-                print(f"No files found in sandbox '{src_dir}' matching pattern '{pattern}'.")
+                logger.info(f"No files found in sandbox '{src_dir}' matching pattern '{pattern}'.")
             return
 
         sandbox_paths = [path for path in file_list_str.strip().split("\n") if path]
 
         if self.verbose:
-            print(f"Copying {len(sandbox_paths)} files from sandbox '{src_dir}' to '{dest_dir}'...")
+            logger.info(f"Copying {len(sandbox_paths)} files from sandbox '{src_dir}' to '{dest_dir}'...")
 
         for src_path_in_sandbox in sandbox_paths:
             filename = os.path.basename(src_path_in_sandbox)
@@ -199,7 +202,7 @@ def check_podman_running():
 
 def setup_sandbox_environment(session, reinstall=False):
     """Set up the sandbox environment with required files and dependencies."""
-    print("Setting up sandbox environment...")
+    logger.info("Setting up sandbox environment...")
 
     session.execute_command("mkdir -p /sandbox/workspace/materialized_meta_system")
     session.execute_command("mkdir -p /sandbox/workspace/adas_core")
@@ -219,6 +222,7 @@ def setup_sandbox_environment(session, reinstall=False):
         "adas_core/llm_wrapper.py",
         "adas_core/materialize.py",
         "adas_core/helpers.py",
+        "adas_core/logging_config.py",
         "materialized_meta_system/MetaSystem.py",
         "config/settings.py",
         ".env",
@@ -233,9 +237,9 @@ def setup_sandbox_environment(session, reinstall=False):
         if os.path.exists(src_path):
             session.copy_to_runtime(src_path, dest_path)
         else:
-            print(f"Warning: Required file {src_path} not found")
+            logger.warning(f"Required file {src_path} not found")
 
-    print("Searching for existing agentic systems to copy to sandbox...")
+    logger.info("Searching for existing agentic systems to copy to sandbox...")
     session.copy_dir_to_runtime(
         src_dir="generated_systems",
         dest_dir="/sandbox/workspace/generated_systems",
@@ -248,8 +252,8 @@ def setup_sandbox_environment(session, reinstall=False):
     )
 
     if reinstall:
-        print("Installing dependencies in sandbox...")
+        logger.info("Installing dependencies in sandbox...")
         session.execute_command(f"pip install {' '.join(settings.dependencies)}")
 
-    print("Sandbox environment set up successfully!")
+    logger.info("Sandbox environment set up successfully!")
     return True

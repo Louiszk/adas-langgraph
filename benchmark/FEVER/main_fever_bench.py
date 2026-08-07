@@ -4,10 +4,13 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("main_fever_bench")
 
 
 def run_fever_benchmark_in_sandbox(session, system_name, dataset_name="problem_subset.json"):
-    print(f"Running FEVER benchmark for system: {system_name}")
+    logger.info(f"Running FEVER benchmark for system: {system_name}")
 
     base_path = "benchmark/FEVER"
     system_path = system_name.replace(".", "/") + ".py"
@@ -26,13 +29,13 @@ def run_fever_benchmark_in_sandbox(session, system_name, dataset_name="problem_s
 
     # Run the benchmark
     command = f'python3 /sandbox/workspace/{base_path}/run_fever_bench.py --system="{system_name}"'
-    print(f"Executing command: {command}")
+    logger.info(f"Executing command: {command}")
 
     # Run the benchmark and stream the output
     for chunk in session.execute_command_streaming(command):
         print(chunk, end="", flush=True)
 
-    print("\nBenchmark execution completed!")
+    logger.info("Benchmark execution completed!")
 
     # Copy the results back to the host
     os.makedirs(f"{base_path}/results", exist_ok=True)
@@ -42,12 +45,14 @@ def run_fever_benchmark_in_sandbox(session, system_name, dataset_name="problem_s
             f"/sandbox/workspace/{base_path}/results/{results_file}",
             f"{base_path}/results/{results_file}",
         )
-        print(f"Copied benchmark results back to host as {results_file}")
+        logger.info(f"Copied benchmark results back to host as {results_file}")
 
     return True
 
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Run FEVER benchmark in a sandboxed environment")
     parser.add_argument(
         "--system",
@@ -83,18 +88,18 @@ def main():
 
     try:
         session.open()
-        print("Sandbox session opened")
+        logger.info("Sandbox session opened")
 
         if setup_sandbox_environment(session, args.reinstall):
             run_fever_benchmark_in_sandbox(session, args.system)
-            print("Benchmark finished successfully!")
+            logger.info("Benchmark finished successfully!")
         else:
-            print("Failed to set up sandbox environment")
+            logger.error("Failed to set up sandbox environment")
 
     except Exception as e:
-        print(f"Error during benchmark execution: {str(e)}")
+        logger.exception(f"Error during benchmark execution: {str(e)}")
     finally:
-        print("Closing session...")
+        logger.info("Closing session...")
         session.close()
 
 

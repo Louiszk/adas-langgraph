@@ -30,10 +30,13 @@ from langchain_core.messages import AIMessage
 from meta_systems.compact_system.tools import function_signatures, code_related_tools
 from meta_systems.compact_system.documentation import agentic_system_documentation
 from meta_systems.compact_system.configurations import MAX_HARDENING_STEPS
+from adas_core.logging_config import get_logger
+
+logger = get_logger("compact_system.build")
 
 
 def create_meta_system():
-    print("\n----- Creating Meta System -----\n")
+    logger.info("----- Creating Meta System -----")
 
     # Create a virtual agentic system instance
     meta_system = VirtualAgenticSystem("MetaSystem")
@@ -45,6 +48,7 @@ def create_meta_system():
         "from adas_core.virtual_agentic_system import VirtualAgenticSystem",
         "from langgraph.managed.is_last_step import RemainingSteps",
         "from adas_core.materialize import materialize_system",
+        "from adas_core.logging_config import get_logger",
         "import dill as pickle",
         "import contextlib",
         "import subprocess",
@@ -54,7 +58,9 @@ def create_meta_system():
         "import sys",
         "import re",
     ]
-    meta_system.set_imports(import_statements=imports)
+    imp_res = meta_system.set_imports(import_statements=imports)
+    if imp_res.startswith("ERROR:"):
+        raise RuntimeError(f"Failed to set imports in create_meta_system: {imp_res}")
 
     with open("meta_systems/compact_system/utilities.py", "r") as spf:
         utilities_content = spf.read()
@@ -82,7 +88,9 @@ def create_meta_system():
         + [textwrap.dedent(inspect.getsource(ignored_nodes_message))]
     )
 
-    meta_system.upsert_utility_code(self_contained_content)
+    util_res = meta_system.upsert_utility_code(self_contained_content)
+    if util_res.startswith("ERROR:"):
+        raise RuntimeError(f"Failed to upsert utility code in create_meta_system: {util_res}")
     meta_system.set_state_attributes(
         {
             "target_agentic_system": "VirtualAgenticSystem",
@@ -179,7 +187,7 @@ def create_meta_system():
                         break
 
                 if best_checkpoint_path:
-                    print(f"Finalizing system from best checkpoint: {os.path.basename(best_checkpoint_path)}")
+                    logger.info(f"Finalizing system from best checkpoint: {os.path.basename(best_checkpoint_path)}")
                     os.rename(best_checkpoint_path, final_system_path)
                     with open(final_system_path, "rb") as f:
                         final_system_object = pickle.load(f)
@@ -192,14 +200,14 @@ def create_meta_system():
                             os.remove(path)
                 else:
                     # Fallback: No checkpoints exist, save the current (likely broken) state
-                    print("No checkpoints found. Saving current system state as final version.")
+                    logger.warning("No checkpoints found. Saving current system state as final version.")
                     with open(final_system_path, "wb") as f:
                         pickle.dump(target_agentic_system, f)
 
                     materialize_system(target_agentic_system, output_dir=code_dir)
 
             except Exception as e:
-                print(f"Error during final system save: {repr(e)}")
+                logger.error(f"Error during final system save: {repr(e)}")
 
             return END
 
@@ -209,7 +217,7 @@ def create_meta_system():
 
     # Materialize the MetaSystem itself
     materialize_system(meta_system, output_dir="materialized_meta_system")
-    print("----- Materialized Meta System -----")
+    logger.info("----- Materialized Meta System -----")
     return meta_system
 
 

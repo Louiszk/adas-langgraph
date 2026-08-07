@@ -31,6 +31,9 @@ from meta_systems.compact_system.utilities import (
     test_reminder,
 )
 from meta_systems.compact_system.tools import tools
+from adas_core.logging_config import get_logger
+
+logger = get_logger("compact_system.nodes")
 
 
 def formatting_function(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -70,11 +73,11 @@ def validation_function(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if steps == 0:
         # First-time generation of validation code
-        print("--- Generating initial validation suite ---")
+        logger.info("--- Generating initial validation suite ---")
         prompt_messages = [SystemMessage(content=validation_prompt), initial_task]
     else:
         # Hardening existing validation code
-        print(f"--- System passed. Generating more difficult test cases (Iteration {steps}) ---")
+        logger.info(f"--- System passed. Generating more difficult test cases (Iteration {steps}) ---")
 
         # Aggregate previous test cases for context
         previous_test_cases_str = ""
@@ -119,7 +122,7 @@ def validation_function(state: Dict[str, Any]) -> Dict[str, Any]:
         if not snippets:
             raise ValueError("Unable to generate initial Validation Code.")
         else:
-            print("Failed to generate a valid hardened test suite.")
+            logger.warning("Failed to generate a valid hardened test suite.")
             return {"hardening_passed": None}
 
     updated_snippets = snippets + [new_snippet]
@@ -137,7 +140,7 @@ def initial_test_runner_function(state: Dict[str, Any]) -> Dict[str, Any]:
 
     steps = state.get("hardening_steps", 0)
     initial_test_passes = state.get("initial_test_passes", 0)
-    print(f"--- Hardening Loop: (Iteration {steps}) ---")
+    logger.info(f"--- Hardening Loop: (Iteration {steps}) ---")
     test_system_tool = tools.get("TestSystem")
     if not test_system_tool:
         raise ValueError("TestSystem tool not found.")
@@ -154,7 +157,7 @@ def initial_test_runner_function(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if "Overall: PASSED" in validator_result:
         return {"hardening_passed": True, "initial_test_passes": initial_test_passes}
-    print("--- System failed. Handing off hardened test suite to meta-agent. ---")
+    logger.info("--- System failed. Handing off hardened test suite to meta-agent. ---")
 
     verbose_test_results_content = (
         "--- Initial Test Results ---\n"
@@ -208,7 +211,7 @@ def meta_agent_function(state: Dict[str, Any]) -> Dict[str, Any]:
             allow_partial=False,
         )
     except Exception as e:
-        print(f"Error during message trimming: {e}")
+        logger.warning(f"Error during message trimming: {e}")
 
     # Reminder that messages have been trimmed
     trimmed_iterations = (len(current_messages) - len(trimmed_messages)) // 2

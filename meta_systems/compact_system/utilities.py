@@ -1,6 +1,10 @@
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.decorator_logic import find_code_blocks
+from adas_core.logging_config import get_logger
+
+logger = get_logger("compact_system.utilities")
+
 
 # Will be rendered in build.py
 agentic_system_documentation = ""
@@ -256,7 +260,7 @@ def parse_validation_code(response):
                 content_parts.append(str(item))
         response_content = " ".join(content_parts)
 
-    print(response_content)
+    logger.debug(response_content)
     potential_code_blocks = [str(code["content"]) for code in find_code_blocks(response_content)]
     validation_errors = []
 
@@ -276,13 +280,13 @@ def parse_validation_code(response):
 
             # Perform the validation checks
             if isinstance(test_cases, list) and len(test_cases) == 3 and callable(validator_func):
-                print("Validation suite found.")
+                logger.info("Validation suite found.")
                 return block, None
 
         except Exception as e:
             formatted_error = f"Executing validation code failed: {repr(e)}"
             validation_errors.append(formatted_error)
-            print(formatted_error)
+            logger.error(formatted_error)
 
-    print("WARNING: No valid validation code block was found in the response.")
+    logger.warning("WARNING: No valid validation code block was found in the response.")
     return None, validation_errors

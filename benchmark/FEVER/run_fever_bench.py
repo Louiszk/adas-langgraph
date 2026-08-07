@@ -3,18 +3,21 @@ import time
 import importlib
 from typing import Dict
 from benchmark.benchmark_base import run_benchmark_parallel
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("run_fever_bench")
 
 # Set Wikipedia User-Agent if the library is installed
 try:
     import wikipedia  # type: ignore
 
     wikipedia.set_user_agent("FEVER-Benchmark/1.0 (lf37cyti@studserv.uni-leipzig.de)")
-    print("Wikipedia User-Agent configured")
+    logger.info("Wikipedia User-Agent configured")
 except ImportError:
-    print("Wikipedia library not installed")
+    logger.warning("Wikipedia library not installed")
 
 sys.path.append("/sandbox/workspace")
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.llm_wrapper import LargeLanguageModel  # noqa: E402
 
 
 def execute_problem(problem_item: Dict, system_path: str) -> Dict:
@@ -92,14 +95,16 @@ def custom_results_finalize(results: Dict):
 
 
 def custom_print_summary(results: Dict):
-    print("\n--- Per-label Performance ---")
+    logger.info("--- Per-label Performance ---")
     for label, metrics in results["label_metrics"].items():
         if metrics["total"] > 0:
-            print(f"{label}: {metrics['accuracy'] * 100:.2f}% accuracy ({metrics['true']}/{metrics['total']})")
+            logger.info(f"{label}: {metrics['accuracy'] * 100:.2f}% accuracy ({metrics['true']}/{metrics['total']})")
 
 
 if __name__ == "__main__":
     import argparse
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="Run FEVER benchmark in parallel with metric aggregation.")
     parser.add_argument(

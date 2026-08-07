@@ -2,6 +2,9 @@ import os
 import json
 import concurrent.futures
 from typing import Dict, Callable, Optional
+from adas_core.logging_config import get_logger
+
+logger = get_logger("benchmark_base")
 
 
 def run_benchmark_parallel(
@@ -18,7 +21,7 @@ def run_benchmark_parallel(
     """
     Base function to run a benchmark in parallel with metric aggregation.
     """
-    print(f"Running benchmark for: {system_path}")
+    logger.info(f"Running benchmark for: {system_path}")
 
     # Handle absolute/relative pathing for sandbox
     if not os.path.exists(dataset_path):
@@ -31,9 +34,9 @@ def run_benchmark_parallel(
         with open(dataset_path, "r", encoding="utf-8") as f:
             dataset = json.load(f)
 
-        print(f"Loaded static dataset with {len(dataset)} problems")
+        logger.info(f"Loaded static dataset with {len(dataset)} problems")
     except Exception as e:
-        print(f"Error loading dataset: {str(e)}")
+        logger.error(f"Error loading dataset: {str(e)}")
         return
 
     results = {
@@ -54,7 +57,7 @@ def run_benchmark_parallel(
     if custom_results_init:
         custom_results_init(results)
 
-    print(f"Executing problems in parallel (max_workers={max_workers})...")
+    logger.info(f"Executing problems in parallel (max_workers={max_workers})...")
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_problem = {
@@ -77,19 +80,19 @@ def run_benchmark_parallel(
                     custom_results_update(results, result_info)
 
                 if result_info["is_correct"]:
-                    print(f"✓ Problem {idx + 1}: Correct")
+                    logger.info(f"✓ Problem {idx + 1}: Correct")
                     results["correct"] += 1
                 else:
-                    print(
+                    logger.info(
                         f"✗ Problem {idx + 1}: Incorrect. Expected: {result_info['expected']}, Got: {result_info['predicted']}"
                     )
                     results["incorrect"] += 1
 
                 results["problem_results"][idx] = result_info
-                print(f"Progress: {i}/{len(dataset)} problems processed")
+                logger.info(f"Progress: {i}/{len(dataset)} problems processed")
 
             except Exception as exc:
-                print(f"Problem {idx + 1} generated an exception: {exc}")
+                logger.error(f"Problem {idx + 1} generated an exception: {exc}")
                 results["incorrect"] += 1
 
     total_attempted = results["correct"] + results["incorrect"]
@@ -110,14 +113,14 @@ def run_benchmark_parallel(
     with open(results_file, "w") as f:
         json.dump(results, f, indent=2)
 
-    print("\n--- Benchmark Summary ---")
-    print(f"Results saved to: {results_file}")
-    print(f"Total problems: {len(dataset)}")
-    print(f"Correct: {results['correct']} | Incorrect: {results['incorrect']}")
-    print(f"Accuracy: {results.get('accuracy', 0) * 100:.2f}%")
-    print(f"Total LLM Calls: {results['aggregate_metrics']['total_llm_calls']}")
-    print(f"Total Tokens: {results['aggregate_metrics']['total_tokens']}")
-    print(f"Avg. Duration/Problem: {results['aggregate_metrics'].get('avg_duration_per_problem', 0):.2f}s")
+    logger.info("--- Benchmark Summary ---")
+    logger.info(f"Results saved to: {results_file}")
+    logger.info(f"Total problems: {len(dataset)}")
+    logger.info(f"Correct: {results['correct']} | Incorrect: {results['incorrect']}")
+    logger.info(f"Accuracy: {results.get('accuracy', 0) * 100:.2f}%")
+    logger.info(f"Total LLM Calls: {results['aggregate_metrics']['total_llm_calls']}")
+    logger.info(f"Total Tokens: {results['aggregate_metrics']['total_tokens']}")
+    logger.info(f"Avg. Duration/Problem: {results['aggregate_metrics'].get('avg_duration_per_problem', 0):.2f}s")
 
     if custom_print_summary:
         custom_print_summary(results)

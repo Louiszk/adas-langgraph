@@ -26,13 +26,15 @@ TEST_CSV_PATH = os.path.join(INPUT_DIR, "test.csv")
 with open(TEST_CSV_PATH, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     writer.writerow(["id", "category", "value", "amount", "score"])
-    writer.writerows([
-        [1, "A", 10, 100, 1],
-        [2, "B", 15, 200, 2],
-        [3, "A", 5, 300, 3],
-        [4, "C", 20, 400, 4],
-        [5, "B", 25, 500, 5],
-    ])
+    writer.writerows(
+        [
+            [1, "A", 10, 100, 1],
+            [2, "B", 15, 200, 2],
+            [3, "A", 5, 300, 3],
+            [4, "C", 20, 400, 4],
+            [5, "B", 25, 500, 5],
+        ]
+    )
 
 # -----------------------------------------------------------------------------
 # Test cases
@@ -78,14 +80,17 @@ TARGET_SYSTEM_TEST_CASES = [
     },
 ]
 
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
 def _path(filename: str) -> str:
     return os.path.join(OUTPUT_DIR, filename)
 
+
 def _is_nonempty_file(path: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) > 0
+
 
 def _is_number_like(value: Any) -> bool:
     if isinstance(value, bool):
@@ -100,6 +105,7 @@ def _is_number_like(value: Any) -> bool:
             return False
     return False
 
+
 def _cell_matches(expected: Any, actual: Any) -> bool:
     if isinstance(expected, bool):
         return expected == actual
@@ -112,6 +118,7 @@ def _cell_matches(expected: Any, actual: Any) -> bool:
             return False
     return str(actual).strip() == str(expected).strip()
 
+
 def _row_matches(expected_row: Dict[str, Any], actual_row: Dict[str, Any], columns: list[str]) -> bool:
     for col in columns:
         if col not in actual_row:
@@ -119,6 +126,7 @@ def _row_matches(expected_row: Dict[str, Any], actual_row: Dict[str, Any], colum
         if not _cell_matches(expected_row[col], actual_row[col]):
             return False
     return True
+
 
 # -----------------------------------------------------------------------------
 # Validation function
@@ -169,8 +177,7 @@ def validate_target_system_output(input_index: int, final_state: Dict[str, Any])
 
         if len(actual_rows) != len(expected_rows):
             return False, (
-                f"CSV '{primary_path}' row count mismatch: expected {len(expected_rows)}, "
-                f"got {len(actual_rows)}."
+                f"CSV '{primary_path}' row count mismatch: expected {len(expected_rows)}, got {len(actual_rows)}."
             )
 
         used = [False] * len(actual_rows)

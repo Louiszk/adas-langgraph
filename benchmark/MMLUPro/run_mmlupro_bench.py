@@ -62,8 +62,12 @@ def execute_problem(problem_item: Dict, system_path: str) -> Dict:
 
 if __name__ == "__main__":
     import argparse
+    from adas_core.logging_config import setup_logging
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="Run MMLU-Pro benchmark in parallel with metric aggregation.")
+
     parser.add_argument(
         "--system",
         required=True,

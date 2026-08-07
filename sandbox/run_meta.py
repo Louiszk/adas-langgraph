@@ -8,10 +8,14 @@ from typing import Optional, cast, Any
 sys.path.append("/sandbox/workspace")
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.logging_config import setup_logging, get_logger
 from materialized_meta_system import MetaSystem  # type: ignore
+
+logger = get_logger("run_meta")
 
 
 def main():
+    setup_logging()
     start_time = time.time()
     metrics = {
         "system_name": "",
@@ -43,7 +47,7 @@ def main():
 
     metrics["system_name"] = system_name
     metrics["problem_statement"] = problem_statement
-    print(f"Running meta system for '{system_name}'...")
+    logger.info(f"Running meta system for '{system_name}'...")
 
     target_agentic_system: Optional[VirtualAgenticSystem] = None
 
@@ -57,7 +61,7 @@ def main():
                     target_agentic_system = cast(VirtualAgenticSystem, pickle.load(f))
                 target_agentic_system.system_name = system_name
                 target_agentic_system.escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
-                print("System initialized from existing file.")
+                logger.info("System initialized from existing file.")
             except Exception as e:
                 raise RuntimeError(f"Error initializing from file: {e}") from e
         else:
@@ -73,7 +77,7 @@ def main():
         }
 
         processed_msg_count = 0
-        print("Streaming meta system execution...")
+        logger.info("Streaming meta system execution...")
 
         for output in workflow.stream(cast(Any, inputs), config={"recursion_limit": 999}):
             metrics["iterations"] += 1
@@ -88,7 +92,7 @@ def main():
                             content = getattr(msg, "content", "")
                             stream_content = f"\n[{msg_type}]: {content}\n"
                             metrics["stream_content"] += stream_content
-                            print(stream_content)
+                            logger.info(stream_content.strip())
 
                         processed_msg_count = len(messages)
 
@@ -96,7 +100,7 @@ def main():
                     metrics["validation_code_snippets"] = out["validation_code_snippets"]
 
                 if "design_completed" in out and out["design_completed"]:
-                    print("Design completed.")
+                    logger.info("Design completed.")
                     metrics["status"] = "completed"
 
         metrics["status"] = "completed"
@@ -105,8 +109,7 @@ def main():
         import traceback
 
         error_traceback = traceback.format_exc()
-        print(error_traceback)
-        print(f"Error running meta system: {str(e)}")
+        logger.error(f"Error running meta system: {str(e)}\n{error_traceback}")
 
         metrics["status"] = "error"
         metrics["error"] = {"message": repr(e), "traceback": error_traceback}
@@ -130,13 +133,13 @@ def main():
                 if hasattr(final_system_object, "installed_packages") and final_system_object.installed_packages:
                     metrics["installed_packages"] = " ".join(final_system_object.installed_packages.values())
             except Exception as e:
-                print(f"Could not read installed packages from final system pickle: {repr(e)}")
+                logger.warning(f"Could not read installed packages from final system pickle: {repr(e)}")
 
         metrics_file = f"{metrics_dir}/{escaped_name}.json"
         with open(metrics_file, "w") as f:
             json.dump(metrics, f, indent=2)
 
-        print(f"Metrics saved to {metrics_file}")
+        logger.info(f"Metrics saved to {metrics_file}")
 
 
 if __name__ == "__main__":

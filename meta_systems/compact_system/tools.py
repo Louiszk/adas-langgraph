@@ -14,8 +14,11 @@ from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from adas_core.materialize import materialize_system
 from adas_core.decorator_logic import build_decorator_signatures
 from adas_core.helpers import get_filtered_packages, truncate_state, TruncatingStringIO
+from adas_core.logging_config import get_logger
 from meta_systems.compact_system.utilities import test_reminder
 from meta_systems.compact_system.configurations import RECURSION_LIMIT
+
+logger = get_logger("compact_system.tools")
 
 
 def ignored_nodes_message(ignored_nodes: List[ast.AST]) -> str:
@@ -416,7 +419,8 @@ def test_system(state: Dict[str, Any]) -> str:
                     all_test_cases.extend(cases)
                     all_validator_funcs.append(validator)
             except Exception as e_snippet:
-                print(f"ERROR: Failed to parse a validation code snippet: {repr(e_snippet)}")
+                logger.error(f"Failed to parse a validation code snippet: {repr(e_snippet)}")
+
         num_tests = len(all_test_cases)
 
         source_code = materialize_system(target_agentic_system, output_dir=None)
@@ -597,7 +601,7 @@ def test_system(state: Dict[str, Any]) -> str:
             test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests. A snapshot of the current system has been saved."
 
         except Exception:
-            print(f"ERROR: during system checkpoint saving: {traceback.format_exc(chain=False)}")
+            logger.error(f"Error during system checkpoint saving: {traceback.format_exc(chain=False)}")
 
     is_initial_test = state.get("optimize") and state.get("initial_test_results") is None
     if is_initial_test:

@@ -13,6 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("orchestrator")
+
 try:
     import docker
     from docker.errors import DockerException
@@ -81,12 +85,12 @@ class ContainerManager:
         if self.client is not None:
             try:
                 self.client.images.get(base_image_name)
-                print(f"--> Custom base image '{base_image_name}' already exists. Skipping creation.")
+                logger.info(f"Custom base image '{base_image_name}' already exists. Skipping creation.")
                 return True
             except Exception:
                 pass
 
-        print(f"--> Custom base image '{base_image_name}' not found. Creating it...")
+        logger.info(f"Custom base image '{base_image_name}' not found. Creating it...")
         if self.client is not None:
             try:
                 self.client.images.pull(builder_image)
@@ -96,24 +100,24 @@ class ContainerManager:
                     detach=True,
                     name=f"adas-builder-{self.unique_id}",
                 )
-                print("--> Installing core dependencies in builder container...")
+                logger.info("Installing core dependencies in builder container...")
                 install_cmd = f"pip install {' '.join(core_packages)}"
                 exit_code, output = container.exec_run(install_cmd)
                 if exit_code != 0:
                     output_str = output.decode("utf-8", errors="ignore") if isinstance(output, bytes) else str(output)
-                    print(f"!!ERROR: pip install failed inside builder container:\n{output_str}", file=sys.stderr)
+                    logger.error(f"pip install failed inside builder container:\n{output_str}")
                     container.stop()
                     container.remove()
                     return False
 
-                print(f"--> Committing container to create image '{base_image_name}'...")
+                logger.info(f"Committing container to create image '{base_image_name}'...")
                 container.commit(repository=base_image_name)
                 container.stop()
                 container.remove()
-                print("--> Custom base image created successfully.")
+                logger.info("Custom base image created successfully.")
                 return True
             except Exception as e:
-                print(f"--> SDK build failed ({e}), falling back to CLI subprocess...")
+                logger.warning(f"SDK build failed ({e}), falling back to CLI subprocess...")
 
         return self._create_base_image_cli(base_image_name, builder_image, core_packages)
 
@@ -128,7 +132,7 @@ class ContainerManager:
             check=False,
         )
         if res.returncode != 0:
-            print(f"!!ERROR: Failed to start builder container: {res.stderr}", file=sys.stderr)
+            logger.error(f"Failed to start builder container: {res.stderr}")
             return False
 
         install_res = subprocess.run(
@@ -138,13 +142,13 @@ class ContainerManager:
             check=False,
         )
         if install_res.returncode != 0:
-            print(f"!!ERROR: pip install failed in builder container: {install_res.stderr}", file=sys.stderr)
+            logger.error(f"pip install failed in builder container: {install_res.stderr}")
             subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
             return False
 
         subprocess.run([cli, "commit", cid_name, base_image_name], check=False)
         subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
-        print("--> Custom base image created successfully via CLI.")
+        logger.info("Custom base image created successfully via CLI.")
         return True
 
     def create_temp_image(self, base_image_name: str, temp_image_name: str, packages: List[str]) -> bool:
@@ -152,7 +156,7 @@ class ContainerManager:
         if not packages:
             return True
 
-        print(f"--> Creating temporary image '{temp_image_name}' with custom dependencies: {packages}")
+        logger.info(f"Creating temporary image '{temp_image_name}' with custom dependencies: {packages}")
         if self.client is not None:
             try:
                 container = self.client.containers.run(
@@ -165,17 +169,17 @@ class ContainerManager:
                 exit_code, output = container.exec_run(install_cmd)
                 if exit_code != 0:
                     output_str = output.decode("utf-8", errors="ignore") if isinstance(output, bytes) else str(output)
-                    print(f"!!ERROR: Failed to install custom dependencies:\n{output_str}", file=sys.stderr)
+                    logger.error(f"Failed to install custom dependencies:\n{output_str}")
                     container.stop()
                     container.remove()
                     return False
                 container.commit(repository=temp_image_name)
                 container.stop()
                 container.remove()
-                print("--> Temporary image created.")
+                logger.info("Temporary image created.")
                 return True
             except Exception as e:
-                print(f"--> SDK temp build failed ({e}), falling back to CLI subprocess...")
+                logger.warning(f"SDK temp build failed ({e}), falling back to CLI subprocess...")
 
         cli = self._get_cli_cmd()
         cid_name = f"adas-temp-builder-{self.unique_id}-{random.randint(1000, 9999)}"
@@ -215,7 +219,7 @@ class ContainerManager:
 
     def perform_maintenance(self) -> None:
         """Prune unused containers and networks."""
-        print("--- Performing container maintenance/cleanup ---")
+        logger.info("--- Performing container maintenance/cleanup ---")
         if self.client is not None:
             try:
                 self.client.containers.prune()
@@ -229,7 +233,8 @@ class ContainerManager:
 
     def cleanup_job_resources(self, base_image_name: str) -> None:
         """Clean up all job-specific resources (containers and base/temp images)."""
-        print(f"--- Cleaning up resources for Job {self.unique_id} ---")
+        logger.info(f"--- Cleaning up resources for Job {self.unique_id} ---")
+
         self.remove_image(base_image_name, force=True)
         cli = self._get_cli_cmd()
         subprocess.run([cli, "container", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
@@ -271,7 +276,7 @@ class DependencyParser:
             if isinstance(packages_val, str):
                 return [pkg.strip() for pkg in packages_val.split() if pkg.strip()]
         except Exception as e:
-            print(f"Warning: Failed to parse installed_packages from {path}: {e}")
+            logger.warning(f"Failed to parse installed_packages from {path}: {e}")
         return []
 
 
@@ -291,7 +296,7 @@ class ExecutionManager:
             log_path.parent.mkdir(parents=True, exist_ok=True)
 
         cmd_str = " ".join(cmd)
-        print(f"  Executing: {cmd_str}")
+        logger.info(f"Executing: {cmd_str}")
 
         start_time = time.time()
         try:
@@ -326,7 +331,7 @@ class ExecutionManager:
 
         except subprocess.TimeoutExpired as e:
             duration = time.time() - start_time
-            print(f"  ERROR: Execution timed out after {timeout} seconds.")
+            logger.error(f"Execution timed out after {timeout} seconds.")
             stdout = (
                 (e.stdout or b"").decode("utf-8", errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")
             )
@@ -371,7 +376,7 @@ class ResultAggregator:
             writer.writeheader()
             for rec in records:
                 writer.writerow(rec)
-        print(f"CSV summary generated: {csv_path}")
+        logger.info(f"CSV summary generated: {csv_path}")
         return csv_path
 
     def export_summary_txt(
@@ -395,7 +400,7 @@ class ResultAggregator:
                     f"{approach}_{bench}{iter_num}_gpt" if approach and bench else str(rec.get("system_name", ""))
                 )
                 f.write(f"  - {sys_name}: {status}\n")
-        print(f"Text summary generated: {txt_path}")
+        logger.info(f"Text summary generated: {txt_path}")
         return txt_path
 
 
@@ -419,7 +424,7 @@ class Orchestrator:
                 return self.run_design()
             if task_name == "target":
                 return self.run_target()
-            print(f"Unknown task: {task_name}", file=sys.stderr)
+            logger.error(f"Unknown task: {task_name}")
             return 1
         finally:
             self.container_manager.cleanup_job_resources(self.base_image_name)
@@ -451,7 +456,7 @@ class Orchestrator:
     def run_benchmark(self) -> int:
         """Execute benchmark workflow across iterations."""
         if not self.container_manager.create_base_image(self.base_image_name):
-            print("ERROR: Base image creation failed.", file=sys.stderr)
+            logger.error("Base image creation failed.")
             return 1
 
         aggregator = ResultAggregator(self.results_dir)
@@ -479,13 +484,13 @@ class Orchestrator:
             system_name_base = f"{approach}_{getattr(self.args, 'benchmark', 'gsm')}{iter_num}_gpt"
             system_module_path = f"generated_systems.{system_name_base}"
 
-            print("-----------------------------------------")
-            print(f"Testing System: {system_name_base} (in {work_dir})")
-            print(f"  Benchmark: {getattr(self.args, 'benchmark', 'gsm')}, Iteration: {iter_num}")
+            logger.info("-----------------------------------------")
+            logger.info(f"Testing System: {system_name_base} (in {work_dir})")
+            logger.info(f"  Benchmark: {getattr(self.args, 'benchmark', 'gsm')}, Iteration: {iter_num}")
 
             system_file = work_dir / "generated_systems" / f"{system_name_base}.py"
             if not system_file.is_file():
-                print(f"  ERROR: System file not found: {system_file}")
+                logger.error(f"System file not found: {system_file}")
                 records.append(
                     {
                         "approach": approach,
@@ -508,7 +513,7 @@ class Orchestrator:
                 if success:
                     image_to_use = temp_image_name
                 else:
-                    print("  WARNING: Failed to build temp image. Using base image.")
+                    logger.warning("Failed to build temp image. Using base image.")
 
             bench_script = initial_dir / "benchmark" / bench_dir / f"main_{bench_name}_bench.py"
             cmd = [
@@ -555,7 +560,7 @@ class Orchestrator:
     def run_design(self) -> int:
         """Execute iterative system generation workflow."""
         if not self.container_manager.create_base_image(self.base_image_name):
-            print("ERROR: Base image creation failed.", file=sys.stderr)
+            logger.error("Base image creation failed.")
             return 1
 
         overall_exit = 0
@@ -583,9 +588,9 @@ class Orchestrator:
 
         for iter_num in iterations:
             sys_name = f"{approach}_{benchmark}{iter_num}_gpt"
-            print("=========================================================")
-            print(f"   Running Design Generation for {sys_name}")
-            print("=========================================================")
+            logger.info("=========================================================")
+            logger.info(f"   Running Design Generation for {sys_name}")
+            logger.info("=========================================================")
             cmd = [
                 sys.executable,
                 "run_design.py",
@@ -607,7 +612,7 @@ class Orchestrator:
     def run_target(self) -> int:
         """Execute generated target systems on specified inputs."""
         if not self.container_manager.create_base_image(self.base_image_name):
-            print("ERROR: Base image creation failed.", file=sys.stderr)
+            logger.error("Base image creation failed.")
             return 1
 
         overall_exit = 0
@@ -624,16 +629,16 @@ class Orchestrator:
         Path("data/output").mkdir(parents=True, exist_ok=True)
 
         if data_gen_script and Path(data_gen_script).is_file():
-            print(f"--- Running Data Generation Script: {data_gen_script} ---")
+            logger.info(f"--- Running Data Generation Script: {data_gen_script} ---")
             res_gen = subprocess.run([sys.executable, data_gen_script], check=False)
             if res_gen.returncode != 0:
-                print("ERROR: Data generation script failed.", file=sys.stderr)
+                logger.error("Data generation script failed.")
                 return 1
 
         for sys_name in system_names:
-            print("-------------------------------------------------")
-            print(f" STARTING RUN FOR: {sys_name}")
-            print("-------------------------------------------------")
+            logger.info("-------------------------------------------------")
+            logger.info(f" STARTING RUN FOR: {sys_name}")
+            logger.info("-------------------------------------------------")
 
             metrics_file = Path("generated_systems/metrics") / f"{sys_name}.json"
             packages = DependencyParser.get_installed_packages(metrics_file)
@@ -720,6 +725,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Entrypoint for the orchestrator."""
+    setup_logging()
     args = parse_args(argv)
     orchestrator = Orchestrator(args)
     return orchestrator.run()

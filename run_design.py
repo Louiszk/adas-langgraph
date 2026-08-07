@@ -3,6 +3,9 @@ import argparse
 import importlib
 from config import settings, task
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("run_design")
 
 
 def run_meta_system_in_sandbox(
@@ -18,10 +21,10 @@ def run_meta_system_in_sandbox(
     for chunk in session.execute_command_streaming(command):
         print(chunk, end="", flush=True)
 
-    print("\nMeta system execution completed!")
+    logger.info("Meta system execution completed!")
 
     if "generated_systems" in str(session.execute_command("ls -la /sandbox/workspace")):
-        print("Copying generated systems and metrics back to host...")
+        logger.info("Copying generated systems and metrics back to host...")
         os.makedirs("generated_systems", exist_ok=True)
         escaped_target_name = target_name.replace("/", "_").replace("\\", "_").replace(":", "_")
         target_file_name = escaped_target_name + ".py"
@@ -38,7 +41,7 @@ def run_meta_system_in_sandbox(
                 f"/sandbox/workspace/generated_systems/{target_pickle_name}",
                 f"generated_systems/{target_pickle_name}",
             )
-        print(f"Copied {target_file_name} and .pkl back to host")
+        logger.info(f"Copied {target_file_name} and .pkl back to host")
 
         if "metrics" in str(session.execute_command("ls -la /sandbox/workspace/generated_systems")):
             metrics_file = target_name.replace("/", "_").replace("\\", "_").replace(":", "_") + ".json"
@@ -49,7 +52,7 @@ def run_meta_system_in_sandbox(
                     f"/sandbox/workspace/generated_systems/metrics/{metrics_file}",
                     f"generated_systems/metrics/{metrics_file}",
                 )
-                print(f"Copied metrics file {metrics_file} back to host")
+                logger.info(f"Copied metrics file {metrics_file} back to host")
 
     session.copy_dir_from_runtime(src_dir="/sandbox/workspace/data/output", dest_dir="data/output", pattern="*")
 
@@ -57,6 +60,8 @@ def run_meta_system_in_sandbox(
 
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Run agentic systems in a sandboxed environment")
     parser.add_argument(
         "--keep-template",
@@ -89,7 +94,7 @@ def main():
     )
 
     args = parser.parse_args()
-    print(args)
+    logger.info(f"Running with arguments: {args}")
 
     try:
         module_path = f"meta_systems.{args.meta_system}.build"
@@ -97,15 +102,14 @@ def main():
         create_meta_system_func = getattr(build_module, "create_meta_system")
 
     except (ImportError, AttributeError) as e:
-        print(f"ERROR: Could not load the build script for the meta-system '{args.meta_system}'.")
-        print(f"Details: {e}")
+        logger.error(f"Could not load the build script for the meta-system '{args.meta_system}'. Details: {e}")
         return
     create_meta_system_func()
 
     if not os.path.exists("materialized_meta_system/MetaSystem.py"):
-        print("ERROR: The expected MetaSystem.py file was not found.")
+        logger.error("The expected MetaSystem.py file was not found.")
         return
-    print("Meta-system successfully built.")
+    logger.info("Meta-system successfully built.")
 
     session = StreamingSandboxSession(
         image=args.base_image,
@@ -118,13 +122,13 @@ def main():
         session.open()
         if setup_sandbox_environment(session, args.reinstall):
             run_meta_system_in_sandbox(session, args.problem, args.name, args.optimize_system)
-            print("Finished successfully!")
+            logger.info("Finished successfully!")
         else:
-            print("Failed to set up sandbox environment")
+            logger.error("Failed to set up sandbox environment")
     except Exception as e:
-        print(repr(e))
+        logger.exception(f"Error during execution: {e}")
     finally:
-        print("Session closed.")
+        logger.info("Session closed.")
         session.close()
 
 

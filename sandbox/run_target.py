@@ -9,6 +9,9 @@ from langgraph.graph.state import CompiledStateGraph
 
 # Import the LLM wrapper to access usage metrics
 from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("run_target")
 
 
 def main() -> None:
@@ -16,6 +19,8 @@ def main() -> None:
     Main entry point for running a compiled agentic system inside the sandbox.
     Captures execution metrics and the full final state.
     """
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Run a compiled agentic system and record metrics.")
     parser.add_argument(
         "--system_name",
@@ -50,7 +55,7 @@ def main() -> None:
     metrics_dir = "/sandbox/workspace/target_metrics"
     os.makedirs(metrics_dir, exist_ok=True)
 
-    # Variable to hold the full final state object
+    # Variable to hold the full final state snapshot
     final_state_snapshot = None
 
     try:
@@ -58,17 +63,17 @@ def main() -> None:
             initial_state: Dict[str, Any] = json.loads(args.state)
             metrics["initial_state"] = initial_state
         except json.JSONDecodeError:
-            print("Warning: Invalid JSON for --state argument. Using an empty state {}.")
+            logger.warning("Warning: Invalid JSON for --state argument. Using an empty state {}.")
             initial_state = {}
             metrics["initial_state"] = {}
 
-        print(f"--- Preparing to run target system: {args.system_name} ---")
+        logger.info(f"Preparing to run target system: {args.system_name}")
 
         module_path = f"generated_systems.{args.system_name}"
         try:
             target_module = importlib.import_module(module_path)
             workflow: CompiledStateGraph = target_module.workflow
-            print(f"Successfully imported '{args.system_name}'.")
+            logger.info(f"Successfully imported '{args.system_name}'.")
         except ModuleNotFoundError:
             raise RuntimeError(f"System module not found at '{module_path}'. Please ensure the file exists.")
         except Exception as e:
@@ -77,13 +82,12 @@ def main() -> None:
         try:
             viz_path = f"{metrics_dir}/{args.system_name}.png"
             workflow.get_graph().draw_mermaid_png(output_file_path=viz_path)
-            print(f"System graph visualization saved to '{viz_path}'")
+            logger.info(f"System graph visualization saved to '{viz_path}'")
         except Exception as e:
-            print(f"Warning: Failed to generate graph visualization: {e}")
+            logger.warning(f"Warning: Failed to generate graph visualization: {e}")
 
-        print("\n--- Starting system execution with initial state ---")
-        print(json.dumps(initial_state, indent=2))
-        print("-" * 50)
+        logger.info("Starting system execution with initial state:")
+        logger.info(json.dumps(initial_state, indent=2))
 
         for mode, payload in workflow.stream(
             initial_state,
@@ -92,18 +96,15 @@ def main() -> None:
         ):
             if mode == "updates" and isinstance(payload, dict):
                 step_counter += 1
-                print(f"\n[Step {step_counter}]")
+                logger.info(f"[Step {step_counter}]")
                 for node_name, state_update in payload.items():
-                    print(f"--- Update from node: '{node_name}' ---")
-                    print(json.dumps(state_update, indent=2, default=str))
+                    logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
 
             elif mode == "values":
                 final_state_snapshot = payload
 
         metrics["status"] = "completed"
-        print("\n" + "=" * 50)
-        print("--- System execution finished successfully ---")
-        print("=" * 50)
+        logger.info("System execution finished successfully")
 
     except Exception as e:
         import traceback
@@ -114,10 +115,7 @@ def main() -> None:
             "traceback": traceback.format_exc(),
         }
         metrics["error"] = error_info
-        print("\n" + "!" * 50)
-        print("--- An error occurred during system execution ---")
-        traceback.print_exc()
-        print("!" * 50)
+        logger.error(f"An error occurred during system execution: {e}\n{traceback.format_exc()}")
 
     finally:
         # --- Finalize and Save Metrics ---
@@ -137,9 +135,9 @@ def main() -> None:
         try:
             with open(metrics_filepath, "w") as f:
                 json.dump(metrics, f, indent=2)
-            print(f"\n--- Execution metrics saved to: {metrics_filepath} ---")
+            logger.info(f"Execution metrics saved to: {metrics_filepath}")
         except Exception as e:
-            print(f"\nFATAL: Could not save metrics file: {e}")
+            logger.error(f"Could not save metrics file: {e}")
 
         if final_state_snapshot:
             state_filename = f"{args.system_name}_{run_id}_final_state.txt"
@@ -148,9 +146,9 @@ def main() -> None:
                 state_str = json.dumps(final_state_snapshot, indent=2, default=str)
                 with open(state_filepath, "w", encoding="utf-8") as f:
                     f.write(state_str)
-                print(f"--- Final state saved to: {state_filepath} ---")
+                logger.info(f"Final state saved to: {state_filepath}")
             except Exception as e:
-                print(f"\nFATAL: Could not save final state file: {e}")
+                logger.error(f"Could not save final state file: {e}")
 
 
 if __name__ == "__main__":

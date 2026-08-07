@@ -8,6 +8,9 @@ from langchain_core.tools import BaseTool
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from config import settings
 
+from adas_core.logging_config import get_logger
+
+logger = get_logger("llm_wrapper")
 load_dotenv()
 _metrics_lock = threading.Lock()
 
@@ -273,7 +276,7 @@ class LargeLanguageModel:
             or getattr(msg, "tool_call_id", None)
         ]
         if len(messages) != len(messages_input):
-            print(f"Filtered out {len(messages_input) - len(messages)} empty messages before invoking.")
+            logger.info(f"Filtered out {len(messages_input) - len(messages)} empty messages before invoking.")
 
         try:
             response = self.model.invoke(messages)

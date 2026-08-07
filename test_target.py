@@ -4,6 +4,9 @@ import datetime
 from typing import Dict, Any
 
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
+from adas_core.logging_config import setup_logging, get_logger
+
+logger = get_logger("test_target")
 
 
 def run_target_system_in_sandbox(
@@ -24,20 +27,20 @@ def run_target_system_in_sandbox(
 
     command = " ".join(cmd_parts)
 
-    print(f"\n--- Executing Target System: {system_name} (Run ID: {run_id}) ---")
-    print(f"Initial State: {state_str}")
-    print("-" * 20)
+    logger.info(f"Executing Target System: {system_name} (Run ID: {run_id})")
+    logger.info(f"Initial State: {state_str}")
 
     # Stream the output from the sandbox command
     for chunk in session.execute_command_streaming(command):
         print(chunk, end="", flush=True)
 
-    print("\n" + "-" * 20)
-    print("--- Target system execution completed ---\n")
+    logger.info("Target system execution completed")
 
 
 def main() -> None:
     """Main function to set up and run a target agentic system in a sandboxed environment."""
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Run a target agentic system in a sandboxed environment.")
     parser.add_argument(
         "--system_name",
@@ -80,8 +83,7 @@ def main() -> None:
     try:
         initial_state: Dict[str, Any] = json.loads(args.state)
     except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON provided for --state argument: {e}")
-        print("Using a default empty state: {}")
+        logger.error(f"Invalid JSON provided for --state argument: {e}. Using empty state.")
         initial_state = {}
 
     # Initialize the sandbox session with the specified configuration
@@ -93,13 +95,13 @@ def main() -> None:
     )
 
     try:
-        print("--- Opening sandbox session ---")
+        logger.info("Opening sandbox session")
         session.open()
 
         # Set up the sandbox environment, reinstalling dependencies if requested
         if setup_sandbox_environment(session, reinstall=args.reinstall):
             # Purge output and metrics directories to ensure a clean run
-            print("--- Purging sandbox output and metrics directories ---")
+            logger.info("Purging sandbox output and metrics directories")
             session.execute_command("rm -rf /sandbox/workspace/data/output && mkdir -p /sandbox/workspace/data/output")
             session.execute_command(
                 "rm -rf /sandbox/workspace/target_metrics && mkdir -p /sandbox/workspace/target_metrics"
@@ -108,7 +110,7 @@ def main() -> None:
             # Run the target system with the provided state AND the timestamp
             run_target_system_in_sandbox(session, args.system_name, initial_state, run_id=timestamp)
 
-            print("\n--- Checking for output data to copy back ---")
+            logger.info("Checking for output data to copy back")
 
             # Define specific output folder for this run
             host_output_folder = f"data/output/{args.system_name}_{timestamp}"
@@ -118,30 +120,27 @@ def main() -> None:
                 dest_dir=host_output_folder,
                 pattern="*",
             )
-            print(f"Output data copied to: {host_output_folder}")
+            logger.info(f"Output data copied to: {host_output_folder}")
 
-            print("--- Checking for metrics files to copy back ---")
+            logger.info("Checking for metrics files to copy back")
             session.copy_dir_from_runtime(
                 src_dir="/sandbox/workspace/target_metrics",
                 dest_dir="target_metrics",
                 pattern="*",
             )
 
-            print("--- File copy process finished ---")
+            logger.info("File copy process finished")
 
         else:
-            print("Error: Failed to set up the sandbox environment.")
+            logger.error("Failed to set up the sandbox environment.")
 
     except Exception as e:
-        import traceback
-
-        print(f"\nAn unexpected error occurred: {e}")
-        traceback.print_exc()
+        logger.exception(f"An unexpected error occurred: {e}")
 
     finally:
-        print("\n--- Closing sandbox session ---")
+        logger.info("Closing sandbox session")
         session.close()
-        print("Session closed.")
+        logger.info("Session closed.")
 
 
 if __name__ == "__main__":
