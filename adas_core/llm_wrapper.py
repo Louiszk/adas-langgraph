@@ -155,13 +155,13 @@ class LargeLanguageModel:
         },
     }
 
-    token_counter = ChatOpenAI(model="gpt-5.4", api_key=SecretStr("x"))
+    token_counter = ChatOpenAI(model="gpt-5.6", api_key=SecretStr("x"))
 
     def __init__(
         self,
         temperature: Optional[float] = None,
         wrapper: str = "openai",
-        model_name: str = "gpt-5.4-mini",
+        model_name: str = "gpt-5.6-luna",
         name: Optional[str] = None,
         is_meta: bool = False,
         reasoning_effort: Optional[str] = "none",
