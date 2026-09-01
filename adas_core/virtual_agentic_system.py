@@ -7,96 +7,15 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START
 
+from adas_core.ast_parser import (
+    RemoveDefinitionsTransformer,
+    RemoveTypedUtilityDefinitionsTransformer,
+    extract_top_level_names,
+    get_top_level_definitions,
+)
 from adas_core.helpers import validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
-
-
-def _extract_top_level_names(ast_module: ast.Module) -> set[str]:
-    names = set()
-    for node in ast_module.body:
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name):
-                names.add(node.target.id)
-    return names
-
-
-def _get_top_level_definitions(ast_module: ast.Module) -> set[tuple[str, str]]:
-    """Return typed identifiers for deletable utility definitions."""
-    definitions = set()
-    for node in ast_module.body:
-        if isinstance(node, ast.FunctionDef):
-            definitions.add(("function", node.name))
-        elif isinstance(node, ast.ClassDef):
-            definitions.add(("class", node.name))
-        elif isinstance(node, ast.Assign):
-            definitions.update(("assignment", target.id) for target in node.targets if isinstance(target, ast.Name))
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            definitions.add(("assignment", node.target.id))
-    return definitions
-
-
-class RemoveDefinitionsTransformer(ast.NodeTransformer):
-    def __init__(self, names_to_remove: set[str]):
-        self.names_to_remove = names_to_remove
-        super().__init__()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
-        if node.name in self.names_to_remove:
-            return None
-        return self.generic_visit(node)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | None:
-        if node.name in self.names_to_remove:
-            return None
-        return self.generic_visit(node)
-
-    def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id in self.names_to_remove:
-                return None
-        return self.generic_visit(node)
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | None:
-        if isinstance(node.target, ast.Name) and node.target.id in self.names_to_remove:
-            return None
-        return self.generic_visit(node)
-
-
-class RemoveTypedUtilityDefinitionsTransformer(ast.NodeTransformer):
-    """Remove only top-level utility definitions matching an explicit kind and name."""
-
-    def __init__(self, definitions_to_remove: set[tuple[str, str]]):
-        self.definitions_to_remove = definitions_to_remove
-        super().__init__()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
-        return None if ("function", node.name) in self.definitions_to_remove else node
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | None:
-        return None if ("class", node.name) in self.definitions_to_remove else node
-
-    def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
-        remaining_targets = [
-            target
-            for target in node.targets
-            if not (isinstance(target, ast.Name) and ("assignment", target.id) in self.definitions_to_remove)
-        ]
-        if not remaining_targets:
-            return None
-        node.targets = remaining_targets
-        return node
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | None:
-        if isinstance(node.target, ast.Name) and ("assignment", node.target.id) in self.definitions_to_remove:
-            return None
-        return node
 
 
 class VirtualAgenticSystem:
@@ -488,7 +407,7 @@ class VirtualAgenticSystem:
             if not filtered_body:
                 return "WARNING: Your submitted utility code is identical to the existing code. **No update was performed.**"
             new_ast.body = filtered_body
-            names_to_replace = _extract_top_level_names(new_ast)
+            names_to_replace = extract_top_level_names(new_ast)
 
         except SyntaxError as e:
             raise ValueError(f"Syntax error in new utility code: {e}") from e
@@ -552,7 +471,7 @@ class VirtualAgenticSystem:
 
         try:
             existing_ast = ast.parse(textwrap.dedent(self.utility_code))
-            existing_definitions = _get_top_level_definitions(existing_ast)
+            existing_definitions = get_top_level_definitions(existing_ast)
             found = requested & existing_definitions
             missing = requested - existing_definitions
             if not found:
