@@ -1,36 +1,43 @@
-import os
-import dill as pickle
-import textwrap
 import inspect
-from langgraph.graph import START, END
-from typing import Dict, Any
-from adas_core.virtual_agentic_system import VirtualAgenticSystem
+import os
+import textwrap
+from typing import Any
+
+import dill as pickle
+from langchain_core.messages import AIMessage
+from langgraph.graph import END, START
+
+from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
-from meta_systems.compact_system.tools import (
-    set_imports,
-    set_state,
-    upsert_component,
-    delete_component,
-    add_edge,
-    delete_edge,
-    upsert_utilities,
-    test_system,
-    end_design,
-    install_package,
-    ignored_nodes_message,
-)
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from meta_systems.compact_system.configurations import MAX_HARDENING_STEPS
+from meta_systems.compact_system.documentation import agentic_system_documentation
 from meta_systems.compact_system.nodes import (
     formatting_function,
-    validation_function,
     initial_test_runner_function,
     meta_agent_function,
     tool_execution,
+    validation_function,
 )
-from langchain_core.messages import AIMessage
-from meta_systems.compact_system.tools import function_signatures, code_related_tools
-from meta_systems.compact_system.documentation import agentic_system_documentation
-from meta_systems.compact_system.configurations import MAX_HARDENING_STEPS
-from adas_core.logging_config import get_logger
+from meta_systems.compact_system.tools import (
+    _delete_named_item,
+    _manage_function,
+    _upsert_function,
+    _validate_action,
+    code_related_tools,
+    end_design,
+    function_signatures,
+    ignored_nodes_message,
+    install_package,
+    set_imports,
+    set_state,
+    test_system,
+    manage_conditional_edge,
+    manage_node,
+    manage_tool,
+    manage_edge,
+    manage_utilities,
+)
 
 logger = get_logger("compact_system.build")
 
@@ -49,6 +56,7 @@ def create_meta_system():
         "from langgraph.managed.is_last_step import RemainingSteps",
         "from adas_core.materialize import materialize_system",
         "from adas_core.logging_config import get_logger",
+        "from typing import Literal",
         "import dill as pickle",
         "import contextlib",
         "import subprocess",
@@ -68,9 +76,9 @@ def create_meta_system():
         configurations_content = spf.read()
 
     imported_variables = [
-        f"function_signatures = {repr(function_signatures)}",
-        f"agentic_system_documentation = {repr(agentic_system_documentation)}",
-        f"code_related_tools = {repr(code_related_tools)}",
+        f"function_signatures = {function_signatures!r}",
+        f"agentic_system_documentation = {agentic_system_documentation!r}",
+        f"code_related_tools = {code_related_tools!r}",
     ]
     cleaned_utilities_lines = [
         line
@@ -85,7 +93,13 @@ def create_meta_system():
         imported_variables
         + configurations_content.split("\n")
         + cleaned_utilities_lines
-        + [textwrap.dedent(inspect.getsource(ignored_nodes_message))]
+        + [
+            textwrap.dedent(inspect.getsource(ignored_nodes_message)),
+            textwrap.dedent(inspect.getsource(_upsert_function)),
+            textwrap.dedent(inspect.getsource(_validate_action)),
+            textwrap.dedent(inspect.getsource(_manage_function)),
+            textwrap.dedent(inspect.getsource(_delete_named_item)),
+        ]
     )
 
     util_res = meta_system.upsert_utility_code(self_contained_content)
@@ -115,11 +129,11 @@ def create_meta_system():
     meta_system.create_tool("InstallPackage", install_package.__name__, install_package)
     meta_system.create_tool("SetImports", set_imports.__name__, set_imports)
     meta_system.create_tool("SetState", set_state.__name__, set_state)
-    meta_system.create_tool("UpsertComponent", upsert_component.__name__, upsert_component)
-    meta_system.create_tool("DeleteComponent", delete_component.__name__, delete_component)
-    meta_system.create_tool("AddEdge", add_edge.__name__, add_edge)
-    meta_system.create_tool("DeleteEdge", delete_edge.__name__, delete_edge)
-    meta_system.create_tool("UpsertUtilities", upsert_utilities.__name__, upsert_utilities)
+    meta_system.create_tool("ManageNode", manage_node.__name__, manage_node)
+    meta_system.create_tool("ManageTool", manage_tool.__name__, manage_tool)
+    meta_system.create_tool("ManageConditionalEdge", manage_conditional_edge.__name__, manage_conditional_edge)
+    meta_system.create_tool("ManageEdge", manage_edge.__name__, manage_edge)
+    meta_system.create_tool("ManageUtilities", manage_utilities.__name__, manage_utilities)
     meta_system.create_tool("TestSystem", test_system.__name__, test_system)
     meta_system.create_tool("EndDesign", end_design.__name__, end_design)
 
@@ -144,7 +158,7 @@ def create_meta_system():
     meta_system.create_edge("Validation", "InitialTestRunner")
     meta_system.create_edge("MetaAgent", "ToolExecution")
 
-    def hardening_router(state: Dict[str, Any]) -> str:
+    def hardening_condition(state: dict[str, Any]) -> str:
         """Routes to Validation for test hardening or to MetaAgent to start design."""
         if not state.get("optimize"):
             return "MetaAgent"
@@ -160,9 +174,13 @@ def create_meta_system():
         else:
             return "MetaAgent"
 
-    meta_system.create_conditional_edge("InitialTestRunner", hardening_router)
+    meta_system.create_conditional_edge(
+        "InitialTestRunner",
+        hardening_condition,
+        path_map={"MetaAgent": "MetaAgent", "Validation": "Validation", END: END},
+    )
 
-    def design_completed_router(state: Dict[str, Any]) -> str:
+    def design_completed_condition(state: dict[str, Any]) -> str:
         """Routes to EndDesign if design is completed, otherwise to MetaAgent."""
         messages = state.get("messages", [])
         iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
@@ -207,13 +225,15 @@ def create_meta_system():
                     materialize_system(target_agentic_system, output_dir=code_dir)
 
             except Exception as e:
-                logger.error(f"Error during final system save: {repr(e)}")
+                logger.error(f"Error during final system save: {e!r}")
 
             return END
 
         return "MetaAgent"
 
-    meta_system.create_conditional_edge("ToolExecution", design_completed_router)
+    meta_system.create_conditional_edge(
+        "ToolExecution", design_completed_condition, path_map={"MetaAgent": "MetaAgent", END: END}
+    )
 
     # Materialize the MetaSystem itself
     materialize_system(meta_system, output_dir="materialized_meta_system")

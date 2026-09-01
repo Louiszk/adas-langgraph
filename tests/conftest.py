@@ -1,6 +1,8 @@
 import textwrap
-from typing import Dict, Any, Optional
+from typing import Any
+
 import pytest
+
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 
@@ -19,11 +21,11 @@ def add_tool_to_system(system: VirtualAgenticSystem, name: str, code: str, descr
 
 
 def add_conditional_edge_to_system(
-    system: VirtualAgenticSystem, source: str, code: str, path_map: Optional[Dict[str, Any]] = None
+    system: VirtualAgenticSystem, source: str, code: str, path_map: dict[str, Any]
 ) -> bool:
     """Helper to register a conditional edge on VirtualAgenticSystem through strict get_function validation."""
-    func, parsed = system.get_function(code, "router")
-    assert func is not None, f"get_function failed to parse router for source '{source}': {parsed}"
+    func, parsed = system.get_function(code, "conditional_edge")
+    assert func is not None, f"get_function failed to parse conditional edge for source '{source}': {parsed}"
     return system.create_conditional_edge(source, func, parsed, path_map)
 
 

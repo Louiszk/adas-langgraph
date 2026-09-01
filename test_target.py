@@ -1,10 +1,10 @@
-import json
 import argparse
 import datetime
-from typing import Dict, Any
+import json
+from typing import Any
 
+from adas_core.logging_config import get_logger, setup_logging
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
-from adas_core.logging_config import setup_logging, get_logger
 
 logger = get_logger("test_target")
 
@@ -12,7 +12,7 @@ logger = get_logger("test_target")
 def run_target_system_in_sandbox(
     session: StreamingSandboxSession,
     system_name: str,
-    state: Dict[str, Any],
+    state: dict[str, Any],
     run_id: str,
 ) -> None:
     """Constructs and executes the command to run the target system inside the sandbox."""
@@ -83,7 +83,7 @@ def main() -> None:
 
     # Parse the initial state from the JSON string argument
     try:
-        initial_state: Dict[str, Any] = json.loads(args.state)
+        initial_state: dict[str, Any] = json.loads(args.state)
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON provided for --state argument: {e}. Using empty state.")
         initial_state = {}

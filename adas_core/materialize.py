@@ -1,7 +1,8 @@
-import re
 import os
-from typing import Optional
-from langgraph.graph import START, END
+import re
+
+from langgraph.graph import END, START
+
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 
@@ -13,7 +14,16 @@ def get_function_name(func_source: str) -> str:
     return match.group(1)
 
 
-def materialize_system(system: VirtualAgenticSystem, output_dir: Optional[str] = "generated_systems") -> str:
+def format_path_map(path_map: dict) -> str:
+    """Render a conditional-edge path map while preserving the END symbol in generated code."""
+    entries = []
+    for route, destination in path_map.items():
+        rendered_destination = "END" if destination in {END, "END", "__end__"} else repr(destination)
+        entries.append(f"{route!r}: {rendered_destination}")
+    return "{" + ", ".join(entries) + "}"
+
+
+def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "generated_systems") -> str:
     """Generate Python code representation of the system."""
     nodes_count = len(system.nodes)
     tool_count = len(system.tools)
@@ -113,13 +123,14 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: Optional[str] =
             source_name = "START" if source in ["START", START, "__start__"] else f'"{source}"'
             func_source = edge_info["condition_code"]
             original_name = get_function_name(func_source)
+            path_map = format_path_map(edge_info["path_map"])
 
             code_lines.extend(
                 [
-                    f"# Conditional Router from: {source_name}",
+                    f"# Conditional edge from: {source_name}",
                     func_source,
                     "",
-                    f"agentic_system_graph.add_conditional_edges({source_name}, {original_name})",
+                    f"agentic_system_graph.add_conditional_edges({source_name}, {original_name}, {path_map})",
                     "",
                 ]
             )

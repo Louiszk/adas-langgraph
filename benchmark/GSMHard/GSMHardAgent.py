@@ -1,18 +1,20 @@
-from langgraph.graph import StateGraph, START, END
+from typing import TypedDict
+
 from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
-    AIMessage,
-    AnyMessage,
 )
-from adas_core.llm_wrapper import LargeLanguageModel
 from langchain_core.tools import tool
-from typing import List, TypedDict
+from langgraph.graph import END, START, StateGraph
+
+from adas_core.llm_wrapper import LargeLanguageModel
 
 
 class AgentState(TypedDict):
-    messages: List[AnyMessage]
+    messages: list[AnyMessage]
     problem: str
     solution: str
     code_execution_error: bool
@@ -37,7 +39,7 @@ def python_interpreter(code: str) -> str:
         return str(result)
 
     except Exception as e:
-        return f"Execution Error: {str(e)}"
+        return f"Execution Error: {e!s}"
 
 
 def agent_node(state):
@@ -52,7 +54,7 @@ def agent_node(state):
     """
 
     system_message = SystemMessage(content=system_prompt)
-    messages: List[AnyMessage] = state.get("messages", [])
+    messages: list[AnyMessage] = state.get("messages", [])
 
     if len(messages) == 0:
         messages.append(HumanMessage(content=state["problem"]))
@@ -82,7 +84,7 @@ def tool_node(state):
     }
 
 
-def execution_router(state):
+def execution_condition(state):
     if state.get("code_execution_error", False):
         if len([msg for msg in state["messages"] if isinstance(msg, AIMessage)]) <= 2:
             return "AgentNode"
@@ -97,6 +99,6 @@ graph.add_node("ToolNode", tool_node)
 
 graph.add_edge(START, "AgentNode")
 graph.add_edge("AgentNode", "ToolNode")
-graph.add_conditional_edges("ToolNode", execution_router)
+graph.add_conditional_edges("ToolNode", execution_condition)
 
 workflow = graph.compile()

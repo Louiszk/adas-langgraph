@@ -5,9 +5,11 @@ Tests verify behavior invariants rather than implementation details.
 
 import ast
 import textwrap
-from langgraph.graph import START, END
+
+from langgraph.graph import END, START
+
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from tests.conftest import add_node_to_system, add_tool_to_system
+from tests.conftest import add_conditional_edge_to_system, add_node_to_system, add_tool_to_system
 
 
 class TestVirtualAgenticSystemInitialization:
@@ -94,6 +96,13 @@ class TestComponentLifecycleAndCascadeDeletion:
         empty_system.create_edge(START, "researcher_node")
         empty_system.create_edge("researcher_node", "writer_node")
         empty_system.create_edge("writer_node", END)
+        condition_code = "def choose_next(state: dict) -> str:\n    return 'retry'"
+        add_conditional_edge_to_system(
+            empty_system,
+            "writer_node",
+            condition_code,
+            {"retry": "researcher_node", "finish": END},
+        )
 
         assert len(empty_system.edges) == 3
 
@@ -103,6 +112,10 @@ class TestComponentLifecycleAndCascadeDeletion:
         for src, tgt in empty_system.edges:
             assert src != "researcher_node"
             assert tgt != "researcher_node"
+        assert "writer_node" not in empty_system.conditional_edges
+
+        empty_system.delete_node("writer_node")
+        assert empty_system.conditional_edges == {}
 
     def test_create_and_delete_tool(self, empty_system: VirtualAgenticSystem, sample_tool_calculator: str):
         """Creating a tool must register it by function name; deleting must remove it."""
@@ -125,3 +138,38 @@ class TestUtilityCodeManagement:
         """)
         empty_system.upsert_utility_code(helper_code)
         assert "parse_json_helper" in empty_system.utility_code
+
+    def test_delete_utility_definitions_distinguishes_definition_kind(self, empty_system: VirtualAgenticSystem):
+        """Typed utility deletion removes only the requested same-named top-level definition."""
+        utility_code = (
+            "shared_name = 'constant'\n\n"
+            "def shared_name(value: str) -> str:\n"
+            "    return value\n\n"
+            "class shared_name:\n"
+            "    pass\n"
+        )
+        assert empty_system.upsert_utility_code(utility_code) == "Utilities updated successfully."
+
+        deleted_assignment = empty_system.delete_utility_definitions([{"name": "shared_name", "kind": "assignment"}])
+        assert "assignment:shared_name" in deleted_assignment
+        assert "shared_name = 'constant'" not in empty_system.utility_code
+        assert "def shared_name" in empty_system.utility_code
+        assert "class shared_name" in empty_system.utility_code
+
+        deleted_function = empty_system.delete_utility_definitions([{"name": "shared_name", "kind": "function"}])
+        assert "function:shared_name" in deleted_function
+        assert "def shared_name" not in empty_system.utility_code
+        assert "class shared_name" in empty_system.utility_code
+
+        deleted_class = empty_system.delete_utility_definitions([{"name": "shared_name", "kind": "class"}])
+        assert "class:shared_name" in deleted_class
+        assert not empty_system.utility_code
+
+    def test_delete_utility_definition_removes_annotated_assignment(self, empty_system: VirtualAgenticSystem):
+        """Annotated top-level assignments use the same assignment deletion kind."""
+        assert empty_system.upsert_utility_code("MAX_RETRIES: int = 3") == "Utilities updated successfully."
+
+        result = empty_system.delete_utility_definitions([{"name": "MAX_RETRIES", "kind": "assignment"}])
+
+        assert "assignment:MAX_RETRIES" in result
+        assert not empty_system.utility_code

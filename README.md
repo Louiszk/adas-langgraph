@@ -11,15 +11,17 @@ Manual engineering of complex, multi-agent workflows is time-intensive and limit
 
 ## Key Features & Findings
 
-* **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent makes targeted updates to individual nodes, tools, and edges, making the design process highly scalable for complex systems.
-* **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends or infinite loops), and improves target system accuracy.
+* **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent uses `manage_node`, `manage_tool`, `manage_conditional_edge`, `manage_edge`, and `manage_utilities` to make targeted changes to a virtual system.
+* **Explicit Lifecycle and Routing:** Nodes, tools, conditional edges, and utilities use `create`, `update`, and `delete` actions. Conditional edges require an explicit `path_map` from each condition-function return value to a destination node or `END`.
+* **Safe Graph and Utility Changes:** Deleting a node also removes standard edges connected to it and conditional edges that route to it. Utility deletion identifies the exact top-level `function`, `class`, or `assignment`, so same-named definitions can be removed unambiguously.
+* **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends, invalid path-map destinations, or infinite loops), and improves target system accuracy.
 
 * **Example Design Session Trace:** View a complete, step-by-step design log of an automatic Data Analyst agent in [assets/example_trace.md](assets/example_trace.md).
 
 ## Repository Structure
 
 * `adas_core/`: The core logic, including the `VirtualAgenticSystem` representation, AST-based materialization, and custom LLM wrappers.
-* `meta_systems/`: The implementation of the meta-agent, its tools (e.g., `UpsertComponent`, `TestSystem`), and evaluation prompts.
+* `meta_systems/`: The implementation of the meta-agent, its management tools (`ManageNode`, `ManageTool`, `ManageConditionalEdge`, `ManageEdge`, `ManageUtilities`), and evaluation prompts.
 * `generated_systems/`: The output directory where the meta-system saves the successfully built and compiled LangGraph target systems.
 * `benchmark/`: Parallelized benchmarking suites (FEVER, GSM-Hard, MMLU-Pro) to evaluate target system accuracy and resource consumption.
 * `sandbox/`: Docker/Podman integration using `llm-sandbox` to safely execute and evaluate generated code in isolated environments.
@@ -49,7 +51,7 @@ python -m venv adasvenv
 # Activate on Linux/Mac
 source adasvenv/bin/activate
 # OR on Windows
-# .\adasvenv\bin\Activate.ps1
+# .\adasvenv\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -r requirements.txt

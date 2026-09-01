@@ -1,26 +1,21 @@
-import io
 import inspect
-import tokenize
+import io
+import re
 import textwrap
-from langgraph.graph import START, END
+import tokenize
+from collections.abc import Callable, Iterable
 from typing import (
-    List,
-    Callable,
-    Dict,
-    Optional,
-    Tuple,
     Any,
-    Union,
-    Iterable,
     get_origin,
 )
-from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
-import re
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.graph import END, START
 
 
 def extract_parenthesized_content(
-    lines: List[str], start_line_idx: int, start_pos: Optional[int] = None
-) -> Tuple[Optional[str], Optional[int]]:
+    lines: list[str], start_line_idx: int, start_pos: int | None = None
+) -> tuple[str | None, int | None]:
     """
     Extracts content inside matching parentheses using a robust, fully token-based approach.
     This version correctly handles malformed/invalid source code by catching TokenError.
@@ -69,7 +64,7 @@ def extract_parenthesized_content(
     return None, None
 
 
-def find_code_blocks(markdown: str) -> List[Dict[str, Union[str, int]]]:
+def find_code_blocks(markdown: str) -> list[dict[str, str | int]]:
     """
     Finds Python code blocks in markdown, using the built-in `tokenize` module
     to correctly handle Python's own syntax.
@@ -78,7 +73,7 @@ def find_code_blocks(markdown: str) -> List[Dict[str, Union[str, int]]]:
     found_blocks = []
 
     in_code_block = False
-    current_block_content: List[str] = []
+    current_block_content: list[str] = []
     current_block_start_line = None
 
     for i, line in enumerate(lines):
@@ -114,7 +109,7 @@ def find_code_blocks(markdown: str) -> List[Dict[str, Union[str, int]]]:
     return found_blocks
 
 
-def parse_arguments(args_str: Optional[str]) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+def parse_arguments(args_str: str | None) -> tuple[tuple[Any, ...], dict[str, Any]]:
     pos_args, kw_args = (), {}
 
     if args_str:
@@ -152,7 +147,7 @@ def parse_arguments(args_str: Optional[str]) -> Tuple[Tuple[Any, ...], Dict[str,
     return pos_args, kw_args
 
 
-def parse_decorator_tool_calls(block_content: str, code_related_tools: Dict[str, str]) -> List[Dict[str, Any]]:
+def parse_decorator_tool_calls(block_content: str, code_related_tools: dict[str, str]) -> list[dict[str, Any]]:
     """Parse all decorator-style tool calls from a single markdown block."""
     tool_calls = []
     lines = block_content.split("\n")
@@ -207,11 +202,11 @@ def parse_decorator_tool_calls(block_content: str, code_related_tools: Dict[str,
 
 
 def execute_decorator_tool_calls(
-    response_content: Union[str, List[str]],
-    available_tools: Dict[str, Any],
-    code_related_tools: Dict[str, str],
+    response_content: str | list[str],
+    available_tools: dict[str, Any],
+    code_related_tools: dict[str, str],
     state: Any,
-) -> Tuple[Optional[HumanMessage], List[Tuple[str, Any]]]:
+) -> tuple[HumanMessage | None, list[tuple[str, Any]]]:
     """Execute decorator-style tool calls found in the text"""
     tool_messages = []
     tool_results = []
@@ -241,7 +236,7 @@ def execute_decorator_tool_calls(
             parsed_calls = parse_decorator_tool_calls(str(code_block), code_related_tools)
             all_decorator_calls.extend(parsed_calls)
         except Exception as e:
-            parsing_error_message = f"Error parsing code block {i}: {repr(e)}"
+            parsing_error_message = f"Error parsing code block {i}: {e!r}"
             break
 
     for idx, tool_call in enumerate(all_decorator_calls):
@@ -273,7 +268,7 @@ def execute_decorator_tool_calls(
                     break
 
             except Exception as e:
-                error_message = f"Error executing decorator `@@{decorator_name}`: {repr(e)}"
+                error_message = f"Error executing decorator `@@{decorator_name}`: {e!r}"
                 tool_messages.append(error_message)
                 tool_results.append((tool_name, error_message))
 
@@ -291,7 +286,7 @@ def execute_decorator_tool_calls(
     return human_message, tool_results
 
 
-def build_decorator_signatures(tools: Iterable[Callable[..., Any]], code_related_tools: Dict[str, str]) -> str:
+def build_decorator_signatures(tools: Iterable[Callable[..., Any]], code_related_tools: dict[str, str]) -> str:
     """
     Builds a formatted string of decorator signatures and docstrings for the meta-agent's prompt.
     - Omits specified code-related parameters from the signature.
@@ -329,7 +324,7 @@ def build_decorator_signatures(tools: Iterable[Callable[..., Any]], code_related
 
             # Add default value if it exists
             if param.default != inspect.Parameter.empty:
-                param_str += f" = {repr(param.default)}"
+                param_str += f" = {param.default!r}"
 
             param_strings.append(param_str)
 

@@ -1,9 +1,10 @@
-import os
 import argparse
 import importlib
+import os
+
+from adas_core.logging_config import get_logger, setup_logging
 from config import settings, task
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
-from adas_core.logging_config import setup_logging, get_logger
 
 logger = get_logger("run_design")
 
@@ -101,7 +102,7 @@ def main():
     try:
         module_path = f"meta_systems.{args.meta_system}.build"
         build_module = importlib.import_module(module_path)
-        create_meta_system_func = getattr(build_module, "create_meta_system")
+        create_meta_system_func = build_module.create_meta_system
 
     except (ImportError, AttributeError) as e:
         logger.error(f"Could not load the build script for the meta-system '{args.meta_system}'. Details: {e}")

@@ -4,14 +4,16 @@ Verifies that generated Python code is syntactically valid and contains complete
 """
 
 import ast
+import os
 import tempfile
 import textwrap
-import os
+
 import pytest
-from langgraph.graph import START, END
+from langgraph.graph import END, START
+
+from adas_core.materialize import get_function_name, materialize_system
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from adas_core.materialize import materialize_system, get_function_name
-from tests.conftest import add_node_to_system, add_tool_to_system, add_conditional_edge_to_system
+from tests.conftest import add_conditional_edge_to_system, add_node_to_system, add_tool_to_system
 
 
 class TestGetFunctionNameSpecification:
@@ -84,18 +86,19 @@ class TestMaterializeSystemSpecification:
 
     def test_materialize_conditional_edges_routing(self):
         """
-        Contract verification: Conditional edges must emit add_conditional_edges with correct router symbol and path map.
+        Contract verification: Conditional edges must emit add_conditional_edges with the condition function and path map.
         """
         system = VirtualAgenticSystem("ConditionalSystem")
         add_node_to_system(system, "node_a", "def node_a(state): return state", "Node A")
         add_node_to_system(system, "node_b", "def node_b(state): return state", "Node B")
         system.create_edge(START, "node_a")
+        system.create_edge("node_b", END)
 
-        router_code = textwrap.dedent("""
+        condition_code = textwrap.dedent("""
             def route_decision(state: dict) -> str:
-                return 'node_b'
+                return 'to_node_b'
         """)
-        add_conditional_edge_to_system(system, "node_a", router_code, {"b": "node_b", "end": END})
+        add_conditional_edge_to_system(system, "node_a", condition_code, {"to_node_b": "node_b", "finish": END})
 
         code_content = materialize_system(system, output_dir=None)
 
@@ -103,3 +106,9 @@ class TestMaterializeSystemSpecification:
         assert "agentic_system_graph.add_conditional_edges" in code_content
         assert '"node_a"' in code_content
         assert "route_decision" in code_content
+        assert "{'to_node_b': 'node_b', 'finish': END}" in code_content
+
+        namespace = {}
+        exec(code_content, namespace)
+        result = namespace["workflow"].invoke({"messages": []})
+        assert result is not None

@@ -1,14 +1,15 @@
 import os
 import threading
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Any
+
 from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
-from langchain_core.tools import BaseTool
-from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
-from config import settings
 
 from adas_core.logging_config import get_logger
+from config import settings
 
 logger = get_logger("llm_wrapper")
 load_dotenv()
@@ -16,8 +17,8 @@ _metrics_lock = threading.Lock()
 
 
 def execute_tool_calls(
-    response: AIMessage, available_tools: Dict[str, BaseTool]
-) -> Tuple[List[ToolMessage], Dict[str, Any]]:
+    response: AIMessage, available_tools: dict[str, BaseTool]
+) -> tuple[list[ToolMessage], dict[str, Any]]:
     """Execute available tool calls from the response."""
     tool_messages = []
     tool_results = {}
@@ -70,7 +71,7 @@ def execute_tool_calls(
                 tool_messages.append(ToolMessage(content=content, tool_call_id=tool_id, name=tool_name))
                 tool_results[tool_name] = result
             except Exception as e:
-                error_message = f"Error executing tool {tool_name}: {repr(e)}"
+                error_message = f"Error executing tool {tool_name}: {e!r}"
                 tool_messages.append(ToolMessage(content=error_message, tool_call_id=tool_id, name=tool_name))
                 tool_results[tool_name] = error_message
         else:
@@ -88,9 +89,9 @@ def execute_tool_calls(
 def get_model(
     wrapper: str,
     model_name: str,
-    temperature: Optional[float],
+    temperature: float | None,
     is_meta: bool,
-    reasoning_effort: Optional[str] = None,
+    reasoning_effort: str | None = None,
 ) -> Any:
     """Return an initialized LLM wrapper for the requested provider/model."""
     api_keys = {"openai": "OPENAI_API_KEY"}
@@ -132,7 +133,7 @@ def get_model(
 
         raise ValueError(f"Unsupported wrapper: {wrapper}")
     except Exception as e:
-        raise RuntimeError(f"Failed to initialize {wrapper} model: {str(e)}") from e
+        raise RuntimeError(f"Failed to initialize {wrapper} model: {e!s}") from e
 
 
 class LargeLanguageModel:
@@ -159,12 +160,12 @@ class LargeLanguageModel:
 
     def __init__(
         self,
-        temperature: Optional[float] = None,
+        temperature: float | None = None,
         wrapper: str = "openai",
         model_name: str = "gpt-5.6-luna",
-        name: Optional[str] = None,
+        name: str | None = None,
         is_meta: bool = False,
-        reasoning_effort: Optional[str] = "none",
+        reasoning_effort: str | None = "none",
     ) -> None:
         self.name = name if name else model_name
         self.model_name = model_name
@@ -181,7 +182,7 @@ class LargeLanguageModel:
 
     def bind_tools(
         self,
-        tool_objects: List[Any],
+        tool_objects: list[Any],
         function_call_type: str = "normal",
         parallel_tool_calls: bool = True,
     ) -> "LargeLanguageModel":
@@ -203,7 +204,7 @@ class LargeLanguageModel:
 
     def invoke(
         self,
-        messages_input: List[Any],
+        messages_input: list[Any],
         count_metrics: bool = True,
         is_meta: bool = False,
     ) -> Any:
@@ -228,7 +229,7 @@ class LargeLanguageModel:
 
         messages_input = converted_messages
 
-        def _get_call_id(call: Any) -> Optional[Any]:
+        def _get_call_id(call: Any) -> Any | None:
             if isinstance(call, dict):
                 return call.get("id")
             return getattr(call, "id", None)
@@ -246,7 +247,7 @@ class LargeLanguageModel:
 
             if isinstance(msg, ToolMessage):
                 if hasattr(msg, "tool_call_id"):
-                    if getattr(msg, "tool_call_id"):
+                    if msg.tool_call_id:
                         tool_message_ids.add(msg.tool_call_id)
                 else:
                     raise ValueError(
@@ -261,9 +262,7 @@ class LargeLanguageModel:
 
         # Filter out orphaned ToolMessages from trimming
         messages_input = [
-            msg
-            for msg in messages_input
-            if not isinstance(msg, ToolMessage) or getattr(msg, "tool_call_id") in ai_tool_call_ids
+            msg for msg in messages_input if not isinstance(msg, ToolMessage) or msg.tool_call_id in ai_tool_call_ids
         ]
 
         # Filter out empty messages to avoid client errors
@@ -281,7 +280,7 @@ class LargeLanguageModel:
         try:
             response = self.model.invoke(messages)
         except Exception as e:
-            raise RuntimeError(f"Model invocation failed: {repr(e)}") from e
+            raise RuntimeError(f"Model invocation failed: {e!r}") from e
 
         if count_metrics:
             usage_type = "meta_usage" if (is_meta or getattr(self, "is_meta", False)) else "target_usage"

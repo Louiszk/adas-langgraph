@@ -1,7 +1,8 @@
-import os
-import json
 import concurrent.futures
-from typing import Dict, Callable, Optional
+import json
+import os
+from collections.abc import Callable
+
 from adas_core.logging_config import get_logger
 
 logger = get_logger("benchmark_base")
@@ -11,12 +12,12 @@ def run_benchmark_parallel(
     benchmark_name: str,
     dataset_path: str,
     system_path: str,
-    execute_problem_fn: Callable[[Dict, str], Dict],
+    execute_problem_fn: Callable[[dict, str], dict],
     max_workers: int,
-    custom_results_init: Optional[Callable[[Dict], None]] = None,
-    custom_results_update: Optional[Callable[[Dict, Dict], None]] = None,
-    custom_results_finalize: Optional[Callable[[Dict], None]] = None,
-    custom_print_summary: Optional[Callable[[Dict], None]] = None,
+    custom_results_init: Callable[[dict], None] | None = None,
+    custom_results_update: Callable[[dict, dict], None] | None = None,
+    custom_results_finalize: Callable[[dict], None] | None = None,
+    custom_print_summary: Callable[[dict], None] | None = None,
 ):
     """
     Base function to run a benchmark in parallel with metric aggregation.
@@ -36,7 +37,7 @@ def run_benchmark_parallel(
 
         logger.info(f"Loaded static dataset with {len(dataset)} problems")
     except Exception as e:
-        logger.error(f"Error loading dataset: {str(e)}")
+        logger.error(f"Error loading dataset: {e!s}")
         return
 
     results = {

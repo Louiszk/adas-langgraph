@@ -1,12 +1,14 @@
-from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import HumanMessage, SystemMessage
-from adas_core.llm_wrapper import LargeLanguageModel
-from typing import List, Any, TypedDict
 import re
+from typing import Any, TypedDict
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+
+from adas_core.llm_wrapper import LargeLanguageModel
 
 
 class AgentState(TypedDict):
-    messages: List[Any]
+    messages: list[Any]
     problem: str
     solution: str
 

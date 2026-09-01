@@ -1,23 +1,25 @@
-from langgraph.graph import StateGraph, START, END
+from typing import TypedDict
+
+import wikipedia  # type: ignore
 from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
-    AIMessage,
-    AnyMessage,
 )
-from typing import List, TypedDict, Optional
-from adas_core.llm_wrapper import LargeLanguageModel
 from langchain_core.tools import tool
-import wikipedia  # type: ignore
+from langgraph.graph import END, START, StateGraph
+
+from adas_core.llm_wrapper import LargeLanguageModel
 
 
 class AgentState(TypedDict):
-    messages: List[AnyMessage]
+    messages: list[AnyMessage]
     claim: str
     prediction: str
-    available_pages: Optional[str]
-    evidence: Optional[str]
+    available_pages: str | None
+    evidence: str | None
 
 
 @tool
@@ -33,7 +35,7 @@ def wiki_search_tool(query: str) -> str:
         quotes_results = [f'"{result}"' for result in results]
         return f"Found the following pages: {', '.join(quotes_results)}"
     except Exception as e:
-        return f"Search Error: {str(e)}"
+        return f"Search Error: {e!s}"
 
 
 @tool
@@ -55,7 +57,7 @@ def wiki_content_tool(page_title: str) -> str:
         except Exception:
             return error_message + " Please check the spelling from the search results."
     except Exception as e:
-        return f"Error fetching content: {str(e)}"
+        return f"Error fetching content: {e!s}"
 
 
 def agent_node(state):
@@ -159,7 +161,7 @@ def tool_node(state):
     }
 
 
-def router(state):
+def select_next_node(state):
     messages = state["messages"]
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
     last_message = messages[-1]
@@ -180,7 +182,7 @@ graph.add_node("AgentNode", agent_node)
 graph.add_node("ToolNode", tool_node)
 
 graph.add_edge(START, "AgentNode")
-graph.add_conditional_edges("AgentNode", router)
+graph.add_conditional_edges("AgentNode", select_next_node)
 graph.add_edge("ToolNode", "AgentNode")
 
 workflow = graph.compile()

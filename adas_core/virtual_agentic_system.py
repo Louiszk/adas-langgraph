@@ -1,11 +1,13 @@
-import re
 import ast
-import textwrap
 import collections
 import inspect
-from typing import TypedDict, Tuple, Dict, List, Any, Callable, Optional
-from langgraph.graph import START, END
-from adas_core.helpers import validate_node_router_signature
+import textwrap
+from collections.abc import Callable
+from typing import Any, TypedDict
+
+from langgraph.graph import END, START
+
+from adas_core.helpers import validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
 
@@ -23,6 +25,21 @@ def _extract_top_level_names(ast_module: ast.Module) -> set[str]:
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
     return names
+
+
+def _get_top_level_definitions(ast_module: ast.Module) -> set[tuple[str, str]]:
+    """Return typed identifiers for deletable utility definitions."""
+    definitions = set()
+    for node in ast_module.body:
+        if isinstance(node, ast.FunctionDef):
+            definitions.add(("function", node.name))
+        elif isinstance(node, ast.ClassDef):
+            definitions.add(("class", node.name))
+        elif isinstance(node, ast.Assign):
+            definitions.update(("assignment", target.id) for target in node.targets if isinstance(target, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            definitions.add(("assignment", node.target.id))
+    return definitions
 
 
 class RemoveDefinitionsTransformer(ast.NodeTransformer):
@@ -50,6 +67,36 @@ class RemoveDefinitionsTransformer(ast.NodeTransformer):
         if isinstance(node.target, ast.Name) and node.target.id in self.names_to_remove:
             return None
         return self.generic_visit(node)
+
+
+class RemoveTypedUtilityDefinitionsTransformer(ast.NodeTransformer):
+    """Remove only top-level utility definitions matching an explicit kind and name."""
+
+    def __init__(self, definitions_to_remove: set[tuple[str, str]]):
+        self.definitions_to_remove = definitions_to_remove
+        super().__init__()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
+        return None if ("function", node.name) in self.definitions_to_remove else node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | None:
+        return None if ("class", node.name) in self.definitions_to_remove else node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        remaining_targets = [
+            target
+            for target in node.targets
+            if not (isinstance(target, ast.Name) and ("assignment", target.id) in self.definitions_to_remove)
+        ]
+        if not remaining_targets:
+            return None
+        node.targets = remaining_targets
+        return node
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | None:
+        if isinstance(node.target, ast.Name) and ("assignment", node.target.id) in self.definitions_to_remove:
+            return None
+        return node
 
 
 class VirtualAgenticSystem:
@@ -85,7 +132,7 @@ class VirtualAgenticSystem:
 
         self.utility_code = ""
 
-    def set_state_attributes(self, attrs: Dict[str, str]) -> bool:
+    def set_state_attributes(self, attrs: dict[str, str]) -> bool:
         self.state_attributes = {"messages": "Annotated[List[AnyMessage], add_messages]"}
         for name, type_annotation in attrs.items():
             self.state_attributes[name] = type_annotation
@@ -112,7 +159,7 @@ class VirtualAgenticSystem:
             full_code_to_exec = "\n".join(combined_code_parts)
             exec(full_code_to_exec, state_exec_globals)
         except Exception as e:
-            return f"ERROR: Validation failed for AgentState definition. {repr(e)}"
+            return f"ERROR: Validation failed for AgentState definition. {e!r}"
 
         self.set_state_attributes(attributes_found)
         return "AgentState defined successfully."
@@ -133,7 +180,7 @@ class VirtualAgenticSystem:
             return None, None
 
     # It currently does not merge separate imports from the same module
-    def deduplicate_imports(self, new_import_statements: List[str]) -> List[str]:
+    def deduplicate_imports(self, new_import_statements: list[str]) -> list[str]:
         # Build existing map for from-imports based ONLY on base_imports
         existing_imports_map = {}
         for imp_str in self.base_imports:
@@ -160,7 +207,7 @@ class VirtualAgenticSystem:
 
         return sorted(set(truly_new_imports))
 
-    def set_imports(self, import_statements: List[str]) -> str:
+    def set_imports(self, import_statements: list[str]) -> str:
         """Validates and sets the import statements for the system."""
         if not import_statements:
             return "WARNING: No import statements were found. No changes were made."
@@ -170,7 +217,7 @@ class VirtualAgenticSystem:
             import_code = "\n".join(new_unique_imports)
             exec(import_code, import_exec_globals)
         except Exception as e:
-            return f"ERROR: Validation failed for import statements. {repr(e)}"
+            return f"ERROR: Validation failed for import statements. {e!r}"
 
         self.imports = self.base_imports + new_unique_imports
         return f"Imports set successfully with {len(import_statements)} statements."
@@ -180,7 +227,7 @@ class VirtualAgenticSystem:
         name: str,
         description: str,
         func: Callable,
-        func_source_code: Optional[str] = None,
+        func_source_code: str | None = None,
     ) -> bool:
         if name in ENDPOINTS:
             raise ValueError("START and END are reserved names for the endpoints of the graph.")
@@ -199,7 +246,7 @@ class VirtualAgenticSystem:
         name: str,
         description: str,
         func: Callable,
-        func_source_code: Optional[str] = None,
+        func_source_code: str | None = None,
     ) -> bool:
         """Create a tool function that can be used by nodes."""
         if func.__doc__ is None or func.__doc__.strip() == "":
@@ -213,23 +260,6 @@ class VirtualAgenticSystem:
 
         self.tools[name] = {"description": description, "source_code": func_source_code}
         return True
-
-    def _infer_path_map(self, function_code: str) -> Dict[str, Any]:
-        """Infer possible return values from conditional edge function using regex."""
-        path_map = {}
-
-        string_literal_pattern = r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\''
-        for match in re.finditer(string_literal_pattern, function_code):
-            potential_target_str = match.group(1) if match.group(1) is not None else match.group(2)
-            if potential_target_str:
-                path_map[potential_target_str] = potential_target_str
-
-        # Check for the END constant
-        end_pattern = r"\bEND\b"
-        if re.search(end_pattern, function_code):
-            path_map["END"] = END
-
-        return path_map
 
     def create_edge(self, source: Any, target: Any) -> bool:
         """Create a standard edge between nodes."""
@@ -249,7 +279,7 @@ class VirtualAgenticSystem:
             raise ValueError(
                 f"Standard edges from a node to itself are not allowed. Cannot create an edge from '{source}' to itself. "
                 f"This would create an unconditional infinite loop, as standard edges lack an exit condition. "
-                f"If you intend for a node to loop back to itself, you must use a conditional edge (a router)."
+                f"If you intend for a node to loop back to itself, you must use a conditional edge."
             )
 
         # Check for existing standard edge from source
@@ -263,12 +293,12 @@ class VirtualAgenticSystem:
         self,
         source: str,
         condition: Callable,
-        condition_code: Optional[str] = None,
-        path_map: Optional[Dict[str, Any]] = None,
+        condition_code: str | None = None,
+        path_map: Any = None,
     ) -> bool:
-        """Create a conditional edge with a router function."""
+        """Create a conditional edge with a condition function and explicit path map."""
         if source in ["END", "__end__", END]:
-            raise ValueError("Invalid source node: Routers from END are not allowed.")
+            raise ValueError("Invalid source node: Conditional edges from END are not allowed.")
         if source not in self.nodes:
             raise ValueError(f"Invalid source node: '{source}' does not exist")
 
@@ -276,18 +306,29 @@ class VirtualAgenticSystem:
         if not condition_code:
             condition_code = textwrap.dedent(inspect.getsource(condition))
 
-        if source in self.conditional_edges and self.conditional_edges[source]["condition_code"] == condition_code:
+        if path_map is None:
+            raise ValueError("Conditional edges require a non-empty explicit path_map.")
+        if not isinstance(path_map, dict):
+            raise TypeError("Conditional edge path_map must be a dictionary.")
+        if not path_map:
+            raise ValueError("Conditional edges require a non-empty explicit path_map.")
+
+        normalized_path_map = {}
+        for route, destination in path_map.items():
+            if not isinstance(route, str):
+                raise ValueError("Conditional edge path_map keys must be condition-function return-value strings.")
+            if not isinstance(destination, str):
+                raise ValueError("Conditional edge path_map destinations must be node names or END.")
+            normalized_path_map[route] = END if destination in {"END", "__end__"} else destination
+
+        if (
+            source in self.conditional_edges
+            and self.conditional_edges[source]["condition_code"] == condition_code
+            and self.conditional_edges[source].get("path_map") == normalized_path_map
+        ):
             return False
 
-        edge_info: Dict[str, Any] = {"condition_code": condition_code}
-
-        # Get path map
-        inferred_path_map = self._infer_path_map(condition_code)
-        final_path_map = path_map if path_map is not None else inferred_path_map
-
-        # Save path map if available
-        if final_path_map:
-            edge_info["path_map"] = final_path_map.copy()
+        edge_info: dict[str, Any] = {"condition_code": condition_code, "path_map": normalized_path_map}
 
         self.conditional_edges[source] = edge_info
         return True
@@ -300,11 +341,12 @@ class VirtualAgenticSystem:
             return False
 
         del self.nodes[name]
-
-        if name in self.conditional_edges:
-            del self.conditional_edges[name]
-
         self.edges = [(s, t) for s, t in self.edges if s != name and t != name]
+        self.conditional_edges = {
+            source: edge_info
+            for source, edge_info in self.conditional_edges.items()
+            if source != name and name not in edge_info.get("path_map", {}).values()
+        }
 
         return True
 
@@ -338,7 +380,7 @@ class VirtualAgenticSystem:
         del self.conditional_edges[source]
         return True
 
-    def get_function(self, function_code: str, component_type: Optional[str]) -> Tuple[Optional[Callable], str]:
+    def get_function(self, function_code: str, component_type: str | None) -> tuple[Callable | None, str]:
         """
         Safely extracts and validates a single function definition from a code string.
         It uses AST parsing to isolate only the function's source code, ignoring other statements.
@@ -364,8 +406,8 @@ class VirtualAgenticSystem:
                 f"ERROR: Invalid Python syntax in the component's code block: {e}",
             )
 
-        if component_type and component_type.lower() in ["node", "router"]:
-            is_valid_signature, sig_error_msg = validate_node_router_signature(isolated_function_code)
+        if component_type and component_type.lower() in ["node", "conditional_edge"]:
+            is_valid_signature, sig_error_msg = validate_node_conditional_edge_signature(isolated_function_code)
             if not is_valid_signature:
                 return (
                     None,
@@ -391,7 +433,7 @@ class VirtualAgenticSystem:
         except Exception as e:
             return (
                 None,
-                f"ERROR: executing function or import code for '{function_name}': {repr(e)}",
+                f"ERROR: executing function or import code for '{function_name}': {e!r}",
             )
 
         if function_name in func_exec_globals:
@@ -487,12 +529,52 @@ class VirtualAgenticSystem:
             full_code_to_exec = "\n".join(combined_code_parts)
             exec(full_code_to_exec, utils_exec_globals)
         except Exception as e:
-            return f"ERROR: Validation failed for Utility Code. {repr(e)}"
+            return f"ERROR: Validation failed for Utility Code. {e!r}"
 
         self.utility_code = final_utility_code
         return "Utilities updated successfully."
 
-    def validate_graph(self) -> List[str]:
+    def delete_utility_definitions(self, definitions: list[dict[str, str]]) -> str:
+        """Delete explicitly typed top-level utility definitions by name."""
+        if not definitions:
+            return "ERROR: Utility deletion requires at least one typed definition."
+        if not self.utility_code.strip():
+            return "WARNING: No utility code exists to delete."
+
+        allowed_kinds = {"function", "class", "assignment"}
+        requested = set()
+        for definition in definitions:
+            name = definition.get("name") if isinstance(definition, dict) else None
+            kind = definition.get("kind") if isinstance(definition, dict) else None
+            if not isinstance(name, str) or not name or kind not in allowed_kinds:
+                return "ERROR: Each utility definition must provide a name and kind: function, class, or assignment."
+            requested.add((kind, name))
+
+        try:
+            existing_ast = ast.parse(textwrap.dedent(self.utility_code))
+            existing_definitions = _get_top_level_definitions(existing_ast)
+            found = requested & existing_definitions
+            missing = requested - existing_definitions
+            if not found:
+                formatted = ", ".join(f"{kind}:{name}" for kind, name in sorted(requested))
+                return f"WARNING: No utility definitions found to delete: {formatted}."
+
+            transformed_ast = RemoveTypedUtilityDefinitionsTransformer(found).visit(existing_ast)
+            if not isinstance(transformed_ast, ast.Module):
+                raise TypeError("Utility AST transformation did not return a module.")
+            ast.fix_missing_locations(transformed_ast)
+            self.utility_code = ast.unparse(transformed_ast).strip()
+
+            message = "Utility definitions deleted successfully: " + ", ".join(
+                f"{kind}:{name}" for kind, name in sorted(found)
+            )
+            if missing:
+                message += ". Not found: " + ", ".join(f"{kind}:{name}" for kind, name in sorted(missing))
+            return message + "."
+        except Exception as e:
+            return f"ERROR: deleting utility definitions: {e!r}"
+
+    def validate_graph(self) -> list[str]:
         """Validate graph structure and return list of errors."""
         errors = []
 
@@ -517,9 +599,13 @@ class VirtualAgenticSystem:
 
             path_map = edge_info.get("path_map", {})
             if not path_map:
-                errors.append(
-                    f"Conditional edge from source '{s}' has no correct return values. Must return str, List[str] or END."
-                )
+                errors.append(f"Conditional edge from source '{s}' has no explicit path_map.")
+                continue
+            for route, target in path_map.items():
+                if target != END and target not in all_defined_nodes:
+                    errors.append(
+                        f"Conditional edge from source '{s}' maps return value '{route}' to undefined node '{target}'."
+                    )
 
         # Check reachability from START
         reachable_nodes = set()

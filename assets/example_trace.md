@@ -1,828 +1,775 @@
-[human]: Design an agentic system that acts as an automatic data analyst.
+2026-09-01 11:23:46,091 [INFO] adas.run_meta: [human]: Design an agentic system that acts as an automatic data analyst.
 
 The system should take all CSV and JSON files from the 'sandbox/workspace/data/input/' folder and a text description of an analysis task provided under the state key 'analysis_task'.
 
 The system should generate code dynamically using pandas and matplotlib to perform the analysis. A final response must be provided under the state key 'final_answer'.  
 The results, including TXT, CSV, and JSON files and any plots, must be saved in the 'sandbox/workspace/data/output/' folder.  
 The system must be robust and remain generalizable to perform any specified data analysis.
-The system design process must be completed in no more than 60 iterations.
-
---- Generating initial validation suite ---
-```python
-import os
-import csv
-import json
-from typing import Any, Dict, Tuple
-
-# -----------------------------------------------------------------------------
-# Required input setup: create a single CSV file at sandbox/workspace/data/input/
-# -----------------------------------------------------------------------------
-INPUT_DIR = os.path.join("sandbox", "workspace", "data", "input")
-OUTPUT_DIR = os.path.join("sandbox", "workspace", "data", "output")
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-TEST_CSV_PATH = os.path.join(INPUT_DIR, "test.csv")
-with open(TEST_CSV_PATH, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(["id", "category", "value", "amount", "score"])
-    writer.writerows(
-        [
-            [1, "A", 10, 100, 1],
-            [2, "B", 15, 200, 2],
-            [3, "A", 5, 300, 3],
-            [4, "C", 20, 400, 4],
-            [5, "B", 25, 500, 5],
-        ]
-    )
-
-# -----------------------------------------------------------------------------
-# Test cases
-# -----------------------------------------------------------------------------
-TARGET_SYSTEM_TEST_CASES = [
-    {
-        "analysis_task": (
-            "Using the CSV file in sandbox/workspace/data/input/, plot the distribution "
-            "of the 'value' column and save the PNG plot as 'distribution_plot.png'; "
-            "also save a short plain-text report as 'distribution_report.txt'."
-        ),
-        "primary_output": "distribution_plot.png",
-        "report_output": "distribution_report.txt",
-        "output_type": "png",
-    },
-    {
-        "analysis_task": (
-            "Filter test.csv to rows where category is A or B, add a 'value_x2' column "
-            "equal to value * 2, and save the transformed data as 'transformed_data.csv'; "
-            "also save a short plain-text report as 'transformation_report.txt'."
-        ),
-        "primary_output": "transformed_data.csv",
-        "report_output": "transformation_report.txt",
-        "output_type": "csv",
-        "expected_header": ["id", "category", "value", "amount", "score", "value_x2"],
-        "expected_rows": [
-            {"id": 1, "category": "A", "value": 10, "amount": 100, "score": 1, "value_x2": 20},
-            {"id": 2, "category": "B", "value": 15, "amount": 200, "score": 2, "value_x2": 30},
-            {"id": 3, "category": "A", "value": 5, "amount": 300, "score": 3, "value_x2": 10},
-            {"id": 5, "category": "B", "value": 25, "amount": 500, "score": 5, "value_x2": 50},
-        ],
-    },
-    {
-        "analysis_task": (
-            "Compute the sums of the numeric columns 'value', 'amount', and 'score' from "
-            "test.csv and save the results as JSON in 'column_sums.json'; also save a "
-            "short plain-text report as 'sums_report.txt'."
-        ),
-        "primary_output": "column_sums.json",
-        "report_output": "sums_report.txt",
-        "output_type": "json",
-        "expected_json": {"value": 75, "amount": 1500, "score": 15},
-    },
-]
-
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def _path(filename: str) -> str:
-    return os.path.join(OUTPUT_DIR, filename)
-
-
-def _is_nonempty_file(path: str) -> bool:
-    return os.path.isfile(path) and os.path.getsize(path) > 0
-
-
-def _is_number_like(value: Any) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return True
-    if isinstance(value, str):
-        try:
-            float(value)
-            return True
-        except ValueError:
-            return False
-    return False
-
-
-def _cell_matches(expected: Any, actual: Any) -> bool:
-    if isinstance(expected, bool):
-        return expected == actual
-    if isinstance(expected, (int, float)):
-        if not _is_number_like(actual):
-            return False
-        try:
-            return abs(float(actual) - float(expected)) <= 1e-9
-        except (TypeError, ValueError):
-            return False
-    return str(actual).strip() == str(expected).strip()
-
-
-def _row_matches(expected_row: Dict[str, Any], actual_row: Dict[str, Any], columns: list[str]) -> bool:
-    for col in columns:
-        if col not in actual_row:
-            return False
-        if not _cell_matches(expected_row[col], actual_row[col]):
-            return False
-    return True
-
-
-# -----------------------------------------------------------------------------
-# Validation function
-# -----------------------------------------------------------------------------
-def validate_target_system_output(input_index: int, final_state: Dict[str, Any]) -> Tuple[bool, str]:
-    if not isinstance(final_state, dict):
-        return False, "final_state must be a dictionary."
-
-    if not (0 <= input_index < len(TARGET_SYSTEM_TEST_CASES)):
-        return False, f"Invalid test case index: {input_index}."
-
-    case = TARGET_SYSTEM_TEST_CASES[input_index]
-
-    final_answer = final_state.get("final_answer")
-    if not isinstance(final_answer, str) or not final_answer.strip():
-        return False, "The final state is missing a non-empty 'final_answer' string."
-
-    report_path = _path(case["report_output"])
-    if not _is_nonempty_file(report_path):
-        return False, f"Expected a non-empty report file at '{report_path}'."
-
-    primary_path = _path(case["primary_output"])
-    if not os.path.isfile(primary_path):
-        return False, f"Expected output file not found: '{primary_path}'."
-
-    output_type = case["output_type"]
-
-    if output_type == "png":
-        with open(primary_path, "rb") as f:
-            header = f.read(8)
-        if header != b"\x89PNG\r\n\x1a\n":
-            return False, f"File '{primary_path}' is not a valid PNG."
-        if os.path.getsize(primary_path) < 100:
-            return False, f"PNG file '{primary_path}' appears to be too small to be a valid plot."
-
-    elif output_type == "csv":
-        expected_header = case["expected_header"]
-        expected_rows = case["expected_rows"]
-
-        with open(primary_path, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            actual_header = reader.fieldnames or []
-            actual_rows = list(reader)
-
-        for col in expected_header:
-            if col not in actual_header:
-                return False, f"CSV '{primary_path}' is missing required column '{col}'."
-
-        if len(actual_rows) != len(expected_rows):
-            return False, (
-                f"CSV '{primary_path}' row count mismatch: expected {len(expected_rows)}, got {len(actual_rows)}."
-            )
-
-        used = [False] * len(actual_rows)
-        for exp_row in expected_rows:
-            found = False
-            for i, act_row in enumerate(actual_rows):
-                if used[i]:
-                    continue
-                if _row_matches(exp_row, act_row, expected_header):
-                    used[i] = True
-                    found = True
-                    break
-            if not found:
-                return False, f"CSV '{primary_path}' does not contain the expected transformed row: {exp_row}."
-
-    elif output_type == "json":
-        expected_json = case["expected_json"]
-
-        with open(primary_path, "r", encoding="utf-8") as f:
-            actual_json = json.load(f)
-
-        if not isinstance(actual_json, dict):
-            return False, f"JSON '{primary_path}' must contain an object/dictionary."
-
-        for key, expected_value in expected_json.items():
-            if key not in actual_json:
-                return False, f"JSON '{primary_path}' is missing required key '{key}'."
-            if not _cell_matches(expected_value, actual_json[key]):
-                return False, (
-                    f"JSON '{primary_path}' has incorrect value for '{key}': "
-                    f"expected {expected_value}, got {actual_json[key]}."
-                )
-    else:
-        return False, f"Unsupported output type: {output_type}"
-
-    return True, (
-        f"Validated case {input_index}: found a non-empty final_answer, the required report file, "
-        f"and the expected {output_type.upper()} output."
-    )
-```
-Validation suite found.
-
-[ai]: [Iteration 0]
+The system design process must be completed in no more than 40 iterations.
+2026-09-01 11:23:46,095 [INFO] adas.compact_system.utilities: --- Generating initial validation suite ---
+2026-09-01 11:24:05,102 [INFO] adas.compact_system.utilities: Validation suite found.
+2026-09-01 11:24:09,860 [INFO] adas.run_meta: [ai]: [Iteration 0]
 
 ## Observation
-- The target system currently has only a minimal scaffold: `messages` state, no nodes, no routers, and no task-specific logic.
-- The analysis agent must ingest all CSV/JSON files from `sandbox/workspace/data/input/`, dynamically generate pandas/matplotlib code, execute it, save outputs to `sandbox/workspace/data/output/`, and produce a final answer in state.
+- The target system currently has no nodes or tools.
+- `AgentState` only contains `messages`; it lacks the required `analysis_task` and `final_answer` fields.
+- The graph is initialized and compiled but has no workflow logic.
+- The system needs file discovery, dynamic analysis-code generation, execution, artifact persistence, and a final response.
 
 ## Reasoning
-- The system needs a complete pipeline: data discovery/loading, data summarization, code generation, code execution, retry-on-failure, and final response synthesis.
-- To stay generalizable, the agent should inspect the available files at runtime and generate task-specific code rather than relying on fixed analysis logic.
-- The first necessary step is ensuring required libraries are available for data handling and plotting.
+- I will first establish the required imports and state schema.
+- The state will include the task description, generated code, execution output, discovered files, and final answer.
+- Pandas and matplotlib are required runtime dependencies for the requested analyst behavior, so they should be installed before implementing execution logic.
 
 ## Actions
-- Install the data/plotting dependencies first, then proceed with imports, state, utilities, and graph components in subsequent steps.
-
 ```python
 @@install_package("pandas")
-```
-
-
-[human]: [Iteration 0][System]:
-
-Successfully installed pandas
-
-
-[ai]: [Iteration 1]
-
-## Observation
-- The target system currently has only the default scaffold with no analysis-specific nodes or tools.
-- The analysis agent must:
-  - ingest all CSV and JSON files from `sandbox/workspace/data/input/`
-  - use the provided `analysis_task`
-  - dynamically generate pandas/matplotlib code
-  - save TXT/CSV/JSON/plot outputs into `sandbox/workspace/data/output/`
-  - return a final response in `final_answer`
-- To proceed robustly, I need the plotting stack available first.
-
-## Reasoning
-- The agent will need pandas plus matplotlib for analysis and plotting.
-- Since the system must be generalizable, the right approach is a code-generation + execution loop:
-  1. inspect input files
-  2. summarize available data
-  3. ask the LLM to generate analysis code
-  4. execute the code
-  5. retry with execution feedback if needed
-  6. produce a final response
-- The first concrete setup action is to install matplotlib.
-
-## Actions
-- Install matplotlib now, then I will define imports, state, utilities, and graph nodes in the next steps.
-
-```python
 @@install_package("matplotlib")
 ```
 
-
-[human]: [Iteration 1][System]:
-
-Successfully installed matplotlib
-
-
-[ai]: [Iteration 2]
-
-## Observation
-- The scaffold currently has no analysis logic, no custom state, and no nodes or routers.
-- The agent will need runtime file discovery, dynamic code generation, safe execution, retries, and output persistence.
-
-## Reasoning
-- The first structural change should be to define all imports needed for pandas/matplotlib analysis, file handling, execution capture, and LangGraph state management.
-- This will enable the later state, utility, and node definitions to be added cleanly and without missing dependencies.
-
-## Actions
-- Set the system imports now so I can define the state and utilities next.
-
 ```python
 @@set_imports()
-from adas_core.llm_wrapper import LargeLanguageModel
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
-from langchain_core.messages import AnyMessage, AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
 import os
 import json
+import glob
 import traceback
-import contextlib
-import io
-import re
-from pathlib import Path
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import subprocess
+from typing import Dict, List, Any, TypedDict, Annotated
+from adas_core.llm_wrapper import LargeLanguageModel
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AnyMessage, trim_messages
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
 ```
-
-
-[human]: [Iteration 2][System]:
-
-Imports set successfully with 15 statements.
-Note: The following structure(s) were ignored as they are not allowed in this block: [A code structure of type 'Expr']
-
-
-[ai]: [Iteration 3]
-
-## Observation
-- The system currently has only the base imports and an empty `AgentState` with `messages`.
-- No analysis pipeline exists yet, so the agent cannot read input files, generate code, execute it, or produce outputs.
-- The next required step is to expand state so the workflow can track the analysis task, generated code, execution attempts, outputs, and final answer.
-
-## Reasoning
-- To support a robust iterative analysis loop, the state must include:
-  - the task description
-  - discovered input files
-  - file summaries
-  - generated code
-  - execution status/error
-  - retry count
-  - output artifacts
-  - the final answer
-- This is foundational and should be defined before creating any nodes or routers.
-
-## Actions
-- Update the state schema now with the extra fields needed by the analysis workflow.
 
 ```python
 @@set_state()
 class AgentState(TypedDict):
     messages: Annotated[List[AnyMessage], add_messages]
     analysis_task: str
-    input_files: List[str]
-    file_summaries: List[Dict[str, Any]]
+    discovered_files: List[str]
     generated_code: str
+    execution_output: str
     execution_error: str
-    execution_stdout: str
-    execution_stderr: str
-    attempt_count: int
-    max_attempts: int
     output_files: List[str]
     final_answer: str
 ```
+2026-09-01 11:24:56,612 [INFO] adas.run_meta: [human]: [Iteration 0][System]:
 
+Successfully installed pandas
 
-[human]: [Iteration 3][System]:
+Successfully installed matplotlib
+
+Imports set successfully with 10 statements.
 
 AgentState defined successfully.
-
-
-[ai]: [Iteration 4]
+2026-09-01 11:25:07,795 [INFO] adas.run_meta: [ai]: [Iteration 1]
 
 ## Observation
-- The system now has the required imports and `AgentState` definition, but still lacks the actual analyst workflow.
-- I need to add reusable utilities first so the nodes can consistently discover input files, summarize datasets, generate execution context, run dynamic code, and capture outputs.
+- The required dependencies, imports, and expanded `AgentState` have been configured successfully.
+- The graph still has zero nodes and is currently compiled without any workflow edges.
+- The next step is to add reusable prompts/helpers and implement the core analyst stages: input discovery, code generation, execution, and final reporting.
 
 ## Reasoning
-- A robust automatic analyst should not depend on hardcoded dataset assumptions.
-- The cleanest structure is:
-  - utilities for file discovery, summarization, code extraction, and safe execution
-  - nodes for discovery, summarization, code generation, execution, and final synthesis
-  - a router that retries code generation if execution fails and attempts remain
-- I’m starting with utilities because they reduce duplicated logic and make later node implementations safer and smaller.
+- Input discovery should be deterministic and limited to CSV/JSON files in the required input directory.
+- The LLM should generate executable Python using pandas and matplotlib, while being explicitly instructed to save all artifacts under the required output directory.
+- Execution should occur in a subprocess with a generated driver context, allowing generated scripts to use stable `INPUT_DIR` and `OUTPUT_DIR` variables.
+- The final-answer node should summarize generated results and errors without requiring another tool call.
+- I will create the utilities and the first two nodes now, then test and add the remaining execution and graph wiring components.
 
 ## Actions
-- Add the shared utilities and prompts now.
-
 ```python
-@@upsert_utilities()
-from pathlib import Path
-import ast
+@@manage_utilities(action="create", definitions=[
+    {"name": "ANALYST_SYSTEM_PROMPT", "kind": "assignment"},
+    {"name": "INPUT_DIR", "kind": "assignment"},
+    {"name": "OUTPUT_DIR", "kind": "assignment"},
+    {"name": "extract_code", "kind": "function"},
+    {"name": "safe_task_text", "kind": "function"}
+])
+ANALYST_SYSTEM_PROMPT = """You are an expert automatic data analyst.
+Generate one complete Python script for the requested analysis.
+Use pandas for data loading/transformation and matplotlib for visualizations when useful.
+The script is executed from an isolated working directory and receives INPUT_DIR and OUTPUT_DIR
+variables. INPUT_DIR contains the discovered CSV and JSON files; OUTPUT_DIR is the only location
+where artifacts may be written.
 
-DATA_INPUT_DIR = Path("sandbox/workspace/data/input")
-DATA_OUTPUT_DIR = Path("sandbox/workspace/data/output")
-MAX_PREVIEW_ROWS = 5
-MAX_FILE_SUMMARY_CHARS = 2500
-
-ANALYSIS_CODE_SYSTEM_PROMPT = """You are an expert Python data analyst.
-Write a single, self-contained Python script that performs the requested analysis using pandas and matplotlib.
 Requirements:
-- Use the provided variables: input_files (list of file paths as strings), input_dir (Path), output_dir (Path)
-- Load all relevant CSV and JSON files from input_files
-- Infer the appropriate analysis from the task and the data
-- Create any required tables, summaries, and plots
-- Save ALL textual outputs to output_dir as .txt, tabular outputs as .csv or .json, and figures as image files (e.g. .png)
-- Use pandas and matplotlib only unless absolutely necessary
-- The script must be robust to mixed JSON structures and missing values
-- The script must not print markdown fences or explanations, only valid Python code
-- The script should define any helpful intermediate variables but does not need to define functions
-- If saving plots, ensure output_dir exists and use plt.savefig(...)
-- Prefer deterministic, readable filenames
+- Read and analyze the available input files, handling CSV and JSON formats appropriately.
+- Infer schemas and choose useful analyses based on the user's task.
+- Save useful tabular results as CSV, structured summaries as JSON, and a concise report as TXT.
+- Save every plot as PNG (never rely on interactive display; use matplotlib's non-interactive Agg backend).
+- Create OUTPUT_DIR if necessary.
+- Use portable relative paths based on INPUT_DIR and OUTPUT_DIR.
+- Do not use network access, shell commands, subprocesses, or arbitrary file deletion.
+- Do not merely describe code: return executable Python source only.
+- Print a concise execution summary at the end.
 """
 
-ANALYSIS_FINAL_SYSTEM_PROMPT = """You are a careful data analysis assistant.
-Your job is to summarize the completed analysis for the user.
-Be concise but informative.
-Include:
-- what was analyzed
-- whether the analysis succeeded
-- key findings
-- names of important output artifacts in the output directory
-If execution failed after retries, explain the failure clearly and mention the latest error.
-"""
+INPUT_DIR = "sandbox/workspace/data/input"
+OUTPUT_DIR = "sandbox/workspace/data/output"
 
-def list_input_data_files(input_dir: Path = DATA_INPUT_DIR) -> List[str]:
-    # Discover all CSV/JSON files deterministically for reproducible analysis.
-    if not input_dir.exists():
-        return []
-    files = []
-    for path in sorted(input_dir.iterdir()):
-        if path.is_file() and path.suffix.lower() in {".csv", ".json"}:
-            files.append(str(path))
-    return files
+def extract_code(text: str) -> str:
+    """Extract Python from an optional markdown fence while preserving plain scripts."""
+    value = (text or "").strip()
+    if "```" in value:
+        parts = value.split("```")
+        fenced = [part for part in parts if "import " in part or "def " in part or "import\n" in part]
+        if fenced:
+            value = fenced[0]
+            if value.lstrip().startswith("python"):
+                value = value.lstrip()[6:]
+    return value.strip()
 
-def _safe_json_load(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-def summarize_csv_file(path: Path) -> Dict[str, Any]:
-    # Compact summary to guide code generation without overloading context.
-    df = pd.read_csv(path)
-    summary = {
-        "file": str(path),
-        "type": "csv",
-        "shape": [int(df.shape[0]), int(df.shape[1])],
-        "columns": list(df.columns.astype(str)),
-        "dtypes": {str(k): str(v) for k, v in df.dtypes.items()},
-        "missing_values": {str(k): int(v) for k, v in df.isna().sum().items()},
-        "preview": df.head(MAX_PREVIEW_ROWS).to_dict(orient="records"),
-    }
-    if not df.empty:
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        if numeric_cols:
-            summary["numeric_describe"] = df[numeric_cols].describe().round(4).to_dict()
-    return summary
-
-def summarize_json_file(path: Path) -> Dict[str, Any]:
-    # Handle both object and array JSON structures gracefully.
-    raw = _safe_json_load(path)
-    summary: Dict[str, Any] = {
-        "file": str(path),
-        "type": "json",
-        "json_kind": type(raw).__name__,
-    }
-
-    if isinstance(raw, list):
-        summary["length"] = len(raw)
-        if raw and all(isinstance(item, dict) for item in raw):
-            df = pd.DataFrame(raw)
-            summary.update(
-                {
-                    "shape": [int(df.shape[0]), int(df.shape[1])],
-                    "columns": list(df.columns.astype(str)),
-                    "dtypes": {str(k): str(v) for k, v in df.dtypes.items()},
-                    "missing_values": {str(k): int(v) for k, v in df.isna().sum().items()},
-                    "preview": df.head(MAX_PREVIEW_ROWS).to_dict(orient="records"),
-                }
-            )
-        else:
-            summary["preview"] = raw[:MAX_PREVIEW_ROWS]
-    elif isinstance(raw, dict):
-        summary["keys"] = list(raw.keys())
-        summary["preview"] = {k: raw[k] for k in list(raw.keys())[:MAX_PREVIEW_ROWS]}
-    else:
-        summary["preview"] = raw
-
-    return summary
-
-def summarize_input_files(file_paths: List[str]) -> List[Dict[str, Any]]:
-    summaries: List[Dict[str, Any]] = []
-    for file_path in file_paths:
-        path = Path(file_path)
-        try:
-            if path.suffix.lower() == ".csv":
-                summaries.append(summarize_csv_file(path))
-            elif path.suffix.lower() == ".json":
-                summaries.append(summarize_json_file(path))
-        except Exception as e:
-            summaries.append(
-                {
-                    "file": str(path),
-                    "type": path.suffix.lower().lstrip("."),
-                    "error": f"{type(e).__name__}: {e}",
-                }
-            )
-    return summaries
-
-def build_analysis_context(task: str, summaries: List[Dict[str, Any]]) -> str:
-    # Provide the LLM with a concise but information-rich view of the dataset.
-    payload = {
-        "analysis_task": task,
-        "available_files": summaries,
-        "output_directory": str(DATA_OUTPUT_DIR),
-    }
-    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
-
-def extract_python_code(text: str) -> str:
-    # Prefer fenced code if present; otherwise use the raw response.
-    if not text:
-        return ""
-    fenced = re.findall(r"```(?:python)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        return fenced[0].strip()
-    return text.strip()
-
-def _safe_write_text(path: Path, content: str) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return str(path)
-
-def _safe_write_json(path: Path, obj: Any) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False, default=str)
-    return str(path)
-
-def _safe_write_csv(path: Path, df: pd.DataFrame) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
-    return str(path)
-
-def execute_generated_code(code: str, input_files: List[str], input_dir: Path = DATA_INPUT_DIR, output_dir: Path = DATA_OUTPUT_DIR) -> Tuple[str, str, Optional[Exception]]:
-    # Execute generated code in a constrained but practical analysis environment.
-    output_dir.mkdir(parents=True, exist_ok=True)
-    env: Dict[str, Any] = {
-        "__name__": "__main__",
-        "pd": pd,
-        "plt": plt,
-        "json": json,
-        "os": os,
-        "Path": Path,
-        "input_files": input_files,
-        "input_dir": input_dir,
-        "output_dir": output_dir,
-        "write_text": _safe_write_text,
-        "write_json": _safe_write_json,
-        "write_csv": _safe_write_csv,
-    }
-
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    error: Optional[Exception] = None
-
-    try:
-        compiled = compile(code, "<generated_analysis_code>", "exec")
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-            exec(compiled, env, env)
-    except Exception as e:
-        error = e
-        stderr_buffer.write("\n" + traceback.format_exc())
-
-    return stdout_buffer.getvalue(), stderr_buffer.getvalue(), error
-
-def list_output_files(output_dir: Path = DATA_OUTPUT_DIR) -> List[str]:
-    if not output_dir.exists():
-        return []
-    return [str(path) for path in sorted(output_dir.iterdir()) if path.is_file()]
+def safe_task_text(task: str) -> str:
+    """Bound prompt size while retaining the user's complete practical request."""
+    return (task or "").strip()[:12000]
 ```
 
-
-[human]: [Iteration 4][System]:
-
-Utilities updated successfully.
-
-
-[ai]: [Iteration 5]
-
-## Observation
-- The system now has the foundational imports, state, and shared utilities.
-- However, the graph still has no analysis nodes, no routing logic, and therefore no operational workflow.
-- The existing compile call is present, so the next step is to insert the actual agentic pipeline components that will populate and use the graph.
-
-## Reasoning
-- A robust automatic data analyst should follow a clear loop:
-  1. discover CSV/JSON inputs
-  2. summarize them for context
-  3. ask the LLM to generate pandas/matplotlib code
-  4. execute the code
-  5. retry if execution fails
-  6. synthesize a final user-facing answer
-- To keep the workflow generalizable, the code generator should receive a compact but informative file summary rather than raw files only.
-- I will add a small helper utility first to centralize prompt construction, then define the nodes and router, and finally wire the edges.
-
-## Actions
-- Add shared prompt-building utilities and then the analysis graph nodes/router/edges.
-
 ```python
-@@upsert_utilities()
-def build_code_generation_messages(task: str, summaries: List[Dict[str, Any]], prior_error: str = "") -> List[AnyMessage]:
-    # Keep the code-generation prompt structured so the LLM can reliably infer a full analysis script.
-    context = build_analysis_context(task, summaries)
-    system_message = SystemMessage(content=ANALYSIS_CODE_SYSTEM_PROMPT)
-
-    user_content = (
-        "Generate Python code for the analysis task.\n\n"
-        f"{context}\n\n"
-        "Additional instructions:\n"
-        "- Read all relevant input files from input_files.\n"
-        "- Save outputs into output_dir.\n"
-        "- If a previous execution error exists, fix the issue and return a corrected full script.\n"
-    )
-    if prior_error:
-        user_content += f"\nPrevious execution error:\n{prior_error}\n"
-
-    return [system_message, HumanMessage(content=user_content)]
-
-def build_final_messages(state: Dict[str, Any]) -> List[AnyMessage]:
-    # Final response should report concrete artifacts and execution status, not raw internal traces.
-    task = state.get("analysis_task", "")
-    file_summaries = state.get("file_summaries", [])
-    output_files = state.get("output_files", [])
-    execution_error = state.get("execution_error", "")
-    execution_stdout = state.get("execution_stdout", "")
-    execution_stderr = state.get("execution_stderr", "")
-
-    summary_payload = {
-        "analysis_task": task,
-        "input_files": file_summaries,
-        "output_files": output_files,
-        "execution_error": execution_error,
-        "execution_stdout": execution_stdout[-1500:],
-        "execution_stderr": execution_stderr[-1500:],
-    }
-
-    return [
-        SystemMessage(content=ANALYSIS_FINAL_SYSTEM_PROMPT),
-        HumanMessage(content=json.dumps(summary_payload, indent=2, ensure_ascii=False, default=str)),
+@@manage_node(action="create", name="DiscoverInputs", description="Discover all supported CSV and JSON files and prepare the output directory.")
+def discover_inputs_node(state: AgentState) -> dict:
+    # Deterministic discovery keeps the analyst independent of LLM guesses about filenames.
+    input_dir = INPUT_DIR
+    output_dir = OUTPUT_DIR
+    os.makedirs(output_dir, exist_ok=True)
+    patterns = [
+        os.path.join(input_dir, "*.csv"),
+        os.path.join(input_dir, "*.CSV"),
+        os.path.join(input_dir, "*.json"),
+        os.path.join(input_dir, "*.JSON"),
     ]
-```
-
-```python
-@@upsert_component(component_type="node", name="discover_inputs", description="Discover input files and summarize CSV/JSON datasets for analysis context")
-def discover_inputs(state):
-    # This node establishes the data inventory before any code generation happens.
-    analysis_task = state.get("analysis_task", "")
-    input_files = list_input_data_files()
-    file_summaries = summarize_input_files(input_files)
-
-    print(f"[discover_inputs] found {len(input_files)} input file(s)")
+    files = sorted({os.path.abspath(path) for pattern in patterns for path in glob.glob(pattern)})
+    print(f"Discovered {len(files)} input file(s).")
     return {
-        "analysis_task": analysis_task,
-        "input_files": input_files,
-        "file_summaries": file_summaries,
-        "attempt_count": state.get("attempt_count", 0),
-        "max_attempts": state.get("max_attempts", 3),
+        "discovered_files": files,
+        "output_files": [],
+        "execution_output": "",
+        "execution_error": "",
     }
 ```
 
 ```python
-@@upsert_component(component_type="node", name="generate_code", description="Generate pandas/matplotlib analysis code dynamically using the LLM")
-def generate_code(state):
-    # Generate a complete script from the task and the summarized data inventory.
-    task = state.get("analysis_task", "")
-    summaries = state.get("file_summaries", [])
-    prior_error = state.get("execution_error", "")
-    messages = build_code_generation_messages(task, summaries, prior_error)
+@@manage_node(action="create", name="GenerateAnalysisCode", description="Ask the language model to generate a general-purpose pandas and matplotlib analysis script.")
+def generate_analysis_code_node(state: AgentState) -> dict:
+    # The prompt includes concrete file metadata so generated code can adapt to the actual dataset.
+    files = state.get("discovered_files", [])
+    metadata = []
+    for path in files:
+        try:
+            size = os.path.getsize(path)
+            metadata.append({"path": path, "name": os.path.basename(path), "bytes": size})
+        except OSError:
+            metadata.append({"path": path, "name": os.path.basename(path), "bytes": None})
 
+    task = safe_task_text(state.get("analysis_task", ""))
+    request = {
+        "analysis_task": task,
+        "input_files": metadata,
+        "required_input_dir": INPUT_DIR,
+        "required_output_dir": OUTPUT_DIR,
+    }
+    prompt = (
+        ANALYST_SYSTEM_PROMPT
+        + "\nUser analysis request and available files:\n"
+        + json.dumps(request, indent=2)
+    )
     llm = LargeLanguageModel()
-    response = llm.invoke(messages)
-    code = extract_python_code(response.content if hasattr(response, "content") else str(response))
-
-    print(f"[generate_code] generated code length={len(code)}")
-    return {
-        "generated_code": code,
-        "messages": [response],
-    }
+    response = llm.invoke([SystemMessage(content=ANALYST_SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    code = extract_code(getattr(response, "content", ""))
+    print(f"Generated analysis code ({len(code)} characters).")
+    return {"generated_code": code, "messages": [response]}
 ```
-
-```python
-@@upsert_component(component_type="node", name="execute_code", description="Execute generated analysis code and capture outputs, errors, and artifacts")
-def execute_code(state):
-    # Execution is isolated and repeatable; failures are captured for retry routing.
-    code = state.get("generated_code", "")
-    input_files = state.get("input_files", [])
-    attempt_count = int(state.get("attempt_count", 0)) + 1
-
-    stdout, stderr, error = execute_generated_code(code, input_files)
-    output_files = list_output_files()
-
-    execution_error = ""
-    if error is not None:
-        execution_error = f"{type(error).__name__}: {error}"
-    elif stderr.strip():
-        execution_error = stderr.strip()
-
-    print(f"[execute_code] attempt={attempt_count} error={'yes' if execution_error else 'no'} outputs={len(output_files)}")
-    return {
-        "attempt_count": attempt_count,
-        "execution_stdout": stdout,
-        "execution_stderr": stderr,
-        "execution_error": execution_error,
-        "output_files": output_files,
-    }
-```
-
-```python
-@@upsert_component(component_type="router", name="execute_code", description="Retry code generation if execution failed and attempts remain, otherwise finish")
-def route_after_execute(state):
-    # Retry only when the error is real and we still have budget left.
-    execution_error = state.get("execution_error", "")
-    attempt_count = int(state.get("attempt_count", 0))
-    max_attempts = int(state.get("max_attempts", 3))
-
-    if execution_error and attempt_count < max_attempts:
-        print(f"[route_after_execute] retrying after attempt {attempt_count}")
-        return "generate_code"
-
-    print(f"[route_after_execute] proceeding to final_answer after attempt {attempt_count}")
-    return "final_answer"
-```
-
-```python
-@@upsert_component(component_type="node", name="final_answer", description="Create the final response summarizing the analysis and outputs")
-def final_answer(state):
-    # The final response should be grounded in actual outputs and any execution issues.
-    messages = build_final_messages(state)
-    llm = LargeLanguageModel()
-    response = llm.invoke(messages)
-    final_text = response.content if hasattr(response, "content") else str(response)
-
-    print("[final_answer] response ready")
-    return {
-        "final_answer": final_text,
-        "messages": [response],
-    }
-```
-
-```python
-@@add_edge(source=START, target="discover_inputs")
-@@add_edge(source="discover_inputs", target="generate_code")
-@@add_edge(source="generate_code", target="execute_code")
-@@add_edge(source="final_answer", target=END)
-```
-
-
-[human]: [Iteration 5][System]:
+2026-09-01 11:25:07,809 [INFO] adas.run_meta: [human]: [Iteration 1][System]:
 
 Utilities updated successfully.
 
-Node 'discover_inputs' was created successfully.
+Node 'DiscoverInputs' was created successfully.
 
-Node 'generate_code' was created successfully.
-
-Node 'execute_code' was created successfully.
-
-Router 'execute_code' was created successfully.
-
-Node 'final_answer' was created successfully.
-
-Edge from '__start__' to 'discover_inputs' added successfully.
-
-Edge from 'discover_inputs' to 'generate_code' added successfully.
-
-Edge from 'generate_code' to 'execute_code' added successfully.
-
-Edge from 'final_answer' to '__end__' added successfully.
-
-
-[ai]: [Iteration 6]
+Node 'GenerateAnalysisCode' was created successfully.
+2026-09-01 11:25:22,318 [INFO] adas.run_meta: [ai]: [Iteration 2]
 
 ## Observation
-- The core workflow is now implemented: input discovery, file summarization, dynamic code generation, execution, retry routing, and final synthesis.
-- The graph is compiled, and the key loop is in place.
-- The remaining step is to validate the system with the built-in test harness to catch any routing, state, or execution issues.
+- Input discovery and LLM-based code generation are implemented.
+- The graph still lacks execution, artifact collection, final response generation, and all edges.
+- Generated code must be executed safely enough for this local workflow, with output paths constrained to the requested output directory.
 
 ## Reasoning
-- The most likely issues at this stage would be:
-  - a node/router signature mismatch,
-  - a state field missing from the typed state,
-  - a conditional edge that does not route correctly,
-  - or code execution problems when the generated analyst script runs.
-- Testing now is the right next step because it will confirm whether the implemented structure is operational and robust.
+- I will add AST validation to reject shell/network/process operations and obvious destructive file operations before execution.
+- The generated script will be wrapped with `INPUT_DIR` and `OUTPUT_DIR` values, executed with a timeout, and its stdout/stderr captured.
+- Artifact collection will include TXT, CSV, JSON, and image files produced in the output directory.
+- A final node will produce `final_answer` from the execution status and artifact list. Then I will wire and test the complete graph.
 
 ## Actions
-- Run the system test to verify the current graph and execution flow.
+```python
+@@manage_utilities(action="create", definitions=[
+    {"name": "validate_generated_code", "kind": "function"},
+    {"name": "collect_output_files", "kind": "function"},
+    {"name": "build_execution_script", "kind": "function"}
+])
+def validate_generated_code(code: str) -> tuple[bool, str]:
+    """Reject clearly unsafe operations while allowing ordinary pandas analysis code."""
+    if not code.strip():
+        return False, "The language model returned empty code."
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, f"Generated code has a syntax error: {exc}"
 
+    blocked_modules = {
+        "subprocess", "socket", "requests", "urllib", "http", "ftplib",
+        "shutil", "pathlib", "sys", "os"
+    }
+    blocked_calls = {
+        "eval", "exec", "compile", "__import__", "breakpoint", "input"
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in blocked_modules:
+                    return False, f"Blocked import: {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] in blocked_modules:
+                return False, f"Blocked import: {node.module}"
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
+                return False, f"Blocked call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {
+                "system", "popen", "remove", "unlink", "rmtree", "walk"
+            }:
+                return False, f"Blocked operation: {node.func.attr}"
+    return True, ""
+
+def collect_output_files(output_dir: str) -> list[str]:
+    """Return all generated artifact paths, restricted to the output directory."""
+    allowed = {".txt", ".csv", ".json", ".png", ".jpg", ".jpeg", ".svg"}
+    if not os.path.isdir(output_dir):
+        return []
+    result = []
+    root = os.path.abspath(output_dir)
+    for current, _, filenames in os.walk(root):
+        for filename in filenames:
+            path = os.path.abspath(os.path.join(current, filename))
+            if os.path.splitext(filename)[1].lower() in allowed and path.startswith(root + os.sep):
+                result.append(path)
+    return sorted(result)
+
+def build_execution_script(code: str) -> str:
+    """Inject stable absolute directory variables before the model-generated script."""
+    header = (
+        "import os\n"
+        "import matplotlib\n"
+        "matplotlib.use('Agg')\n"
+        f"INPUT_DIR = {os.path.abspath(INPUT_DIR)!r}\n"
+        f"OUTPUT_DIR = {os.path.abspath(OUTPUT_DIR)!r}\n"
+        "os.makedirs(OUTPUT_DIR, exist_ok=True)\n"
+    )
+    return header + "\n" + code + "\n"
+```
+
+```python
+@@set_imports()
+from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls
+from typing import Dict, List, Any, Callable, Optional, Union, TypeVar, Generic, Tuple, Set, TypedDict, Iterable, Sequence, Annotated
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, AnyMessage, trim_messages
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_core.tools import tool
+import os
+import glob
+import json
+import subprocess
+import traceback
+import ast
+```
+
+```python
+@@manage_node(action="create", name="ExecuteAnalysis", description="Validate and execute the generated analysis script, capturing errors and stdout.")
+def execute_analysis_node(state: AgentState) -> dict:
+    # Validate before execution and use a bounded subprocess to prevent runaway analysis.
+    code = state.get("generated_code", "")
+    valid, validation_error = validate_generated_code(code)
+    if not valid:
+        print(f"Code validation failed: {validation_error}")
+        return {
+            "execution_output": "",
+            "execution_error": validation_error,
+            "output_files": collect_output_files(OUTPUT_DIR),
+        }
+
+    script = build_execution_script(code)
+    script_path = os.path.join(OUTPUT_DIR, "_generated_analysis.py")
+    try:
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+        completed = subprocess.run(
+            ["python", script_path],
+            cwd=os.path.abspath(OUTPUT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        output = (completed.stdout or "")[-12000:]
+        error = (completed.stderr or "")[-12000:]
+        if completed.returncode != 0:
+            error = f"Analysis exited with code {completed.returncode}.\n{error}"
+        print(f"Analysis execution completed with return code {completed.returncode}.")
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "")[-12000:] if isinstance(exc.stdout, str) else ""
+        error = "Analysis exceeded the 180-second execution limit."
+    except Exception:
+        output = ""
+        error = traceback.format_exc()[-12000:]
+    finally:
+        try:
+            os.remove(script_path)
+        except OSError:
+            pass
+
+    return {
+        "execution_output": output,
+        "execution_error": error,
+        "output_files": collect_output_files(OUTPUT_DIR),
+    }
+```
+
+```python
+@@manage_node(action="create", name="CreateFinalAnswer", description="Summarize analysis execution and generated artifacts in final_answer.")
+def create_final_answer_node(state: AgentState) -> dict:
+    # Always return a useful answer, including actionable diagnostics when execution failed.
+    files = state.get("output_files", [])
+    relative_files = [os.path.relpath(path, OUTPUT_DIR) for path in files]
+    error = state.get("execution_error", "").strip()
+    output = state.get("execution_output", "").strip()
+    if error:
+        answer = (
+            "The automatic analysis did not complete successfully.\n\n"
+            f"Error:\n{error}\n\n"
+            f"Artifacts currently available in {OUTPUT_DIR}: "
+            f"{', '.join(relative_files) if relative_files else 'none'}"
+        )
+    else:
+        answer = (
+            "The automatic data analysis completed successfully.\n\n"
+            f"Generated artifacts in {OUTPUT_DIR}:\n"
+            + ("\n".join(f"- {name}" for name in relative_files) if relative_files else "- none")
+            + (f"\n\nExecution summary:\n{output}" if output else "")
+        )
+    print("Final answer created.")
+    return {"final_answer": answer}
+```
+
+```python
+@@manage_edge(action="create", source=START, target="DiscoverInputs")
+@@manage_edge(action="create", source="DiscoverInputs", target="GenerateAnalysisCode")
+@@manage_edge(action="create", source="GenerateAnalysisCode", target="ExecuteAnalysis")
+@@manage_edge(action="create", source="ExecuteAnalysis", target="CreateFinalAnswer")
+@@manage_edge(action="create", source="CreateFinalAnswer", target=END)
+```
+2026-09-01 11:25:22,425 [INFO] adas.run_meta: [human]: [Iteration 2][System]:
+
+Utilities updated successfully.
+
+Imports set successfully with 12 statements.
+
+Node 'ExecuteAnalysis' was created successfully.
+
+Node 'CreateFinalAnswer' was created successfully.
+
+Edge from '__start__' to 'DiscoverInputs' created successfully.
+
+Edge from 'DiscoverInputs' to 'GenerateAnalysisCode' created successfully.
+
+Edge from 'GenerateAnalysisCode' to 'ExecuteAnalysis' created successfully.
+
+Edge from 'ExecuteAnalysis' to 'CreateFinalAnswer' created successfully.
+
+Edge from 'CreateFinalAnswer' to '__end__' created successfully.
+2026-09-01 11:25:26,088 [INFO] adas.run_meta: [ai]: [Iteration 3]
+
+## Observation
+- The complete four-node workflow is wired from `START` to `END`.
+- The state includes `analysis_task` and `final_answer`, plus intermediate execution and artifact fields.
+- The implementation discovers CSV/JSON inputs, generates pandas/matplotlib code, validates and executes it, collects artifacts, and reports results.
+- One important concern remains: the system has not yet been executed against the predefined test states, so runtime compatibility and empty-input behavior are unverified.
+
+## Reasoning
+- The next logical step is mandatory system testing.
+- Testing will reveal issues such as LLM response handling, filesystem assumptions, generated-script execution, or state initialization behavior.
+- I will run the current graph without changing components first.
+
+## Actions
 ```python
 @@test_system()
 ```
-
-Finalizing system from best checkpoint: DataAnalyst_checkpoint_3.pkl
-
-[human]: [Iteration 6][System]:
+2026-09-01 11:25:34,112 [INFO] adas.run_meta: [human]: [Iteration 3][System]:
 
 Test suite completed.
-Test Case 3:
+Test Case 1:
 <FinalState>
-{'messages': [AIMessage(content='from pathlib import Path\nimport json\nimport pandas as pd\n\n# Provided by the execution environment:\n# input_files: list of file paths as strings\n# input_dir: Path\n# output_dir: Path\n\noutput_dir.mkdir(parents=True, exist_ok=True)\n\ntarget_columns = ["value", "amount", "score"]\ncsv_files = [Path(f) for f in input_files if str(f).lower().endswith(".csv")]\n\ntest_csv = None\nfor f in csv_files:\n    if f.name == "test.csv":\n        test_csv = f\n        break\n\nif test_csv is None and csv_files:\n    test_csv = csv_files[0]\n\nif test_csv is None:\n    raise FileNotFoundError("No CSV file found in input_file...[MESSAGE CONTENT TRUNCATED]...lumns].apply(pd.to_numeric, errors="coerce").sum(skipna=True)\nsums = {col: (None if pd.isna(val) else val.item() if hasattr(val, "item") else val) for col, val in sums_series.items()}\n\njson_path = output_dir / "column_sums.json"\nwith open(json_path, "w", encoding="utf-8") as f:\n    json.dump(sums, f, indent=2)\n\nreport_lines = [\n    "Column sums report",\n    f"Source file: {test_csv.name}",\n    f"value: {sums[\'value\']}",\n    f"amount: {sums[\'amount\']}",\n    f"score: {sums[\'score\']}",\n]\nreport_path = output_dir / "sums_report.txt"\nreport_path.write_text("\\n".join(report_lines), encoding="utf-8")', tool_calls=[], invalid_tool_calls=[]), AIMessage(content='Analysis completed successfully.\n\nWhat was analyzed:\n- The CSV file `test.csv`\n- Numeric columns: `value`, `amount`, and `score`\n\nKey findings:\n- `value` sum: 75\n- `amount` sum: 1500\n- `score` sum: 15\n\nOutput artifacts:\n- `sandbox/workspace/data/output/column_sums.json`\n- `sandbox/workspace/data/output/sums_report.txt`\n\nNo execution errors were reported.', tool_calls=[], invalid_tool_calls=[])], 'analysis_task': "Compute the sums of the numeric columns 'value', 'amount', and 'score' from test.csv and save the results as JSON in 'column_sums.json'; also save a short plain-text report as 'sums_report.txt'.", 'input_files': ['sandbox/workspace/data/input/test.csv'], 'file_summaries': [{'file': 'sandbox/workspace/data/input/test.csv', 'type': 'csv', 'shape': [5, 5], 'columns': ['id', 'category', 'value', 'amount', 'score'], 'dtypes': {'id': 'int64', 'category': 'str', 'value': 'int64', 'amount': 'int64', 'score': 'int64'}, 'missing_values': {'id': 0, 'category': 0, 'value': 0, 'amount': 0, 'score': 0}, 'preview': [{'id': 1, 'category': 'A', 'value': 10, 'amount': 100, 'score': 1}, {'id': 2, 'category': 'B', 'value': 15, 'amount': 200, 'score': 2}, {'id': 3, 'category': 'A', 'value': 5, 'amount': 300, 'score': 3}, {'id': 4, 'category': 'C', 'value': 20, 'amount': 400, 'score': 4}, {'id': 5, 'category': 'B', 'value': 25, 'amount': 500, 'score': 5}], 'numeric_describe': {'id': {'count': 5.0, 'mean': 3.0, 'std': 1.5811, 'min': 1.0, '25%': 2.0, '50%': 3.0, '75%': 4.0, 'max': 5.0}, 'value': {'count': 5.0, 'mean': 15.0, 'std': 7.9057, 'min': 5.0, '25%': 10.0, '50%': 15.0, '75%': 20.0, 'max': 25.0}, 'amount': {'count': 5.0, 'mean': 300.0, 'std': 158.1139, 'min': 100.0, '25%': 200.0, '50%': 300.0, '75%': 400.0, 'max': 500.0}, 'score': {'count': 5.0, 'mean': 3.0, 'std': 1.5811, 'min': 1.0, '25%': 2.0, '50%': 3.0, '75%': 4.0, 'max': 5.0}}}], 'generated_code': 'from pathlib import Path\nimport json\nimport pandas as pd\n\n# Provided by the execution environment:\n# input_files: list of file paths as strings\n# input_dir: Path\n# output_dir: Path\n\noutput_dir.mkdir(parents=True, exist_ok=True)\n\ntarget_columns = ["value", "amount", "score"]\ncsv_files = [Path(f) for f in input_files if str(f).lower().endswith(".csv")]\n\ntest_csv = None\nfor f in csv_files:\n    if f.name == "test.csv":\n        test_csv = f\n        break\n\nif test_csv is None and csv_files:\n    test_csv = csv_files[0]\n\nif test_csv is None:\n    raise FileNotFoundError("No CSV file found in input_files.")\n\ndf = pd.read_csv(test_csv)\n\nsums_series = df[target_columns].apply(pd.to_numeric, errors="coerce").sum(skipna=True)\nsums = {col: (None if pd.isna(val) else val.item() if hasattr(val, "item") else val) for col, val in sums_series.items()}\n\njson_path = output_dir / "column_sums.json"\nwith open(json_path, "w", encoding="utf-8") as f:\n    json.dump(sums, f, indent=2)\n\nreport_lines = [\n    "Column sums report",\n    f"Source file: {test_csv.name}",\n    f"value: {sums[\'value\']}",\n    f"amount: {sums[\'amount\']}",\n    f"score: {sums[\'score\']}",\n]\nreport_path = output_dir / "sums_report.txt"\nreport_path.write_text("\\n".join(report_lines), encoding="utf-8")', 'execution_error': '', 'execution_stdout': '', 'execution_stderr': '', 'attempt_count': 1, 'max_attempts': 3, 'output_files': ['sandbox/workspace/data/output/column_sums.json', 'sandbox/workspace/data/output/sums_report.txt'], 'final_answer': 'Analysis completed successfully.\n\nWhat was analyzed:\n- The CSV file `test.csv`\n- Numeric columns: `value`, `amount`, and `score`\n\nKey findings:\n- `value` sum: 75\n- `amount` sum: 1500\n- `score` sum: 15\n\nOutput artifacts:\n- `sandbox/workspace/data/output/column_sums.json`\n- `sandbox/workspace/data/output/sums_report.txt`\n\nNo execution errors were reported.'}
+{'messages': [AIMessage(content='import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\nINPUT_DIR = os.environ.get("INPUT_DIR", "sandbox/workspace/data/input")\nOUTPUT_DIR = os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output")\n\ninput_path = Path(INPUT_DIR)\noutput_path = Path(OUTPUT_DIR)\noutput_path.mkdir(parents=True, exist_ok=True)\n\nloaded_files = []\ndataframes = []\nerrors = []\n\ndef load_json_as_dataframe(path):\n    with path.open("r", encoding="utf-8") as f:\n        obj = json.load(f)\n\n    if isinstance(obj, list):\n  ...[MESSAGE CONTENT TRUNCATED]...ined)}\\n"\n    f"Numeric values analyzed: {len(values)}\\n"\n    f"Missing or non-numeric values excluded: "\n    f"{len(combined[\'value\']) - len(values)}\\n"\n    f"Mean: {values.mean():.6g}\\n"\n    f"Median: {values.median():.6g}\\n"\n    f"Minimum: {values.min():.6g}\\n"\n    f"Maximum: {values.max():.6g}\\n"\n    f"Histogram saved to: {plot_file}\\n"\n)\n\nwith (output_path / "analysis_report.txt").open("w", encoding="utf-8") as f:\n    f.write(report)\n\nprint(\n    f"Completed analysis: loaded {len(loaded_files)} file(s), "\n    f"analyzed {len(values)} numeric value(s), and saved outputs to {output_path}."\n)', tool_calls=[], invalid_tool_calls=[])], 'analysis_task': "Read all CSV and JSON files in sandbox/workspace/data/input. Plot a histogram distribution of the numeric 'value' column using pandas and matplotlib, and save the plot as sandbox/workspace/data/output/value_distribution.png. Also provide a concise summary of what was done in final_answer.", 'discovered_files': ['/sandbox/workspace/data/input/test.csv'], 'generated_code': 'import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\nINPUT_DIR = os.environ.get("INPUT_DIR", "sandbox/workspace/data/input")\nOUTPUT_DIR = os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output")\n\ninput_path = Path(INPUT_DIR)\noutput_path = Path(OUTPUT_DIR)\noutput_path.mkdir(parents=True, exist_ok=True)\n\nloaded_files = []\ndataframes = []\nerrors = []\n\ndef load_json_as_dataframe(path):\n    with path.open("r", encoding="utf-8") as f:\n        obj = json.load(f)\n\n    if isinstance(obj, list):\n  ...[VALUE FOR \'generated_code\' (Type: str) HAS BEEN TRUNCATED]...ined)}\\n"\n    f"Numeric values analyzed: {len(values)}\\n"\n    f"Missing or non-numeric values excluded: "\n    f"{len(combined[\'value\']) - len(values)}\\n"\n    f"Mean: {values.mean():.6g}\\n"\n    f"Median: {values.median():.6g}\\n"\n    f"Minimum: {values.min():.6g}\\n"\n    f"Maximum: {values.max():.6g}\\n"\n    f"Histogram saved to: {plot_file}\\n"\n)\n\nwith (output_path / "analysis_report.txt").open("w", encoding="utf-8") as f:\n    f.write(report)\n\nprint(\n    f"Completed analysis: loaded {len(loaded_files)} file(s), "\n    f"analyzed {len(values)} numeric value(s), and saved outputs to {output_path}."\n)', 'execution_output': '', 'execution_error': 'Blocked import: os', 'output_files': [], 'final_answer': 'The automatic analysis did not complete successfully.\n\nError:\nBlocked import: os\n\nArtifacts currently available in sandbox/workspace/data/output: none'}
 </FinalState>
-Test Case 3:
+Test Case 1:
 <STDOUT+STDERR>
-[discover_inputs] found 1 input file(s)
-[generate_code] generated code length=1260
-[execute_code] attempt=1 error=no outputs=2
-[route_after_execute] proceeding to final_answer after attempt 1
-[final_answer] response ready
+Discovered 1 input file(s).
+Generated analysis code (3756 characters).
+Code validation failed: Blocked import: os
+Final answer created.
 
 </STDOUT+STDERR>
-Test Case 3:
+Test Case 1:
 <ExecutionFlow>
-START -> ['discover_inputs'] -> ['generate_code'] -> ['execute_code'] -> ['final_answer'] -> END
+START -> ['DiscoverInputs'] -> ['GenerateAnalysisCode'] -> ['ExecuteAnalysis'] -> ['CreateFinalAnswer'] -> END
 </ExecutionFlow>
 
 <Metrics>
 Avg. Graph Iterations: 1.67
-Avg. Duration: 7.231 seconds
-Avg. LLM Calls: 2.0
-Avg. Tokens: 2520.67 (Input: 1927.33, Output: 593.33)
+Avg. Duration: 2.67 seconds
+Avg. LLM Calls: 0.33
+Avg. Tokens: 508.33 (Input: 189.0, Output: 319.33)
+</Metrics>
+
+<ValidatorResult>
+Overall: FAILED
+Details:
+Test Case 1: FAIL - Expected output artifact was not created: sandbox/workspace/data/output/value_distribution.png.
+</ValidatorResult>
+
+Analyze these test result logs of the TargetSystem, then plan and act accordingly.
+Your sole focus is to correct and improve the TargetSystem:
+- If execution threw an exception, identify the **root cause** of the failure.
+- Your next actions must resolve these flaws within the current code using the decorators.
+- The system must be generalized and adaptable to the broader problem domain.
+- Therefore, do not hardcode logic tailored to specific test inputs.
+2026-09-01 11:25:40,434 [INFO] adas.run_meta: [ai]: [Iteration 4]
+
+## Observation
+- The test failed because `validate_generated_code()` blocks the `os` module.
+- The generated analyst script legitimately imports `os` and `pathlib` for directory/file handling, so validation rejects valid analysis code before execution.
+- The failure occurs before any plot or report can be created; this is a validator defect, not an analysis-code defect.
+
+## Reasoning
+- The validator should permit ordinary filesystem reads and output-directory creation required by the workflow.
+- It should continue blocking dangerous capabilities such as shell execution, networking, subprocesses, arbitrary deletion, and dynamic code execution.
+- `pathlib` is also a normal data-analysis dependency, so it should be allowed.
+- I will update only the validator and then rerun the system test.
+
+## Actions
+```python
+@@manage_utilities(action="update", definitions=[
+    {"name": "validate_generated_code", "kind": "function"}
+])
+def validate_generated_code(code: str) -> tuple[bool, str]:
+    """Allow normal analysis filesystem usage while rejecting dangerous capabilities."""
+    if not code.strip():
+        return False, "The language model returned empty code."
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, f"Generated code has a syntax error: {exc}"
+
+    # os/pathlib are required for portable input/output handling. Dangerous
+    # process, network, dynamic-execution, and destructive APIs remain blocked.
+    blocked_modules = {
+        "subprocess", "socket", "requests", "urllib", "http", "ftplib",
+        "shutil", "ctypes", "signal",
+    }
+    blocked_calls = {
+        "eval", "exec", "compile", "__import__", "breakpoint", "input",
+    }
+    blocked_attributes = {
+        "system", "popen", "remove", "unlink", "rmtree", "walk",
+        "spawn", "fork", "kill", "chmod", "chown",
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in blocked_modules:
+                    return False, f"Blocked import: {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] in blocked_modules:
+                return False, f"Blocked import: {node.module}"
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
+                return False, f"Blocked call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute) and node.func.attr in blocked_attributes:
+                return False, f"Blocked operation: {node.func.attr}"
+
+    return True, ""
+```
+
+```python
+@@test_system()
+```
+2026-09-01 11:25:50,723 [INFO] adas.run_meta: [human]: [Iteration 4][System]:
+
+Utilities updated successfully.
+
+Test suite completed.
+Test Case 1:
+<FinalState>
+{'messages': [AIMessage(content='import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\ndef load_csv(path):\n    try:\n        return pd.read_csv(path)\n    except Exception as exc:\n        return None, f"CSV read failed: {exc}"\n    else:\n        return None, "unreachable"\n\n\ndef load_json(path):\n    try:\n        with open(path, "r", encoding="utf-8") as handle:\n            data = json.load(handle)\n\n        if isinstance(data, list):\n            return pd.json_normalize(data), None\n        if isinstance(data, dict):\n            # P...[MESSAGE CONTENT TRUNCATED]...eason\', \'No additional details\')}",\n            ]\n        )\n\n    if load_errors:\n        report_lines.append(f"Load errors: {len(load_errors)}")\n\n    with open(output_dir / "analysis_report.txt", "w", encoding="utf-8") as handle:\n        handle.write("\\n".join(report_lines) + "\\n")\n\n    created = sorted(path.name for path in output_dir.iterdir() if path.is_file())\n    print(\n        f"Completed analysis: read {len(files_read)} input file(s), "\n        f"loaded {len(combined)} row(s), created {len(created)} artifact(s) "\n        f"in {output_dir}."\n    )\n\n\nif __name__ == "__main__":\n    main()\n', tool_calls=[], invalid_tool_calls=[])], 'analysis_task': "Read all CSV and JSON files in sandbox/workspace/data/input. Plot a histogram distribution of the numeric 'value' column using pandas and matplotlib, and save the plot as sandbox/workspace/data/output/value_distribution.png. Also provide a concise summary of what was done in final_answer.", 'discovered_files': ['/sandbox/workspace/data/input/test.csv'], 'generated_code': 'import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\ndef load_csv(path):\n    try:\n        return pd.read_csv(path)\n    except Exception as exc:\n        return None, f"CSV read failed: {exc}"\n    else:\n        return None, "unreachable"\n\n\ndef load_json(path):\n    try:\n        with open(path, "r", encoding="utf-8") as handle:\n            data = json.load(handle)\n\n        if isinstance(data, list):\n            return pd.json_normalize(data), None\n        if isinstance(data, dict):\n            # P...[VALUE FOR \'generated_code\' (Type: str) HAS BEEN TRUNCATED]...reason\', \'No additional details\')}",\n            ]\n        )\n\n    if load_errors:\n        report_lines.append(f"Load errors: {len(load_errors)}")\n\n    with open(output_dir / "analysis_report.txt", "w", encoding="utf-8") as handle:\n        handle.write("\\n".join(report_lines) + "\\n")\n\n    created = sorted(path.name for path in output_dir.iterdir() if path.is_file())\n    print(\n        f"Completed analysis: read {len(files_read)} input file(s), "\n        f"loaded {len(combined)} row(s), created {len(created)} artifact(s) "\n        f"in {output_dir}."\n    )\n\n\nif __name__ == "__main__":\n    main()', 'execution_output': '', 'execution_error': "Analysis exited with code 2.\npython: can't open file '/sandbox/workspace/data/output/sandbox/workspace/data/output/_generated_analysis.py': [Errno 2] No such file or directory\n", 'output_files': [], 'final_answer': "The automatic analysis did not complete successfully.\n\nError:\nAnalysis exited with code 2.\npython: can't open file '/sandbox/workspace/data/output/sandbox/workspace/data/output/_generated_analysis.py': [Errno 2] No such file or directory\n\nArtifacts currently available in sandbox/workspace/data/output: none"}
+</FinalState>
+Test Case 1:
+<STDOUT+STDERR>
+Discovered 1 input file(s).
+Generated analysis code (6793 characters).
+Analysis execution completed with return code 2.
+Final answer created.
+
+</STDOUT+STDERR>
+Test Case 1:
+<ExecutionFlow>
+START -> ['DiscoverInputs'] -> ['GenerateAnalysisCode'] -> ['ExecuteAnalysis'] -> ['CreateFinalAnswer'] -> END
+</ExecutionFlow>
+
+<Metrics>
+Avg. Graph Iterations: 1.67
+Avg. Duration: 3.425 seconds
+Avg. LLM Calls: 0.33
+Avg. Tokens: 686.33 (Input: 189.0, Output: 497.33)
+</Metrics>
+
+<ValidatorResult>
+Overall: FAILED
+Details:
+Test Case 1: FAIL - Expected output artifact was not created: sandbox/workspace/data/output/value_distribution.png.
+</ValidatorResult>
+
+Analyze these test result logs of the TargetSystem, then plan and act accordingly.
+Your sole focus is to correct and improve the TargetSystem:
+- If execution threw an exception, identify the **root cause** of the failure.
+- Your next actions must resolve these flaws within the current code using the decorators.
+- The system must be generalized and adaptable to the broader problem domain.
+- Therefore, do not hardcode logic tailored to specific test inputs.
+2026-09-01 11:25:57,111 [INFO] adas.run_meta: [ai]: [Iteration 5]
+
+## Observation
+- The workflow reached `ExecuteAnalysis`, but Python could not open the generated script.
+- Root cause: `OUTPUT_DIR` is a relative path. `script_path` was therefore relative, while the subprocess also used `OUTPUT_DIR` as its working directory, causing the path to be resolved twice:
+  `.../output/sandbox/workspace/data/output/_generated_analysis.py`.
+- This prevented generated analysis code from running and no requested artifact was created.
+
+## Reasoning
+- Directory paths should be normalized once at the execution boundary.
+- I will update `ExecuteAnalysis` to use absolute input/output paths for script creation, subprocess working directory, cleanup, and artifact collection.
+- This is general and does not depend on any particular filename or analysis task.
+
+## Actions
+```python
+@@manage_node(action="update", name="ExecuteAnalysis", description="Validate and execute the generated analysis script using normalized absolute paths, capturing errors and stdout.")
+def execute_analysis_node(state: AgentState) -> dict:
+    # Normalize paths once: a relative script path combined with cwd caused the
+    # previous subprocess invocation to resolve the output directory twice.
+    code = state.get("generated_code", "")
+    output_dir = os.path.abspath(OUTPUT_DIR)
+    os.makedirs(output_dir, exist_ok=True)
+
+    valid, validation_error = validate_generated_code(code)
+    if not valid:
+        print(f"Code validation failed: {validation_error}")
+        return {
+            "execution_output": "",
+            "execution_error": validation_error,
+            "output_files": collect_output_files(output_dir),
+        }
+
+    script = build_execution_script(code)
+    script_path = os.path.join(output_dir, "_generated_analysis.py")
+    output = ""
+    error = ""
+
+    try:
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+
+        # Both the executable argument and cwd are now unambiguous absolute paths.
+        completed = subprocess.run(
+            ["python", script_path],
+            cwd=output_dir,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        output = (completed.stdout or "")[-12000:]
+        error = (completed.stderr or "")[-12000:]
+        if completed.returncode != 0:
+            error = f"Analysis exited with code {completed.returncode}.\n{error}"
+        print(f"Analysis execution completed with return code {completed.returncode}.")
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "")[-12000:] if isinstance(exc.stdout, str) else ""
+        error = "Analysis exceeded the 180-second execution limit."
+    except Exception:
+        error = traceback.format_exc()[-12000:]
+    finally:
+        try:
+            os.remove(script_path)
+        except OSError:
+            pass
+
+    return {
+        "execution_output": output,
+        "execution_error": error,
+        "output_files": collect_output_files(output_dir),
+    }
+```
+
+```python
+@@test_system()
+```
+2026-09-01 11:26:06,035 [INFO] adas.run_meta: [human]: [Iteration 5][System]:
+
+Node 'ExecuteAnalysis' was updated successfully.
+
+Test suite completed.
+Test Case 1:
+<FinalState>
+{'messages': [AIMessage(content='import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\nINPUT_DIR = Path(os.environ.get("INPUT_DIR", "sandbox/workspace/data/input"))\nOUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output"))\nOUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n\n\ndef load_csv(path):\n    try:\n        return pd.read_csv(path)\n    except Exception as exc:\n        print(f"Warning: could not read CSV {path.name}: {exc}")\n        return None\n\n\ndef load_json(path):\n    try:\n        with path.open("r", en...[MESSAGE CONTENT TRUNCATED]...uded: {len(combined) - len(values)}\\n"\n        f"Mean: {values.mean():.6g}\\n"\n        f"Median: {values.median():.6g}\\n"\n        f"Minimum: {values.min():.6g}\\n"\n        f"Maximum: {values.max():.6g}\\n\\n"\n        "Created numeric_values.csv, analysis_summary.json, and "\n        "value_distribution.png.\\n"\n    )\n    (OUTPUT_DIR / "analysis_report.txt").write_text(report, encoding="utf-8")\n\n    print(\n        f"Completed analysis: read {len(files_read)} file(s), analyzed "\n        f"{len(values)} numeric value(s), and saved outputs to {OUTPUT_DIR}."\n    )\n\n\nif __name__ == "__main__":\n    main()\n', tool_calls=[], invalid_tool_calls=[])], 'analysis_task': "Read all CSV and JSON files in sandbox/workspace/data/input. Plot a histogram distribution of the numeric 'value' column using pandas and matplotlib, and save the plot as sandbox/workspace/data/output/value_distribution.png. Also provide a concise summary of what was done in final_answer.", 'discovered_files': ['/sandbox/workspace/data/input/test.csv'], 'generated_code': 'import os\nimport json\nimport math\nfrom pathlib import Path\n\nimport pandas as pd\nimport matplotlib\n\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n\n\nINPUT_DIR = Path(os.environ.get("INPUT_DIR", "sandbox/workspace/data/input"))\nOUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output"))\nOUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n\n\ndef load_csv(path):\n    try:\n        return pd.read_csv(path)\n    except Exception as exc:\n        print(f"Warning: could not read CSV {path.name}: {exc}")\n        return None\n\n\ndef load_json(path):\n    try:\n        with path.open("r", en...[VALUE FOR \'generated_code\' (Type: str) HAS BEEN TRUNCATED]...luded: {len(combined) - len(values)}\\n"\n        f"Mean: {values.mean():.6g}\\n"\n        f"Median: {values.median():.6g}\\n"\n        f"Minimum: {values.min():.6g}\\n"\n        f"Maximum: {values.max():.6g}\\n\\n"\n        "Created numeric_values.csv, analysis_summary.json, and "\n        "value_distribution.png.\\n"\n    )\n    (OUTPUT_DIR / "analysis_report.txt").write_text(report, encoding="utf-8")\n\n    print(\n        f"Completed analysis: read {len(files_read)} file(s), analyzed "\n        f"{len(values)} numeric value(s), and saved outputs to {OUTPUT_DIR}."\n    )\n\n\nif __name__ == "__main__":\n    main()', 'execution_output': '', 'execution_error': 'Analysis exited with code 1.\nTraceback (most recent call last):\n  File "/sandbox/workspace/data/output/_generated_analysis.py", line 142, in <module>\n    main()\n  File "/sandbox/workspace/data/output/_generated_analysis.py", line 72, in main\n    raise RuntimeError("No readable, non-empty CSV or JSON files were found.")\nRuntimeError: No readable, non-empty CSV or JSON files were found.\n', 'output_files': [], 'final_answer': 'The automatic analysis did not complete successfully.\n\nError:\nAnalysis exited with code 1.\nTraceback (most recent call last):\n  File "/sandbox/workspace/data/output/_generated_analysis.py", line 142, in <module>\n    main()\n  File "/sandbox/workspace/data/output/_generated_analysis.py", line 72, in main\n    raise RuntimeError("No readable, non-empty CSV or JSON files were found.")\nRuntimeError: No readable, non-empty CSV or JSON files were found.\n\nArtifacts currently available in sandbox/workspace/data/output: none'}
+</FinalState>
+Test Case 1:
+<STDOUT+STDERR>
+Discovered 1 input file(s).
+Generated analysis code (4215 characters).
+Analysis execution completed with return code 1.
+Final answer created.
+
+</STDOUT+STDERR>
+Test Case 1:
+<ExecutionFlow>
+START -> ['DiscoverInputs'] -> ['GenerateAnalysisCode'] -> ['ExecuteAnalysis'] -> ['CreateFinalAnswer'] -> END
+</ExecutionFlow>
+
+<Metrics>
+Avg. Graph Iterations: 1.67
+Avg. Duration: 2.971 seconds
+Avg. LLM Calls: 0.33
+Avg. Tokens: 522.33 (Input: 189.0, Output: 333.33)
+</Metrics>
+
+<ValidatorResult>
+Overall: FAILED
+Details:
+Test Case 1: FAIL - Expected output artifact was not created: sandbox/workspace/data/output/value_distribution.png.
+</ValidatorResult>
+
+Analyze these test result logs of the TargetSystem, then plan and act accordingly.
+Your sole focus is to correct and improve the TargetSystem:
+- If execution threw an exception, identify the **root cause** of the failure.
+- Your next actions must resolve these flaws within the current code using the decorators.
+- The system must be generalized and adaptable to the broader problem domain.
+- Therefore, do not hardcode logic tailored to specific test inputs.
+2026-09-01 11:26:13,951 [INFO] adas.run_meta: [ai]: [Iteration 6]
+
+## Observation
+- The test reached code generation and execution, but the generated script reported no readable input files.
+- The root cause is path propagation: the wrapper defines absolute `INPUT_DIR`/`OUTPUT_DIR` variables, but the generated script redefines them from `os.environ`, where those variables are not currently set.
+- Because the subprocess runs with the output directory as its working directory, the script’s fallback input path resolves incorrectly under the output directory.
+
+## Reasoning
+- The execution boundary should explicitly pass absolute `INPUT_DIR` and `OUTPUT_DIR` values through the subprocess environment.
+- This preserves generality because generated scripts may use either injected variables or environment-based paths.
+- No input-specific logic should be added; only path handling needs correction.
+- After updating execution, I will run the system test to verify artifact creation.
+
+## Actions
+```python
+@@manage_node(action="update", name="ExecuteAnalysis", description="Validate and execute the generated analysis script with absolute input/output paths passed through the subprocess environment.")
+def execute_analysis_node(state: AgentState) -> dict:
+    # Generated scripts may read INPUT_DIR and OUTPUT_DIR from the environment.
+    # Pass normalized absolute paths explicitly so their own path assignments
+    # cannot fall back to paths relative to the output working directory.
+    code = state.get("generated_code", "")
+    input_dir = os.path.abspath(INPUT_DIR)
+    output_dir = os.path.abspath(OUTPUT_DIR)
+    os.makedirs(output_dir, exist_ok=True)
+
+    valid, validation_error = validate_generated_code(code)
+    if not valid:
+        print(f"Code validation failed: {validation_error}")
+        return {
+            "execution_output": "",
+            "execution_error": validation_error,
+            "output_files": collect_output_files(output_dir),
+        }
+
+    script = build_execution_script(code)
+    script_path = os.path.join(output_dir, "_generated_analysis.py")
+    output = ""
+    error = ""
+
+    try:
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+
+        execution_environment = os.environ.copy()
+        execution_environment["INPUT_DIR"] = input_dir
+        execution_environment["OUTPUT_DIR"] = output_dir
+
+        completed = subprocess.run(
+            ["python", script_path],
+            cwd=output_dir,
+            env=execution_environment,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        output = (completed.stdout or "")[-12000:]
+        error = (completed.stderr or "")[-12000:]
+        if completed.returncode != 0:
+            error = f"Analysis exited with code {completed.returncode}.\n{error}"
+        print(f"Analysis execution completed with return code {completed.returncode}.")
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "")[-12000:] if isinstance(exc.stdout, str) else ""
+        error = "Analysis exceeded the 180-second execution limit."
+    except Exception:
+        error = traceback.format_exc()[-12000:]
+    finally:
+        try:
+            os.remove(script_path)
+        except OSError:
+            pass
+
+    return {
+        "execution_output": output,
+        "execution_error": error,
+        "output_files": collect_output_files(output_dir),
+    }
+```
+
+```python
+@@test_system()
+```
+2026-09-01 11:26:39,625 [INFO] adas.compact_system.utilities: Finalizing system from best checkpoint: DataAnalyst_checkpoint_3.pkl
+2026-09-01 11:26:39,630 [INFO] adas.run_meta: [human]: [Iteration 6][System]:
+
+Node 'ExecuteAnalysis' was updated successfully.
+
+Test suite completed.
+Test Case 3:
+<FinalState>
+{'messages': [AIMessage(content='```python\nimport json\nimport os\nfrom pathlib import Path\n\nimport pandas as pd\n\n\ndef main():\n    input_dir = Path(os.environ.get("INPUT_DIR", "sandbox/workspace/data/input"))\n    output_dir = Path(os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output"))\n    output_dir.mkdir(parents=True, exist_ok=True)\n\n    files_read = []\n    dataframes = []\n\n    for path in sorted(input_dir.iterdir()):\n        if not path.is_file() or path.suffix.lower() not in {".csv", ".json"}:\n            continue\n\n        try:\n            if path.suffix.lower() == ".csv":\n                df = pd.read_csv(path)\n     ...[MESSAGE CONTENT TRUNCATED]...\\n")\n\n    report = (\n        "Analysis Report\\n"\n        "===============\\n"\n        f"File analyzed: {target_name}\\n"\n        f"Rows analyzed: {len(target_df)}\\n"\n        f"Sum of value: {sums[\'value\']}\\n"\n        f"Sum of quantity: {sums[\'quantity\']}\\n"\n        f"Result JSON: {output_json}\\n"\n    )\n    (output_dir / "analysis_report.txt").write_text(report, encoding="utf-8")\n\n    print(\n        f"Completed: read {len(files_read)} file(s); "\n        f"value sum={sums[\'value\']}, quantity sum={sums[\'quantity\']}. "\n        f"Saved {output_json}."\n    )\n\n\nif __name__ == "__main__":\n    main()\n```', tool_calls=[], invalid_tool_calls=[])], 'analysis_task': "Read all CSV and JSON files in sandbox/workspace/data/input. Calculate the sums of the numeric columns 'value' and 'quantity' in test.csv and save a JSON object to sandbox/workspace/data/output/column_sums.json. The JSON must contain numeric values of 150 for value and 15 for quantity. Summarize the results in final_answer.", 'discovered_files': ['/sandbox/workspace/data/input/test.csv'], 'generated_code': 'import json\nimport os\nfrom pathlib import Path\n\nimport pandas as pd\n\n\ndef main():\n    input_dir = Path(os.environ.get("INPUT_DIR", "sandbox/workspace/data/input"))\n    output_dir = Path(os.environ.get("OUTPUT_DIR", "sandbox/workspace/data/output"))\n    output_dir.mkdir(parents=True, exist_ok=True)\n\n    files_read = []\n    dataframes = []\n\n    for path in sorted(input_dir.iterdir()):\n        if not path.is_file() or path.suffix.lower() not in {".csv", ".json"}:\n            continue\n\n        try:\n            if path.suffix.lower() == ".csv":\n                df = pd.read_csv(path)\n            els...[VALUE FOR \'generated_code\' (Type: str) HAS BEEN TRUNCATED]...te("\\n")\n\n    report = (\n        "Analysis Report\\n"\n        "===============\\n"\n        f"File analyzed: {target_name}\\n"\n        f"Rows analyzed: {len(target_df)}\\n"\n        f"Sum of value: {sums[\'value\']}\\n"\n        f"Sum of quantity: {sums[\'quantity\']}\\n"\n        f"Result JSON: {output_json}\\n"\n    )\n    (output_dir / "analysis_report.txt").write_text(report, encoding="utf-8")\n\n    print(\n        f"Completed: read {len(files_read)} file(s); "\n        f"value sum={sums[\'value\']}, quantity sum={sums[\'quantity\']}. "\n        f"Saved {output_json}."\n    )\n\n\nif __name__ == "__main__":\n    main()', 'execution_output': 'Completed: read 1 file(s); value sum=150, quantity sum=15. Saved /sandbox/workspace/data/output/column_sums.json.\n', 'execution_error': '', 'output_files': ['/sandbox/workspace/data/output/analysis_report.txt', '/sandbox/workspace/data/output/analysis_summary.json', '/sandbox/workspace/data/output/column_sums.json'], 'final_answer': 'The automatic data analysis completed successfully.\n\nGenerated artifacts in sandbox/workspace/data/output:\n- analysis_report.txt\n- analysis_summary.json\n- column_sums.json\n\nExecution summary:\nCompleted: read 1 file(s); value sum=150, quantity sum=15. Saved /sandbox/workspace/data/output/column_sums.json.'}
+</FinalState>
+Test Case 3:
+<STDOUT+STDERR>
+Discovered 1 input file(s).
+Generated analysis code (3356 characters).
+Analysis execution completed with return code 0.
+Final answer created.
+
+</STDOUT+STDERR>
+Test Case 3:
+<ExecutionFlow>
+START -> ['DiscoverInputs'] -> ['GenerateAnalysisCode'] -> ['ExecuteAnalysis'] -> ['CreateFinalAnswer'] -> END
+</ExecutionFlow>
+
+<Metrics>
+Avg. Graph Iterations: 1.67
+Avg. Duration: 8.548 seconds
+Avg. LLM Calls: 1.0
+Avg. Tokens: 1542.67 (Input: 578.67, Output: 964.0)
 </Metrics>
 
 <ValidatorResult>
@@ -833,6 +780,4 @@ All 3 test cases passed successfully.
 
 The system passed 3/3 tests. A snapshot of the current system has been saved.
 The design process will now end automatically.
-
-Design completed.
-Metrics saved to /sandbox/workspace/generated_systems/metrics/DataAnalyst.json
+2026-09-01 11:26:39,630 [INFO] adas.run_meta: Design completed.

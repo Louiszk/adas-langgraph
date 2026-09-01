@@ -1,11 +1,13 @@
-from langgraph.graph import StateGraph, START, END
+from typing import Any, TypedDict
+
 from langchain_core.messages import HumanMessage, SystemMessage
-from typing import List, Any, TypedDict
+from langgraph.graph import END, START, StateGraph
+
 from adas_core.llm_wrapper import LargeLanguageModel
 
 
 class AgentState(TypedDict):
-    messages: List[Any]
+    messages: list[Any]
     claim: str
     prediction: str
 

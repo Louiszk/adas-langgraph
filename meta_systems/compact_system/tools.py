@@ -1,27 +1,29 @@
-import re
+import ast
+import contextlib
 import os
+import re
+import subprocess
 import sys
 import time
-import ast
-import dill as pickle
-import subprocess
 import traceback
-import contextlib
-from typing import Dict, List, Any, Optional
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
-from adas_core.llm_wrapper import LargeLanguageModel
-from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from adas_core.materialize import materialize_system
+from typing import Any, Literal
+
+import dill as pickle
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 from adas_core.decorator_logic import build_decorator_signatures
-from adas_core.helpers import get_filtered_packages, truncate_state, TruncatingStringIO
+from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
+from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
-from meta_systems.compact_system.utilities import test_reminder
+from adas_core.materialize import materialize_system
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_systems.compact_system.configurations import RECURSION_LIMIT
+from meta_systems.compact_system.utilities import test_reminder
 
 logger = get_logger("compact_system.tools")
 
 
-def ignored_nodes_message(ignored_nodes: List[ast.AST]) -> str:
+def ignored_nodes_message(ignored_nodes: list[ast.AST]) -> str:
     """Creates a formatted 'Note:' string for any AST nodes that were ignored by a tool."""
     if not ignored_nodes:
         return ""
@@ -56,7 +58,7 @@ def ignored_nodes_message(ignored_nodes: List[ast.AST]) -> str:
     return note
 
 
-def install_package(package_name: str, state: Dict[str, Any]) -> str:
+def install_package(package_name: str, state: dict[str, Any]) -> str:
     """
     Installs a Python package into the environment using pip.
     Args:
@@ -81,7 +83,7 @@ def install_package(package_name: str, state: Dict[str, Any]) -> str:
 
     if not re.match(valid_pattern, package_name):
         return f"ERROR: Invalid package name format. Package name '{package_name}' contains invalid characters."
-    if any((ep in package_name for ep in exclude_packages + ["langgraph", "langchain-core"])):
+    if any(ep in package_name for ep in exclude_packages + ["langgraph", "langchain-core"]):
         return f"{package_name} is already installed."
 
     # Parse package name to get the canonical name for `pip show`
@@ -127,10 +129,10 @@ def install_package(package_name: str, state: Dict[str, Any]) -> str:
             return f"ERROR: installing {package_name}:\n{process.stdout}"
 
     except Exception as e:
-        return f"ERROR: installing {package_name}: {str(e)}"
+        return f"ERROR: installing {package_name}: {e!s}"
 
 
-def set_imports(import_code: str, state: Dict[str, Any]) -> str:
+def set_imports(import_code: str, state: dict[str, Any]) -> str:
     """
     Sets the import statements for the target system. This replaces any existing custom imports.
     The Python code containing the import statements MUST be placed immediately after this decorator line.
@@ -156,10 +158,10 @@ def set_imports(import_code: str, state: Dict[str, Any]) -> str:
     except SyntaxError as e:
         return f"ERROR: Invalid Python syntax in imports block: {e}"
     except Exception as e:
-        return f"ERROR: setting imports: {repr(e)}"
+        return f"ERROR: setting imports: {e!r}"
 
 
-def set_state(state_code: str, state: Dict[str, Any]) -> str:
+def set_state(state_code: str, state: dict[str, Any]) -> str:
     """
     Defines the AgentState for the target system. This decorator should be used at the beginning of the design process.
     If called again, it will completely replace the previous AgentState definition.
@@ -196,155 +198,185 @@ def set_state(state_code: str, state: Dict[str, Any]) -> str:
     except SyntaxError as e:
         return f"ERROR: Invalid Python syntax in state definition block: {e}"
     except Exception as e:
-        return f"ERROR: during state setup: {repr(e)}"
+        return f"ERROR: during state setup: {e!r}"
 
 
-def upsert_component(
-    component_type: str,
+def _upsert_function(
     name: str,
     function_code: str,
-    description: Optional[str] = None,
-    state: Optional[Dict[str, Any]] = None,
+    description: str | None,
+    state: dict[str, Any] | None,
+    component_type: str,
+    path_map: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Creates a new component or updates an existing one in the target system.
-    Args:
-        component_type: The type of component. Must be one of: 'node', 'tool', or 'router'.
-        name: The unique name for the component. For a router, this must be the name of the source node it attaches to.
-        description: A description of the component's purpose. This is required when creating a new component.
-
-    The Python code defining the component's function (e.g., `def my_node(state): ...`) MUST be placed immediately after this decorator line.
-    """
+    """Shared implementation for dedicated node, tool, and conditional-edge upserts."""
     if state is None:
         return "ERROR: state is required"
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
     try:
-        if component_type.lower() not in ["node", "tool", "router"]:
-            return f"ERROR: Invalid component type '{component_type}'. Must be 'node', 'tool', or 'router'."
-
         if not function_code:
             return "ERROR: You must provide the function implementation below the decorator."
+        if component_type == "conditional edge" and not path_map:
+            return "ERROR: Conditional edges require a non-empty explicit path_map."
 
-        func, parsed_function_code = target_agentic_system.get_function(function_code, component_type)
+        function_kind = "conditional_edge" if component_type == "conditional edge" else component_type
+        func, parsed_function_code = target_agentic_system.get_function(function_code, function_kind)
         if parsed_function_code.startswith("ERROR:"):
             return parsed_function_code
         if func is None:
             return "ERROR: Could not parse a valid function from the provided code."
 
-        # Check if component exists
-        component_exists = False
-        if component_type.lower() == "node":
-            component_exists = name in target_agentic_system.nodes
-        elif component_type.lower() == "tool":
-            component_exists = name in target_agentic_system.tools
-        elif component_type.lower() == "router":
+        if component_type == "conditional edge":
             component_exists = name in target_agentic_system.conditional_edges
-
-        if not component_exists and not description:
+        else:
+            component_exists = name in getattr(target_agentic_system, f"{component_type}s")
+        if component_type != "conditional edge" and not component_exists and not description:
             return f"ERROR: Description required when creating a new {component_type}"
-
-        if component_exists and not description:
-            if component_type.lower() == "node" and name in target_agentic_system.nodes:
-                description = target_agentic_system.nodes[name].get("description", "")
-            elif component_type.lower() == "tool" and name in target_agentic_system.tools:
-                description = target_agentic_system.tools[name].get("description", "")
+        if component_exists and not description and component_type != "conditional edge":
+            description = getattr(target_agentic_system, f"{component_type}s")[name].get("description", "")
 
         action = "updated" if component_exists else "created"
-
-        action_taken = False
-        safe_description = description or ""
-        if component_type.lower() == "node":
-            action_taken = target_agentic_system.create_node(name, safe_description, func, parsed_function_code)
-        elif component_type.lower() == "tool":
-            action_taken = target_agentic_system.create_tool(name, safe_description, func, parsed_function_code)
-        elif component_type.lower() == "router":
-            action_taken = target_agentic_system.create_conditional_edge(name, func, parsed_function_code)
+        if component_type == "node":
+            action_taken = target_agentic_system.create_node(name, description or "", func, parsed_function_code)
+        elif component_type == "tool":
+            action_taken = target_agentic_system.create_tool(name, description or "", func, parsed_function_code)
+        else:
+            action_taken = target_agentic_system.create_conditional_edge(name, func, parsed_function_code, path_map)
 
         if action_taken:
             return f"{component_type.capitalize()} '{name}' was {action} successfully."
-        else:
-            return f"WARNING: Your submitted code for the {component_type.lower()} '{name}' is identical to the existing code. **No update was performed.**"
-
+        return f"WARNING: Your submitted {component_type} '{name}' is identical to the existing one. **No update was performed.**"
     except Exception as e:
-        return f"ERROR: with {component_type} '{name}': {repr(e)}"
+        return f"ERROR: with {component_type} '{name}': {e!r}"
 
 
-def delete_component(component_type: str, name: str, state: Dict[str, Any]) -> str:
+def _validate_action(action: str) -> str | None:
+    if action not in {"create", "update", "delete"}:
+        return "ERROR: action must be one of: 'create', 'update', or 'delete'."
+    return None
+
+
+def _manage_function(
+    action: str,
+    name: str,
+    function_code: str | None,
+    description: str | None,
+    state: dict[str, Any] | None,
+    component_type: str,
+    path_map: dict[str, str] | None = None,
+) -> str:
+    """Apply strict lifecycle semantics for one domain-specific system object."""
+    if error := _validate_action(action):
+        return error
+    if state is None:
+        return "ERROR: state is required"
+
+    target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
+    if component_type == "conditional edge":
+        exists = name in target_agentic_system.conditional_edges
+    else:
+        exists = name in getattr(target_agentic_system, f"{component_type}s")
+
+    if action == "delete":
+        return _delete_named_item(name, state, component_type)
+    if action == "create" and exists:
+        return f"ERROR: {component_type.capitalize()} '{name}' already exists. Use action='update' instead."
+    if action == "update" and not exists:
+        return f"ERROR: {component_type.capitalize()} '{name}' does not exist. Use action='create' instead."
+    if not function_code:
+        return f"ERROR: {component_type.capitalize()} creation and updates require function code."
+    if component_type != "conditional edge" and action == "create" and not description:
+        return f"ERROR: Description is required when creating a {component_type}."
+    if component_type == "conditional edge" and not path_map:
+        return "ERROR: Conditional-edge creation and updates require a non-empty explicit path_map."
+
+    return _upsert_function(name, function_code, description, state, component_type, path_map)
+
+
+def manage_node(
+    action: Literal["create", "update", "delete"],
+    name: str,
+    function_code: str | None = None,
+    description: str | None = None,
+    state: dict[str, Any] | None = None,
+) -> str:
+    """Creates, updates, or deletes a node; function code follows create and update calls."""
+    return _manage_function(action, name, function_code, description, state, "node")
+
+
+def manage_tool(
+    action: Literal["create", "update", "delete"],
+    name: str,
+    function_code: str | None = None,
+    description: str | None = None,
+    state: dict[str, Any] | None = None,
+) -> str:
+    """Creates, updates, or deletes a tool; function code follows create and update calls."""
+    return _manage_function(action, name, function_code, description, state, "tool")
+
+
+def manage_conditional_edge(
+    action: Literal["create", "update", "delete"],
+    source: str,
+    path_map: dict[str, str] | None = None,
+    function_code: str | None = None,
+    state: dict[str, Any] | None = None,
+) -> str:
+    """Creates, updates, or deletes the conditional edge attached to a source node."""
+    return _manage_function(action, source, function_code, None, state, "conditional edge", path_map)
+
+
+def _delete_named_item(name: str, state: dict[str, Any], component_type: str) -> str:
     """
-    Deletes a component from the target system.
-    Args:
-        component_type: The type of component to delete. Must be one of: 'node', 'tool', or 'router'.
-        name: The name of the component to delete. For a router, this is the name of its source node.
+    Deletes a named node, tool, or conditional edge from the target system.
     """
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
     try:
-        if component_type.lower() not in ["node", "tool", "router"]:
-            return f"ERROR: Invalid component type '{component_type}'. Must be 'node', 'tool', or 'router'."
-
-        deleted = False
-        if component_type.lower() == "node":
-            deleted = target_agentic_system.delete_node(name)
-        elif component_type.lower() == "tool":
-            deleted = target_agentic_system.delete_tool(name)
-        elif component_type.lower() == "router":
-            deleted = target_agentic_system.delete_conditional_edge(name)
-
-        if deleted:
+        delete_method = getattr(target_agentic_system, f"delete_{component_type.replace(' ', '_')}")
+        if delete_method(name):
             return f"{component_type.capitalize()} '{name}' deleted successfully."
-        else:
-            return f"WARNING: No {component_type} named '{name}' found to delete. No change was made."
+        return f"WARNING: No {component_type} named '{name}' found to delete. No change was made."
     except Exception as e:
-        return f"ERROR: deleting {component_type} '{name}': {repr(e)}"
+        return f"ERROR: deleting {component_type} '{name}': {e!r}"
 
 
-def add_edge(source: str, target: str, state: Dict[str, Any]) -> str:
-    """
-    Adds a standard (unconditional) edge between nodes in the target system.
-    Args:
-        source: Name of the source node (or START)
-        target: Name of the target node (or END)
-    """
+def manage_edge(action: Literal["create", "delete"], source: str, target: str, state: dict[str, Any]) -> str:
+    """Creates or deletes a standard edge; changing endpoints requires delete then create."""
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
+    if action not in {"create", "delete"}:
+        return "ERROR: Edge action must be either 'create' or 'delete'."
     try:
-        if target_agentic_system.create_edge(source, target):
-            return f"Edge from '{source}' to '{target}' added successfully."
-        else:
-            return f"WARNING: Edge from '{source}' to '{target}' already exists. No change was made."
-    except Exception as e:
-        return f"ERROR: adding edge: {repr(e)}"
-
-
-def delete_edge(source: str, target: str, state: Dict[str, Any]) -> str:
-    """
-    Deletes a standard (unconditional) edge between nodes in the target system.
-    Args:
-        source: Name of the source node (or START)
-        target: Name of the target node (or END)
-    """
-    target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
-    try:
+        if action == "create":
+            if target_agentic_system.create_edge(source, target):
+                return f"Edge from '{source}' to '{target}' created successfully."
+            return f"WARNING: Edge from '{source}' to '{target}' already exists."
         if target_agentic_system.delete_edge(source, target):
             return f"Edge from '{source}' to '{target}' deleted successfully."
-        else:
-            return f"WARNING: No edge from '{source}' to '{target}' found to delete. No change was made."
+        return f"WARNING: Edge from '{source}' to '{target}' does not exist."
     except Exception as e:
-        return f"ERROR: deleting edge: {repr(e)}"
+        operation = "creating" if action == "create" else "deleting"
+        return f"ERROR: {operation} edge from '{source}' to '{target}': {e!r}"
 
 
-def upsert_utilities(utility_code: str, state: Dict[str, Any]) -> str:
-    """
-    Adds or updates helper constants, functions, or classes at the top of the main system file.
-    This is the ideal place for defining system prompts, custom reducer functions, or helper classes.
-    If a constant, function, or class with the same name already exists, it will be replaced.
-    The Python code defining the utility components MUST be placed immediately after this decorator line.
-    """
-    if not utility_code:
-        return "ERROR: You must provide the utility code below the decorator."
-
+def manage_utilities(
+    action: Literal["create", "update", "delete"],
+    utility_code: str | None = None,
+    definitions: list[dict[str, str]] | None = None,
+    state: dict[str, Any] | None = None,
+) -> str:
+    """Creates, updates, or deletes typed utility definitions."""
+    if state is None:
+        return "ERROR: state is required"
+    if action not in {"create", "update", "delete"}:
+        return "ERROR: Utility action must be one of: 'create', 'update', or 'delete'."
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
+    if action == "delete":
+        return target_agentic_system.delete_utility_definitions(definitions or [])
+    if not utility_code:
+        return f"ERROR: Utility {action} requires utility code below the decorator."
+
     imports_found = []
     ignored_nodes = []
-
     try:
         tree = ast.parse(utility_code)
         for node in tree.body:
@@ -354,18 +386,15 @@ def upsert_utilities(utility_code: str, state: Dict[str, Any]) -> str:
                 ignored_nodes.append(node)
 
         target_agentic_system.imports.extend(target_agentic_system.deduplicate_imports(imports_found))
-
         main_message = target_agentic_system.upsert_utility_code(utility_code)
-        note = ignored_nodes_message(ignored_nodes)
-        return f"{main_message}{note}"
-
+        return f"{main_message}{ignored_nodes_message(ignored_nodes)}"
     except SyntaxError as e:
         return f"ERROR: Invalid Python syntax in utility code block: {e}"
     except Exception as e:
-        return f"ERROR: updating utilities: {repr(e)}"
+        return f"ERROR: {action}ing utilities: {e!r}"
 
 
-def test_system(state: Dict[str, Any]) -> str:
+def test_system(state: dict[str, Any]) -> str:
     """
     Executes the current target system with predefined test input states to validate its functionality.
     This tool is essential for debugging. It provides a detailed report including the final state,
@@ -419,7 +448,7 @@ def test_system(state: Dict[str, Any]) -> str:
                     all_test_cases.extend(cases)
                     all_validator_funcs.append(validator)
             except Exception as e_snippet:
-                logger.error(f"Failed to parse a validation code snippet: {repr(e_snippet)}")
+                logger.error(f"Failed to parse a validation code snippet: {e_snippet!r}")
 
         num_tests = len(all_test_cases)
 
@@ -435,7 +464,7 @@ def test_system(state: Dict[str, Any]) -> str:
             test_case_id = f"Test Case {i + 1}"
             final_test_case_id = test_case_id
             current_test_final_state = {}
-            execution_flow: List[Any] = ["START"]
+            execution_flow: list[Any] = ["START"]
 
             purge_command = "rm -rf /sandbox/workspace/data/output && mkdir -p /sandbox/workspace/data/output"
             subprocess.run(purge_command, shell=True, check=False)
@@ -475,7 +504,7 @@ def test_system(state: Dict[str, Any]) -> str:
                     except Exception as e_validation:
                         is_pass, message = (
                             False,
-                            f"ERROR: executing validation function for {test_case_id}: {repr(e_validation)}",
+                            f"ERROR: executing validation function for {test_case_id}: {e_validation!r}",
                         )
 
                     if is_pass:
@@ -493,7 +522,7 @@ def test_system(state: Dict[str, Any]) -> str:
 
                 except Exception as e_test_case:
                     execution_flow.append("... -> FAILED_DURING_EXECUTION")
-                    e_message = f"ERROR: during {test_case_id} execution: {repr(e_test_case)}"
+                    e_message = f"ERROR: during {test_case_id} execution: {e_test_case!r}"
 
                     if "GraphRecursionError" in repr(e_test_case):
                         e_message += " The TargetSystem hit the 20 iteration recursion limit during the test case."
@@ -517,7 +546,9 @@ def test_system(state: Dict[str, Any]) -> str:
             for index, flow_step in enumerate(execution_flow):
                 if isinstance(flow_step, list) and len(flow_step) > 1:
                     parallel_index, paths = max(index - 1, 0), len(flow_step)
-                    parallel_processing_note = f"\nNote: Node {str(execution_flow[parallel_index])} introduced {paths} parallel execution paths."
+                    parallel_processing_note = (
+                        f"\nNote: Node {execution_flow[parallel_index]!s} introduced {paths} parallel execution paths."
+                    )
                     break
             if not all_tests_passed_overall:
                 break
@@ -628,7 +659,7 @@ def test_system(state: Dict[str, Any]) -> str:
     return final_test_output
 
 
-def end_design(state: Dict[str, Any]) -> str:
+def end_design(state: dict[str, Any]) -> str:
     """
     Signals that the design process is complete and ends the session. Use this only when the system has been successfully tested.
     """
@@ -647,8 +678,10 @@ def end_design(state: Dict[str, Any]) -> str:
 code_related_tools = {
     "set_imports": "import_code",
     "set_state": "state_code",
-    "upsert_component": "function_code",
-    "upsert_utilities": "utility_code",
+    "manage_node": "function_code",
+    "manage_tool": "function_code",
+    "manage_conditional_edge": "function_code",
+    "manage_utilities": "utility_code",
 }
 
 # Build signatures
@@ -656,11 +689,11 @@ available_tools = [
     install_package,
     set_imports,
     set_state,
-    upsert_component,
-    delete_component,
-    add_edge,
-    delete_edge,
-    upsert_utilities,
+    manage_node,
+    manage_tool,
+    manage_conditional_edge,
+    manage_edge,
+    manage_utilities,
     test_system,
     end_design,
 ]

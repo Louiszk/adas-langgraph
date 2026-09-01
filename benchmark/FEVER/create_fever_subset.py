@@ -1,9 +1,10 @@
 # https://fever.ai/dataset/fever.html
 import json
-import random
 import os
+import random
 from collections import defaultdict
-from adas_core.logging_config import setup_logging, get_logger
+
+from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("create_fever_subset")
 

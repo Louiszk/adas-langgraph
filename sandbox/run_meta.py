@@ -1,14 +1,15 @@
+import json
 import os
 import sys
-import json
-import dill as pickle
 import time
-from typing import Optional, cast, Any
+from typing import Any, cast
+
+import dill as pickle
 
 sys.path.append("/sandbox/workspace")
-from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from adas_core.llm_wrapper import LargeLanguageModel
-from adas_core.logging_config import setup_logging, get_logger
+from adas_core.logging_config import get_logger, setup_logging
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from materialized_meta_system import MetaSystem  # type: ignore
 
 logger = get_logger("run_meta")
@@ -49,7 +50,7 @@ def main():
     metrics["problem_statement"] = problem_statement
     logger.info(f"Running meta system for '{system_name}'...")
 
-    target_agentic_system: Optional[VirtualAgenticSystem] = None
+    target_agentic_system: VirtualAgenticSystem | None = None
 
     try:
         if optimize_from_file:
@@ -96,10 +97,10 @@ def main():
 
                         processed_msg_count = len(messages)
 
-                if "validation_code_snippets" in out and out["validation_code_snippets"]:
+                if out.get("validation_code_snippets"):
                     metrics["validation_code_snippets"] = out["validation_code_snippets"]
 
-                if "design_completed" in out and out["design_completed"]:
+                if out.get("design_completed"):
                     logger.info("Design completed.")
                     metrics["status"] = "completed"
 
@@ -109,7 +110,7 @@ def main():
         import traceback
 
         error_traceback = traceback.format_exc()
-        logger.error(f"Error running meta system: {str(e)}\n{error_traceback}")
+        logger.error(f"Error running meta system: {e!s}\n{error_traceback}")
 
         metrics["status"] = "error"
         metrics["error"] = {"message": repr(e), "traceback": error_traceback}
@@ -133,7 +134,7 @@ def main():
                 if hasattr(final_system_object, "installed_packages") and final_system_object.installed_packages:
                     metrics["installed_packages"] = " ".join(final_system_object.installed_packages.values())
             except Exception as e:
-                logger.warning(f"Could not read installed packages from final system pickle: {repr(e)}")
+                logger.warning(f"Could not read installed packages from final system pickle: {e!r}")
 
         metrics_file = f"{metrics_dir}/{escaped_name}.json"
         with open(metrics_file, "w") as f:

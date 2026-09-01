@@ -1,9 +1,10 @@
+import importlib
 import sys
 import time
-import importlib
-from typing import Dict
+
+from adas_core.logging_config import get_logger, setup_logging
+from adas_core.llm_wrapper import LargeLanguageModel
 from benchmark.benchmark_base import run_benchmark_parallel
-from adas_core.logging_config import setup_logging, get_logger
 
 logger = get_logger("run_fever_bench")
 
@@ -17,10 +18,9 @@ except ImportError:
     logger.warning("Wikipedia library not installed")
 
 sys.path.append("/sandbox/workspace")
-from adas_core.llm_wrapper import LargeLanguageModel  # noqa: E402
 
 
-def execute_problem(problem_item: Dict, system_path: str) -> Dict:
+def execute_problem(problem_item: dict, system_path: str) -> dict:
     time.sleep(0.2)
     start_time = time.time()
 
@@ -46,7 +46,7 @@ def execute_problem(problem_item: Dict, system_path: str) -> Dict:
         is_correct = predicted == expected
 
     except Exception as e:
-        predicted = f"Exception: {repr(e)}"
+        predicted = f"Exception: {e!r}"
         is_correct = False
 
     finally:
@@ -67,7 +67,7 @@ def execute_problem(problem_item: Dict, system_path: str) -> Dict:
         }
 
 
-def custom_results_init(results: Dict):
+def custom_results_init(results: dict):
     results["label_metrics"] = {
         "SUPPORTS": {"true": 0, "false": 0, "total": 0},
         "REFUTES": {"true": 0, "false": 0, "total": 0},
@@ -75,7 +75,7 @@ def custom_results_init(results: Dict):
     }
 
 
-def custom_results_update(results: Dict, result_info: Dict):
+def custom_results_update(results: dict, result_info: dict):
     expected_label = result_info["expected"]
     is_correct = result_info["is_correct"]
     if expected_label in results["label_metrics"]:
@@ -86,7 +86,7 @@ def custom_results_update(results: Dict, result_info: Dict):
             results["label_metrics"][expected_label]["false"] += 1
 
 
-def custom_results_finalize(results: Dict):
+def custom_results_finalize(results: dict):
     for label in results["label_metrics"]:
         label_total = results["label_metrics"][label]["total"]
         results["label_metrics"][label]["accuracy"] = (
@@ -94,7 +94,7 @@ def custom_results_finalize(results: Dict):
         )
 
 
-def custom_print_summary(results: Dict):
+def custom_print_summary(results: dict):
     logger.info("--- Per-label Performance ---")
     for label, metrics in results["label_metrics"].items():
         if metrics["total"] > 0:

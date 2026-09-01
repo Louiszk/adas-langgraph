@@ -1,10 +1,12 @@
-from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import HumanMessage, SystemMessage
-from typing import List, TypedDict, Dict, Annotated
-from adas_core.llm_wrapper import LargeLanguageModel
-import re
 import operator
 import random
+import re
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+
+from adas_core.llm_wrapper import LargeLanguageModel
 
 voter_prompt = """
 You are a Computer Science expert solving multiple-choice questions.
@@ -44,10 +46,10 @@ Example: The correct answer is X
 
 class AgentState(TypedDict):
     question: str
-    options: List[str]
+    options: list[str]
     solution: str
-    subsets: List[List[int]]
-    voter_outputs: Annotated[List[Dict[str, str]], operator.add]
+    subsets: list[list[int]]
+    voter_outputs: Annotated[list[dict[str, str]], operator.add]
 
 
 graph = StateGraph(AgentState)
@@ -66,7 +68,7 @@ def create_subsets_node(state):
     return {"subsets": [subset_1, subset_2, indices, indices]}
 
 
-def run_voter(state: AgentState, subset_index: int, voter_name: str) -> Dict[str, str]:
+def run_voter(state: AgentState, subset_index: int, voter_name: str) -> dict[str, str]:
     options_list = state["options"]
     target_indices = state["subsets"][subset_index]
     all_letters = [chr(65 + i) for i in range(len(options_list))]

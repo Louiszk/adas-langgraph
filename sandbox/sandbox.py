@@ -1,9 +1,11 @@
-import os
 import codecs
 import glob
-from config import settings
-from llm_sandbox import create_session, SandboxBackend
+import os
+
+from llm_sandbox import SandboxBackend, create_session
+
 from adas_core.logging_config import get_logger
+from config import settings
 
 logger = get_logger("sandbox")
 
@@ -90,7 +92,7 @@ class StreamingSandboxSession:
         try:
             return self.session.copy_to_runtime(src, dest)
         except Exception as e:
-            logger.error(f"Exception during copying to runtime: {repr(e)}")
+            logger.error(f"Exception during copying to runtime: {e!r}")
             return None
 
     def copy_from_runtime(self, src, dest):

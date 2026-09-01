@@ -3,25 +3,26 @@ Specification and contract tests for core helper utilities.
 """
 
 from langchain_core.messages import AIMessage
+
 from adas_core.helpers import (
-    validate_node_router_signature,
     clean_messages,
     truncate_state,
+    validate_node_conditional_edge_signature,
 )
 
 
-class TestNodeRouterSignatureValidation:
+class TestNodeConditionalEdgeSignatureValidation:
     def test_valid_signature_with_state_param(self):
         """Contract: Functions accepting exactly 'state' positional argument are valid."""
         valid_code = "def my_node(state: dict) -> dict:\n    return state"
-        is_valid, err = validate_node_router_signature(valid_code)
+        is_valid, err = validate_node_conditional_edge_signature(valid_code)
         assert is_valid is True
         assert err is None
 
     def test_invalid_param_name(self):
         """Contract: Functions accepting a parameter not named 'state' must be rejected."""
         invalid_code = "def my_node(ctx: dict) -> dict:\n    return ctx"
-        is_valid, err = validate_node_router_signature(invalid_code)
+        is_valid, err = validate_node_conditional_edge_signature(invalid_code)
         assert is_valid is False
         assert err is not None
         assert "Expected the positional argument to be named 'state'" in err
@@ -34,7 +35,7 @@ class TestNodeRouterSignatureValidation:
             "def my_node(state, **kwargs):\n    pass",
         ]
         for c in codes:
-            is_valid, err = validate_node_router_signature(c)
+            is_valid, err = validate_node_conditional_edge_signature(c)
             assert is_valid is False
             assert err is not None
 

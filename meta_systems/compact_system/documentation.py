@@ -8,12 +8,12 @@ agentic_system_documentation = """
      `messages: Annotated[List[AnyMessage], add_messages]`
    - Any extra custom state keys must be declared in `AgentState` before use.
 
-2. **Node and Router Signatures**:
-   - **Strict Rule**: EVERY node and router function MUST accept **exactly one** argument named `state`.
+2. **Node and Conditional-Edge Function Signatures**:
+   - **Strict Rule**: EVERY node and conditional-edge function MUST accept **exactly one** argument named `state`.
      - Node Signature: `def my_node(state: AgentState) -> dict:`
-     - Router Signature: `def my_router(state: AgentState) -> str | List[str]:`
+     - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
    - Nodes return a dictionary containing state keys to update (e.g., `{"final_answer": "42"}`).
-   - Routers return the name of the next node(s) to run, or `END`. Returning a `List[str]` triggers parallel branches.
+   - Conditional-edge functions return a pathmap key for the next node(s) to run, or `END`. Returning a `List[str]` triggers parallel branches.
 
 3. **Graph Endpoint Markers**:
    - Use `START` and `END` from `langgraph.graph` as workflow entry/exit markers.

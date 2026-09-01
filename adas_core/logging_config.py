@@ -1,12 +1,11 @@
 import logging
 import sys
-from typing import Optional
 
 
 def setup_logging(
     level: int = logging.INFO,
-    log_file: Optional[str] = None,
-    format_str: Optional[str] = None,
+    log_file: str | None = None,
+    format_str: str | None = None,
 ) -> logging.Logger:
     """Configures and returns the root framework logger."""
     if format_str is None:

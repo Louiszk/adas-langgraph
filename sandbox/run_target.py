@@ -1,15 +1,16 @@
-import os
-import json
-import time
 import argparse
-import importlib
 import datetime
-from typing import Dict, Any
+import importlib
+import json
+import os
+import time
+from typing import Any
+
 from langgraph.graph.state import CompiledStateGraph
 
 # Import the LLM wrapper to access usage metrics
 from adas_core.llm_wrapper import LargeLanguageModel
-from adas_core.logging_config import setup_logging, get_logger
+from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("run_target")
 
@@ -43,7 +44,7 @@ def main() -> None:
     start_time = time.time()
     step_counter = 0
 
-    metrics: Dict[str, Any] = {
+    metrics: dict[str, Any] = {
         "system_name": args.system_name,
         "run_id": args.run_id,
         "status": "started",
@@ -60,7 +61,7 @@ def main() -> None:
 
     try:
         try:
-            initial_state: Dict[str, Any] = json.loads(args.state)
+            initial_state: dict[str, Any] = json.loads(args.state)
             metrics["initial_state"] = initial_state
         except json.JSONDecodeError:
             logger.warning("Warning: Invalid JSON for --state argument. Using an empty state {}.")

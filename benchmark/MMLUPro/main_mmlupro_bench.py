@@ -1,10 +1,10 @@
-import os
 import argparse
+import os
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from adas_core.logging_config import get_logger, setup_logging
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
-from adas_core.logging_config import setup_logging, get_logger
 
 logger = get_logger("main_mmlupro_bench")
 
@@ -102,7 +102,7 @@ def main():
             logger.error("Failed to set up sandbox environment")
 
     except Exception as e:
-        logger.exception(f"Error during benchmark execution: {str(e)}")
+        logger.exception(f"Error during benchmark execution: {e!s}")
     finally:
         logger.info("Closing session...")
         session.close()

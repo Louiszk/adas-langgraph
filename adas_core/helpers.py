@@ -1,12 +1,13 @@
-from typing import List, Optional, Tuple, Any, Dict
-from langchain_core.messages import AIMessage, HumanMessage
-import subprocess
 import ast
 import io
 import re
+import subprocess
+from typing import Any
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 
-def get_filtered_packages(exclude_packages: Optional[List[str]] = None) -> List[str]:
+def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str]:
     if exclude_packages is None:
         exclude_packages = []
 
@@ -25,9 +26,9 @@ def get_filtered_packages(exclude_packages: Optional[List[str]] = None) -> List[
     return packages
 
 
-def validate_node_router_signature(function_code: str) -> Tuple[bool, Optional[str]]:
+def validate_node_conditional_edge_signature(function_code: str) -> tuple[bool, str | None]:
     """
-    Validates the signature of a node or router function.
+    Validates the signature of a node or conditional-edge function.
     It should accept exactly one argument named 'state'.
     """
 
@@ -73,7 +74,7 @@ def validate_node_router_signature(function_code: str) -> Tuple[bool, Optional[s
 
         return (
             False,
-            f"Invalid signature for '{func_def_node.name}'. Nodes and Routers must accept exactly one argument named 'state'. Issues: {' '.join(error_parts)}",
+            f"Invalid signature for '{func_def_node.name}'. Nodes and conditional-edge functions must accept exactly one argument named 'state'. Issues: {' '.join(error_parts)}",
         )
 
 
@@ -94,7 +95,7 @@ class TruncatingStringIO(io.StringIO):
         return super().write(s)
 
 
-def clean_messages(messages: List[Any]) -> List[Any]:
+def clean_messages(messages: list[Any]) -> list[Any]:
     allowed_attributes = {"type", "content", "tool_calls", "invalid_tool_calls"}
     allowed_tool_call_keys = {"name", "args"}
 
@@ -123,7 +124,7 @@ def clean_messages(messages: List[Any]) -> List[Any]:
     return messages
 
 
-def truncate_state(state: Dict[str, Any], max_chars: int = 1200) -> Optional[Dict[str, Any]]:
+def truncate_state(state: dict[str, Any], max_chars: int = 1200) -> dict[str, Any] | None:
     if not state:
         return None
 

@@ -11,9 +11,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
-from adas_core.logging_config import setup_logging, get_logger
+from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("orchestrator")
 
@@ -28,7 +28,7 @@ except ImportError:
 class ContainerManager:
     """Manages Docker/Podman base images, builder containers, and temporary images."""
 
-    def __init__(self, container_type: str = "auto", unique_id: Optional[str] = None):
+    def __init__(self, container_type: str = "auto", unique_id: str | None = None):
         self.container_type = container_type
         self.unique_id = unique_id or str(random.randint(10000, 99999))
         self.client = self._init_client()
@@ -71,7 +71,7 @@ class ContainerManager:
         self,
         base_image_name: str,
         builder_image: str = "python:3.11-slim",
-        core_packages: Optional[List[str]] = None,
+        core_packages: list[str] | None = None,
     ) -> bool:
         """Create a custom base image with core dependencies installed if it does not exist."""
         if core_packages is None:
@@ -121,7 +121,7 @@ class ContainerManager:
 
         return self._create_base_image_cli(base_image_name, builder_image, core_packages)
 
-    def _create_base_image_cli(self, base_image_name: str, builder_image: str, core_packages: List[str]) -> bool:
+    def _create_base_image_cli(self, base_image_name: str, builder_image: str, core_packages: list[str]) -> bool:
         cli = self._get_cli_cmd()
         cid_name = f"adas-builder-{self.unique_id}"
         subprocess.run([cli, "pull", builder_image], stdout=subprocess.DEVNULL, check=False)
@@ -151,7 +151,7 @@ class ContainerManager:
         logger.info("Custom base image created successfully via CLI.")
         return True
 
-    def create_temp_image(self, base_image_name: str, temp_image_name: str, packages: List[str]) -> bool:
+    def create_temp_image(self, base_image_name: str, temp_image_name: str, packages: list[str]) -> bool:
         """Create a temporary image with additional packages installed on top of the base image."""
         if not packages:
             return True
@@ -256,7 +256,7 @@ class DependencyParser:
     """Parses dependencies from generated system metrics files natively without jq."""
 
     @staticmethod
-    def get_installed_packages(metrics_file: Union[str, Path]) -> List[str]:
+    def get_installed_packages(metrics_file: str | Path) -> list[str]:
         """Extract installed_packages from a JSON metrics file.
 
         Supports both list format (e.g. ['pkg1', 'pkg2']) and space-delimited string format.
@@ -285,11 +285,11 @@ class ExecutionManager:
 
     @staticmethod
     def run_command(
-        cmd: List[str],
+        cmd: list[str],
         timeout: int = 1200,
-        log_file: Optional[Union[str, Path]] = None,
-        cwd: Optional[Union[str, Path]] = None,
-    ) -> Dict[str, Any]:
+        log_file: str | Path | None = None,
+        cwd: str | Path | None = None,
+    ) -> dict[str, Any]:
         """Execute a Python module/command with native timeout handling."""
         log_path = Path(log_file) if log_file else None
         if log_path and log_path.parent:
@@ -359,13 +359,13 @@ class ExecutionManager:
 class ResultAggregator:
     """Aggregates experiment results into CSV summaries and human-readable reports."""
 
-    def __init__(self, results_dir: Union[str, Path]):
+    def __init__(self, results_dir: str | Path):
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def export_summary_csv(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         filename: str = "results_summary.csv",
     ) -> Path:
         """Export experiment records to a standard CSV file."""
@@ -382,7 +382,7 @@ class ResultAggregator:
     def export_summary_txt(
         self,
         job_id: str,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         filename: str = "test_summary.txt",
     ) -> Path:
         """Export a human-readable text summary."""
@@ -430,7 +430,7 @@ class Orchestrator:
             self.container_manager.cleanup_job_resources(self.base_image_name)
 
     @staticmethod
-    def _parse_iterations(iterations_val: str) -> List[str]:
+    def _parse_iterations(iterations_val: str) -> list[str]:
         if not iterations_val:
             return ["1"]
         if "," in iterations_val:
@@ -443,7 +443,7 @@ class Orchestrator:
         return [iterations_val.strip()]
 
     @staticmethod
-    def _get_benchmark_info(benchmark: str) -> Tuple[str, str]:
+    def _get_benchmark_info(benchmark: str) -> tuple[str, str]:
         bench_lower = benchmark.lower()
         if bench_lower in ("gsm", "gsmhard"):
             return "GSMHard", "gsmhard"
@@ -460,7 +460,7 @@ class Orchestrator:
             return 1
 
         aggregator = ResultAggregator(self.results_dir)
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         overall_exit = 0
 
         iterations = self._parse_iterations(getattr(self.args, "iterations", "1"))
@@ -673,7 +673,7 @@ class Orchestrator:
         return overall_exit
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments supporting both positional subcommand and --task flag."""
     parser = argparse.ArgumentParser(description="Unified Python orchestrator for ADAS container and job management.")
     parser.add_argument(
@@ -722,7 +722,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return args
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entrypoint for the orchestrator."""
     setup_logging()
     args = parse_args(argv)

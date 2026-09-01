@@ -1,14 +1,14 @@
+import importlib
 import sys
 import time
-import importlib
-from typing import Dict
+
 from benchmark.benchmark_base import run_benchmark_parallel
 
 sys.path.append("/sandbox/workspace")
 from adas_core.llm_wrapper import LargeLanguageModel
 
 
-def execute_problem(problem_item: Dict, system_path: str) -> Dict:
+def execute_problem(problem_item: dict, system_path: str) -> dict:
     start_time = time.time()
 
     LargeLanguageModel.usage_metrics["target_usage"]["overall"] = {
@@ -38,7 +38,7 @@ def execute_problem(problem_item: Dict, system_path: str) -> Dict:
         is_correct = predicted == expected
 
     except Exception as e:
-        predicted = f"Exception: {repr(e)}"
+        predicted = f"Exception: {e!r}"
         is_correct = False
 
     finally:
@@ -62,6 +62,7 @@ def execute_problem(problem_item: Dict, system_path: str) -> Dict:
 
 if __name__ == "__main__":
     import argparse
+
     from adas_core.logging_config import setup_logging
 
     setup_logging()

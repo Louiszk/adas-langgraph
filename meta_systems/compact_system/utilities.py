@@ -1,6 +1,7 @@
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
-from adas_core.llm_wrapper import LargeLanguageModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 from adas_core.decorator_logic import find_code_blocks
+from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 
 logger = get_logger("compact_system.utilities")
@@ -136,7 +137,7 @@ Using these decorators is the only way to design the system. Always enclose them
 @@test_system()
 ```
 
-**For code-related decorators (`@@set_imports`, `@@set_state`, `@@upsert_component`, `@@upsert_utilities`), provide the Python code directly *after* the decorator line, within the same markdown block:**
+**For code-related decorators (`@@set_imports`, `@@set_state`, `@@manage_node`, `@@manage_tool`, `@@manage_conditional_edge`, `@@manage_utilities`), provide Python code directly after create or update calls, within the same markdown block. Delete calls need no code:**
 
 Example for `@@set_imports`:
 ```python
@@ -153,34 +154,49 @@ class AgentState(TypedDict):
     # ... other state attributes
 ```
 
-Example for `@@upsert_component`:
+Example for `@@manage_node`:
 ```python
-@@upsert_component(component_type="node", name="MyNode", description="This is my custom node")
+@@manage_node(action="create", name="MyNode", description="This is my custom node")
 def node_function(state: dict) -> dict:
     # ... node implementation
 ```
 
-Example for `@@upsert_utilities`:
+Example for `@@manage_utilities`:
 ```python
-@@upsert_utilities()
+@@manage_utilities(action="create")
 AGENT1_SYSTEM_PROMPT = '''You are an expert...'''
 
 def my_helper_function(input_list: List[str]) -> str:
     # ... helper implementation
 ```
 
-For routers (conditional edges), use `@@upsert_component` with `component_type="router"`. The `name` argument MUST be the name of the source node for the conditional edge.
+Use `@@manage_node`, `@@manage_tool`, and `@@manage_conditional_edge` with `action="create"`, `"update"`, or `"delete"`. Create requires a missing item; update requires an existing item; delete may target a missing item and returns a warning. The `source` argument identifies a conditional edge. Create and update conditional edges MUST include a non-empty explicit `path_map` mapping every condition-function return value to its destination node (or `END`).
 ```python
-@@upsert_component(component_type="router", name="SourceNodeName", description="Routes based on a condition")
-def router_source_node(state: dict) -> str | List[str]:
-    # ... router logic
+@@manage_conditional_edge(action="create", source="SourceNodeName", path_map={"continue": "WorkerNode", "complete": END})
+def route_from_source_node(state: dict) -> str | List[str]:
+    return "continue" if state.get("needs_work") else "complete"
 ```
 
-Use `START` and `END` as special markers for setting entry and exit points with `@@add_edge`:
 ```python
-@@add_edge(source = START, target = "NodeA")
-@@add_edge(source = "NodeB", target = END)
+@@manage_node(action="delete", name="ObsoleteNode")
+@@manage_conditional_edge(action="delete", source="SourceNodeName")
 ```
+
+Delete utility definitions by both their name and kind. Supported kinds are `function`, `class`, and `assignment` (including constants and annotated variables). A Python module can contain an assignment and a function with the same name, so `name` alone is ambiguous:
+```python
+@@manage_utilities(action="delete", definitions=[
+    {"name": "MAX_RETRIES", "kind": "assignment"},
+    {"name": "normalize_query", "kind": "function"},
+])
+```
+
+Use `@@manage_edge` with `action="create"` or `"delete"` for standard edges:
+```python
+@@manage_edge(action="create", source=START, target="NodeA")
+@@manage_edge(action="delete", source="NodeB", target=END)
+```
+
+Use `START` and `END` as special markers for `@@manage_edge` entry and exit points.
 """
 
 
@@ -209,7 +225,7 @@ Ensure your implementation is grounded in the available information. Do not make
 ## **Workflow Rules**
 1.  **Setup First**: Use `@@set_imports` to define all necessary Python imports and `@@set_state` for the `AgentState`. State attributes cannot be accessed or updated until defined here.
 2.  **Follow the Task**: Adhere to the provided task. Never stop or hand back to the user when you encounter uncertainty — deduce the most reasonable approach and continue.
-3.  **Code Quality**: Write precise, error-free Python code when creating or editing components and utilities. All functions must be defined with `def`. Node and router functions must accept exactly one argument, `state`. Do not use placeholder logic (e.g., "TODO").
+3.  **Code Quality**: Write precise, error-free Python code when creating or editing components and utilities. All functions must be defined with `def`. Node and conditional-edge functions must accept exactly one argument, `state`. Do not use placeholder logic (e.g., "TODO").
 4.  **Graph Integrity**: Ensure the graph has no dead ends, unreachable nodes, or infinite loops. Every node must have a possible path to `END`.
 5.  **Debugging**: Add `print()` statements to your code for debugging, but limit output to essential information.
 6.  **Code as Memory**: Document all key decisions and insights as brief comments within the code of each component.
@@ -284,7 +300,7 @@ def parse_validation_code(response):
                 return block, None
 
         except Exception as e:
-            formatted_error = f"Executing validation code failed: {repr(e)}"
+            formatted_error = f"Executing validation code failed: {e!r}"
             validation_errors.append(formatted_error)
             logger.error(formatted_error)
 

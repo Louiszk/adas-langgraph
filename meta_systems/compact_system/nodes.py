@@ -1,42 +1,43 @@
-from typing import Dict, Any
+import re
+from typing import Any
+
 from langchain_core.messages import (
-    SystemMessage,
-    HumanMessage,
-    ToolMessage,
     AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
     trim_messages,
 )
+
 from adas_core.decorator_logic import execute_decorator_tool_calls
 from adas_core.helpers import remove_old_test_results
 from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
-import re
-
 from meta_systems.compact_system.configurations import (
-    validation_wrapper,
-    validation_model,
-    meta_agent_wrapper,
+    ACTION_CUTOFF,
     meta_agent_model,
     meta_agent_reasoning_effort,
-    ACTION_CUTOFF,
-)
-from meta_systems.compact_system.utilities import (
-    validation_prompt,
-    hardening_prompt,
-    parse_validation_code,
-    trimming_message,
-    meta_agent,
-    code_related_tools,
-    decorator_reminder,
-    test_reminder,
+    meta_agent_wrapper,
+    validation_model,
+    validation_wrapper,
 )
 from meta_systems.compact_system.tools import tools
-from adas_core.logging_config import get_logger
+from meta_systems.compact_system.utilities import (
+    code_related_tools,
+    decorator_reminder,
+    hardening_prompt,
+    meta_agent,
+    parse_validation_code,
+    test_reminder,
+    trimming_message,
+    validation_prompt,
+)
 
 logger = get_logger("compact_system.nodes")
 
 
-def formatting_function(state: Dict[str, Any]) -> Dict[str, Any]:
+def formatting_function(state: dict[str, Any]) -> dict[str, Any]:
     initial_task = str(state.get("initial_task", ""))
     max_iterations = state.get("max_iterations", 30)
 
@@ -55,7 +56,7 @@ def formatting_function(state: Dict[str, Any]) -> Dict[str, Any]:
     return new_state
 
 
-def validation_function(state: Dict[str, Any]) -> Dict[str, Any]:
+def validation_function(state: dict[str, Any]) -> dict[str, Any]:
     initial_task = HumanMessage(content=str(state.get("initial_task", "")))
     steps = state.get("hardening_steps", 0)
     snippets = state.get("validation_code_snippets", [])
@@ -134,7 +135,7 @@ def validation_function(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def initial_test_runner_function(state: Dict[str, Any]) -> Dict[str, Any]:
+def initial_test_runner_function(state: dict[str, Any]) -> dict[str, Any]:
     if not state.get("optimize"):
         return {"hardening_passed": None}
 
@@ -179,7 +180,7 @@ def initial_test_runner_function(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def meta_agent_function(state: Dict[str, Any]) -> Dict[str, Any]:
+def meta_agent_function(state: dict[str, Any]) -> dict[str, Any]:
     llm = LargeLanguageModel(
         wrapper=meta_agent_wrapper,
         model_name=meta_agent_model,
@@ -250,7 +251,7 @@ def meta_agent_function(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # Tool node
-def tool_execution(state: Dict[str, Any]) -> Dict[str, Any]:
+def tool_execution(state: dict[str, Any]) -> dict[str, Any]:
     messages = state.get("messages", [])
     max_iterations = state.get("max_iterations", 30)
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)]) - 1
