@@ -1,6 +1,8 @@
 import codecs
 import glob
+import hashlib
 import os
+from pathlib import Path
 
 from llm_sandbox import SandboxBackend, create_session
 
@@ -9,13 +11,73 @@ from config import settings
 
 logger = get_logger("sandbox")
 
+_SANDBOX_DOCKERFILE = Path(__file__).with_name("Dockerfile")
+_CACHED_IMAGE_REPOSITORY = "adas-sandbox"
+
+
+def _cached_sandbox_image_tag() -> str:
+    """Return an image tag that changes when the runtime or its dependencies do."""
+    fingerprint = "\n".join(
+        [
+            _SANDBOX_DOCKERFILE.read_text(encoding="utf-8"),
+            *settings.dependencies,
+        ]
+    )
+    return f"{_CACHED_IMAGE_REPOSITORY}:{hashlib.sha256(fingerprint.encode()).hexdigest()[:16]}"
+
+
+def ensure_cached_sandbox_image(client=None) -> str:
+    """Build the default sandbox image once, then reuse it for future runs with Docker or Podman."""
+    image_tag = _cached_sandbox_image_tag()
+
+    if client is None:
+        if check_docker_running():
+            import docker
+
+            client = docker.from_env()
+        elif check_podman_running():
+            socket_path = os.environ.get("ADAS_PODMAN_SOCKET")
+            from podman import PodmanClient  # type: ignore
+
+            client = PodmanClient(base_url=socket_path) if socket_path else PodmanClient()  # type: ignore
+        else:
+            import docker
+
+            client = docker.from_env()
+
+    try:
+        client.images.get(image_tag)
+        logger.info("Using cached sandbox image %s", image_tag)
+    except _image_not_found_errors():
+        logger.info("Building sandbox image %s (this happens once per dependency version)", image_tag)
+        client.images.build(
+            path=str(_SANDBOX_DOCKERFILE.parent),
+            dockerfile=_SANDBOX_DOCKERFILE.name,
+            tag=image_tag,
+            buildargs={"ADAS_SANDBOX_DEPENDENCIES": " ".join(settings.dependencies)},
+        )
+    return image_tag
+
+
+def _image_not_found_errors() -> tuple[type[Exception], ...]:
+    """Return the Docker/Podman exceptions that specifically mean an image is absent."""
+    from docker.errors import ImageNotFound as DockerImageNotFound
+
+    errors: list[type[Exception]] = [DockerImageNotFound]
+    try:
+        from podman.errors.exceptions import ImageNotFound as PodmanImageNotFound  # type: ignore
+
+        errors.append(PodmanImageNotFound)
+    except ImportError:
+        pass
+    return tuple(errors)
+
 
 class StreamingSandboxSession:
     def __init__(
         self,
         image=None,
         dockerfile=None,
-        keep_template=True,
         stream=True,
         verbose=True,
         runtime_configs=None,
@@ -24,6 +86,12 @@ class StreamingSandboxSession:
     ):
         self.verbose = verbose
         self.session = None
+        self._uses_cached_image = image is None and dockerfile is None
+
+        # The cached image already contains the complete Python environment.
+        # Skipping llm-sandbox's per-container venv/pip bootstrap avoids a
+        # second package-management step on every isolated run.
+        skip_environment_setup = kwargs.pop("skip_environment_setup", self._uses_cached_image)
 
         # Determine which container technology backend to use
         backend = None
@@ -52,10 +120,10 @@ class StreamingSandboxSession:
         session_kwargs = {
             "image": image,
             "dockerfile": dockerfile,
-            "keep_template": keep_template,
             "verbose": verbose,
             "runtime_configs": runtime_configs,
             "stream": stream,
+            "skip_environment_setup": skip_environment_setup,
             **kwargs,
         }
 
@@ -75,6 +143,10 @@ class StreamingSandboxSession:
     def open(self):
         if not self.session:
             raise RuntimeError("Session was not initialized correctly.")
+        if self._uses_cached_image:
+            # Each run receives a fresh container, while this image (including
+            # Python packages) persists in the container engine's local image cache.
+            self.session.config.image = ensure_cached_sandbox_image(client=getattr(self.session, "client", None))
         return self.session.open()
 
     def close(self):
@@ -219,6 +291,7 @@ def setup_sandbox_environment(session, reinstall=False):
 
     # Copy core framework files
     required_files = [
+        "adas_core/ast_parser.py",
         "adas_core/virtual_agentic_system.py",
         "adas_core/decorator_logic.py",
         "adas_core/llm_wrapper.py",

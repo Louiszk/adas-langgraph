@@ -30,7 +30,6 @@ setup_podman_service() {
             wait "$PODMAN_PID" 2>/dev/null || true
         fi
         podman rm -af --ignore >/dev/null 2>&1 || true
-        podman image rm -f "adas-base-job:${UNIQUE_ID}" --ignore >/dev/null 2>&1 || true
         rm -rf "$XDG_RUNTIME_DIR"
     }
     trap cleanup_podman EXIT INT TERM

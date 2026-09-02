@@ -77,13 +77,12 @@ The meta system is an agentic system that can design other agentic systems.
 ```bash
 python run_design.py
 ```
-*Dependencies are automatically verified and installed inside the sandbox on demand, and base container images are preserved in local cache by default.*
+*Dependencies are installed into a persisted local sandbox image once per dependency version, then reused by later runs.*
 
 **Options:**
 * `--name`: Target system name
 * `--problem`: Problem statement to solve
 * `--reinstall`: Force re-installation of dependencies.
-* `--no-keep-template`: Remove the base image from local cache after the session closes (image is kept by default).
 
 ### Running Scripts
 

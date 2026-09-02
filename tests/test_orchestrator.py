@@ -3,8 +3,12 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import patch
 
 from scripts.orchestrator import (
+    ContainerManager,
     DependencyParser,
     ExecutionManager,
     Orchestrator,
@@ -38,6 +42,18 @@ def test_orchestrator_parse_iterations():
     assert Orchestrator._parse_iterations("1-4") == ["1", "2", "3", "4"]
     assert Orchestrator._parse_iterations("1, 3 , 5") == ["1", "3", "5"]
     assert Orchestrator._parse_iterations("7") == ["7"]
+
+
+def test_orchestrator_caches_the_persisted_core_image_name():
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.container_manager = cast(ContainerManager, SimpleNamespace(client="container-client"))
+    orchestrator._cached_sandbox_image_name = None
+
+    with patch("scripts.orchestrator.ensure_cached_sandbox_image", return_value="adas-sandbox:core") as ensure_image:
+        assert orchestrator._cached_sandbox_image() == "adas-sandbox:core"
+        assert orchestrator._cached_sandbox_image() == "adas-sandbox:core"
+
+    ensure_image.assert_called_once_with(client="container-client")
 
 
 def test_result_aggregator_export(tmp_path: Path):

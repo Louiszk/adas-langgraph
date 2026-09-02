@@ -14,19 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from adas_core.logging_config import get_logger, setup_logging
+from sandbox.sandbox import ensure_cached_sandbox_image
 
 logger = get_logger("orchestrator")
 
 try:
     import docker
-    from docker.errors import DockerException
 except ImportError:
     docker = None
-    DockerException = Exception
 
 
 class ContainerManager:
-    """Manages Docker/Podman base images, builder containers, and temporary images."""
+    """Manages Docker/Podman builder containers and temporary images."""
 
     def __init__(self, container_type: str = "auto", unique_id: str | None = None):
         self.container_type = container_type
@@ -66,90 +65,6 @@ class ContainerManager:
                 return None
 
         return None
-
-    def create_base_image(
-        self,
-        base_image_name: str,
-        builder_image: str = "python:3.11-slim",
-        core_packages: list[str] | None = None,
-    ) -> bool:
-        """Create a custom base image with core dependencies installed if it does not exist."""
-        if core_packages is None:
-            core_packages = [
-                "langgraph==1.2.9",
-                "langchain_openai==1.4.1",
-                "python-dotenv==1.2.2",
-                "dill==0.3.9",
-            ]
-
-        if self.client is not None:
-            try:
-                self.client.images.get(base_image_name)
-                logger.info(f"Custom base image '{base_image_name}' already exists. Skipping creation.")
-                return True
-            except Exception:
-                pass
-
-        logger.info(f"Custom base image '{base_image_name}' not found. Creating it...")
-        if self.client is not None:
-            try:
-                self.client.images.pull(builder_image)
-                container = self.client.containers.run(
-                    builder_image,
-                    command="sleep 3600",
-                    detach=True,
-                    name=f"adas-builder-{self.unique_id}",
-                )
-                logger.info("Installing core dependencies in builder container...")
-                install_cmd = f"pip install {' '.join(core_packages)}"
-                exit_code, output = container.exec_run(install_cmd)
-                if exit_code != 0:
-                    output_str = output.decode("utf-8", errors="ignore") if isinstance(output, bytes) else str(output)
-                    logger.error(f"pip install failed inside builder container:\n{output_str}")
-                    container.stop()
-                    container.remove()
-                    return False
-
-                logger.info(f"Committing container to create image '{base_image_name}'...")
-                container.commit(repository=base_image_name)
-                container.stop()
-                container.remove()
-                logger.info("Custom base image created successfully.")
-                return True
-            except Exception as e:
-                logger.warning(f"SDK build failed ({e}), falling back to CLI subprocess...")
-
-        return self._create_base_image_cli(base_image_name, builder_image, core_packages)
-
-    def _create_base_image_cli(self, base_image_name: str, builder_image: str, core_packages: list[str]) -> bool:
-        cli = self._get_cli_cmd()
-        cid_name = f"adas-builder-{self.unique_id}"
-        subprocess.run([cli, "pull", builder_image], stdout=subprocess.DEVNULL, check=False)
-        res = subprocess.run(
-            [cli, "run", "-d", "--name", cid_name, builder_image, "sleep", "3600"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res.returncode != 0:
-            logger.error(f"Failed to start builder container: {res.stderr}")
-            return False
-
-        install_res = subprocess.run(
-            [cli, "exec", cid_name, "pip", "install"] + core_packages,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if install_res.returncode != 0:
-            logger.error(f"pip install failed in builder container: {install_res.stderr}")
-            subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
-            return False
-
-        subprocess.run([cli, "commit", cid_name, base_image_name], check=False)
-        subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
-        logger.info("Custom base image created successfully via CLI.")
-        return True
 
     def create_temp_image(self, base_image_name: str, temp_image_name: str, packages: list[str]) -> bool:
         """Create a temporary image with additional packages installed on top of the base image."""
@@ -231,11 +146,10 @@ class ContainerManager:
         subprocess.run([cli, "container", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
         subprocess.run([cli, "network", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
 
-    def cleanup_job_resources(self, base_image_name: str) -> None:
-        """Clean up all job-specific resources (containers and base/temp images)."""
+    def cleanup_job_resources(self) -> None:
+        """Clean up unused containers and dangling image layers created during this job."""
         logger.info(f"--- Cleaning up resources for Job {self.unique_id} ---")
 
-        self.remove_image(base_image_name, force=True)
         cli = self._get_cli_cmd()
         subprocess.run([cli, "container", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
         subprocess.run([cli, "image", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
@@ -410,8 +324,8 @@ class Orchestrator:
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.unique_id = str(os.environ.get("SLURM_JOB_ID") or random.randint(10000, 99999))
-        self.base_image_name = f"adas-base-job:{self.unique_id}"
         self.container_manager = ContainerManager(container_type=args.container, unique_id=self.unique_id)
+        self._cached_sandbox_image_name: str | None = None
         self.results_dir = Path(getattr(args, "results_dir", "benchmark_results"))
 
     def run(self) -> int:
@@ -427,7 +341,13 @@ class Orchestrator:
             logger.error(f"Unknown task: {task_name}")
             return 1
         finally:
-            self.container_manager.cleanup_job_resources(self.base_image_name)
+            self.container_manager.cleanup_job_resources()
+
+    def _cached_sandbox_image(self) -> str:
+        """Return the reusable core-runtime image used as a parent for temporary images."""
+        if self._cached_sandbox_image_name is None:
+            self._cached_sandbox_image_name = ensure_cached_sandbox_image(client=self.container_manager.client)
+        return self._cached_sandbox_image_name
 
     @staticmethod
     def _parse_iterations(iterations_val: str) -> list[str]:
@@ -455,10 +375,6 @@ class Orchestrator:
 
     def run_benchmark(self) -> int:
         """Execute benchmark workflow across iterations."""
-        if not self.container_manager.create_base_image(self.base_image_name):
-            logger.error("Base image creation failed.")
-            return 1
-
         aggregator = ResultAggregator(self.results_dir)
         records: list[dict[str, Any]] = []
         overall_exit = 0
@@ -504,12 +420,14 @@ class Orchestrator:
 
             metrics_file = work_dir / "generated_systems" / "metrics" / f"{system_name_base}.json"
             packages = DependencyParser.get_installed_packages(metrics_file)
-            image_to_use = self.base_image_name
-            temp_image_name = ""
+            image_to_use = None
+            temp_image_name: str | None = None
 
             if packages:
                 temp_image_name = f"adas-temp-image-{system_name_base}-{self.unique_id}"
-                success = self.container_manager.create_temp_image(self.base_image_name, temp_image_name, packages)
+                success = self.container_manager.create_temp_image(
+                    self._cached_sandbox_image(), temp_image_name, packages
+                )
                 if success:
                     image_to_use = temp_image_name
                 else:
@@ -520,9 +438,10 @@ class Orchestrator:
                 sys.executable,
                 str(bench_script),
                 f"--system={system_module_path}",
-                f"--base-image={image_to_use}",
                 f"--container={self.args.container}",
             ]
+            if image_to_use:
+                cmd.append(f"--base-image={image_to_use}")
 
             log_file = self.results_dir / f"{system_name_base}_log.txt"
             res = ExecutionManager.run_command(cmd, timeout=timeout, log_file=log_file, cwd=work_dir)
@@ -559,10 +478,6 @@ class Orchestrator:
 
     def run_design(self) -> int:
         """Execute iterative system generation workflow."""
-        if not self.container_manager.create_base_image(self.base_image_name):
-            logger.error("Base image creation failed.")
-            return 1
-
         overall_exit = 0
         iterations = self._parse_iterations(getattr(self.args, "iterations", "1-16"))
         approach = getattr(self.args, "type", "ablationC")
@@ -598,8 +513,6 @@ class Orchestrator:
                 problem_text,
                 "--name",
                 sys_name,
-                "--base-image",
-                self.base_image_name,
                 "--container",
                 self.args.container,
             ]
@@ -611,10 +524,6 @@ class Orchestrator:
 
     def run_target(self) -> int:
         """Execute generated target systems on specified inputs."""
-        if not self.container_manager.create_base_image(self.base_image_name):
-            logger.error("Base image creation failed.")
-            return 1
-
         overall_exit = 0
         system_names = getattr(self.args, "system_names", [])
         if isinstance(system_names, str):
@@ -642,12 +551,12 @@ class Orchestrator:
 
             metrics_file = Path("generated_systems/metrics") / f"{sys_name}.json"
             packages = DependencyParser.get_installed_packages(metrics_file)
-            image_to_use = self.base_image_name
-            temp_image_name = ""
+            image_to_use = None
+            temp_image_name: str | None = None
 
             if packages:
                 temp_image_name = f"adas-temp-image-{self.unique_id}-{sys_name}"
-                if self.container_manager.create_temp_image(self.base_image_name, temp_image_name, packages):
+                if self.container_manager.create_temp_image(self._cached_sandbox_image(), temp_image_name, packages):
                     image_to_use = temp_image_name
 
             cmd = [
@@ -657,11 +566,11 @@ class Orchestrator:
                 sys_name,
                 "--state",
                 state_json,
-                "--base-image",
-                image_to_use,
                 "--container",
                 self.args.container,
             ]
+            if image_to_use:
+                cmd.extend(["--base-image", image_to_use])
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))
             if res["exit_code"] != 0:

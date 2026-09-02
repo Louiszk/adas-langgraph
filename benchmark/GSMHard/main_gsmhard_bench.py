@@ -62,17 +62,10 @@ def main():
         required=True,
         help="Name of the system to benchmark (e.g., 'GSMHardBaseline')",
     )
-    parser.add_argument(
-        "--no-keep-template",
-        dest="keep_template",
-        action="store_false",
-        default=True,
-        help="Delete the image after the session is closed (default: keep image)",
-    )
     parser.add_argument("--reinstall", action="store_true", help="Reinstall dependencies")
     parser.add_argument(
         "--base-image",
-        default="python:3.11-slim",
+        default=None,
         help="The base container image to use for the sandbox.",
     )
     parser.add_argument(
@@ -86,7 +79,6 @@ def main():
 
     session = StreamingSandboxSession(
         image=args.base_image,
-        keep_template=args.keep_template,
         verbose=True,
         container_type=args.container,
     )
