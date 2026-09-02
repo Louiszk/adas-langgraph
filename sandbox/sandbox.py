@@ -278,7 +278,7 @@ def setup_sandbox_environment(session, reinstall=False):
     """Set up the sandbox environment with required files and dependencies."""
     logger.info("Setting up sandbox environment...")
 
-    session.execute_command("mkdir -p /sandbox/workspace/materialized_meta_system")
+    session.execute_command("mkdir -p /sandbox/workspace/meta_system")
     session.execute_command("mkdir -p /sandbox/workspace/adas_core")
     session.execute_command("mkdir -p /sandbox/workspace/generated_systems")
     session.execute_command("mkdir -p /sandbox/workspace/config")
@@ -289,6 +289,9 @@ def setup_sandbox_environment(session, reinstall=False):
     session.execute_command("mkdir -p /sandbox/workspace/data/output")
     session.copy_dir_to_runtime(src_dir="data/input", dest_dir="/sandbox/workspace/data/input", pattern="*")
 
+    # Copy meta-system package files
+    session.copy_dir_to_runtime(src_dir="meta_system", dest_dir="/sandbox/workspace/meta_system", pattern="*.py")
+
     # Copy core framework files
     required_files = [
         "adas_core/ast_parser.py",
@@ -298,7 +301,6 @@ def setup_sandbox_environment(session, reinstall=False):
         "adas_core/materialize.py",
         "adas_core/helpers.py",
         "adas_core/logging_config.py",
-        "materialized_meta_system/MetaSystem.py",
         "config/settings.py",
         ".env",
     ]

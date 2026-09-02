@@ -13,7 +13,7 @@ from adas_core.decorator_logic import (
     parse_arguments,
     parse_decorator_tool_calls,
 )
-from meta_systems.compact_system.tools import (
+from meta_system.tools import (
     manage_conditional_edge,
     manage_edge,
     manage_node,

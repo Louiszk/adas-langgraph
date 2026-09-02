@@ -13,5 +13,5 @@
 # """
 
 # Example: use one of the usecase prompts
-with open("generated_systems/use_cases/data_analyst.txt", "r") as prompt_file:
+with open("generated_systems/use_cases/data_analyst2.txt", "r") as prompt_file:
     problem_statement = prompt_file.read()

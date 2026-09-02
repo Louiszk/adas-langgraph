@@ -2,8 +2,8 @@ import importlib
 import sys
 import time
 
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.logging_config import get_logger, setup_logging
 from benchmark.benchmark_base import run_benchmark_parallel
 
 logger = get_logger("run_fever_bench")

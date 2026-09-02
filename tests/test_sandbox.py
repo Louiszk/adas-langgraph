@@ -140,3 +140,25 @@ class TestSandboxSessionSpecification:
         with pytest.raises(RuntimeError, match="daemon unavailable"):
             ensure_cached_sandbox_image(client=mock_client)
         mock_client.images.build.assert_not_called()
+
+    def test_setup_sandbox_environment_syncs_meta_system_and_core(self):
+        """setup_sandbox_environment creates workspaces and syncs meta_system package."""
+        from sandbox.sandbox import setup_sandbox_environment
+
+        mock_session = MagicMock()
+        mock_check = MagicMock()
+        mock_check.exit_code = 0
+        mock_check.stderr = ""
+        mock_session.execute_command.return_value = mock_check
+
+        success = setup_sandbox_environment(mock_session, reinstall=False)
+        assert success is True
+
+        # Check directories created
+        created_dirs = [call.args[0] for call in mock_session.execute_command.call_args_list]
+        assert any("mkdir -p /sandbox/workspace/meta_system" in cmd for cmd in created_dirs)
+        assert any("mkdir -p /sandbox/workspace/adas_core" in cmd for cmd in created_dirs)
+
+        # Check meta_system directory copy was invoked
+        copied_dirs = [call.kwargs.get("dest_dir") for call in mock_session.copy_dir_to_runtime.call_args_list]
+        assert "/sandbox/workspace/meta_system" in copied_dirs

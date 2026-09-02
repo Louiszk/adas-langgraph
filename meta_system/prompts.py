@@ -1,18 +1,121 @@
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+agentic_system_documentation = """
+# LangGraph + ADAS Core Reference
 
-from adas_core.decorator_logic import find_code_blocks
+## Core Invariants & State Rules
+
+1. **AgentState Definition**:
+   - `AgentState(TypedDict)` must be defined first and include at least:
+     `messages: Annotated[List[AnyMessage], add_messages]`
+   - Any extra custom state keys must be declared in `AgentState` before use.
+
+2. **Node and Conditional-Edge Function Signatures**:
+   - **Strict Rule**: EVERY node and conditional-edge function MUST accept **exactly one** argument named `state`.
+     - Node Signature: `def my_node(state: AgentState) -> dict:`
+     - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
+   - Nodes return a dictionary containing state keys to update (e.g., `{"final_answer": "42"}`).
+   - Conditional-edge functions return a pathmap key for the next node(s) to run, or `END`. Returning a `List[str]` triggers parallel branches.
+
+3. **Graph Endpoint Markers**:
+   - Use `START` and `END` from `langgraph.graph` as workflow entry/exit markers.
+
+---
+
+## ADAS Core Module (`adas_core.llm_wrapper`)
+
+### `LargeLanguageModel` Class
+A standardized wrapper for interacting with LLMs.
+- **Initialization**: `llm = LargeLanguageModel()`
+- **Tool Binding**: `llm.bind_tools(tool_objects: List[Any]) -> LargeLanguageModel`
+  Informs the LLM about available tool functions.
+- **Invocation**: `response = llm.invoke(messages_input: List[Any]) -> AIMessage`
+  Sends requests to the model and returns an `AIMessage` (which may contain `tool_calls`).
+- **Token Counter**: `LargeLanguageModel.token_counter`
+  Tokenizer property used for exact token count calculations in message trimming.
+
+### `execute_tool_calls` Function
+- **Signature**: `execute_tool_calls(response: AIMessage, available_tools: Dict[str, Any]) -> Tuple[List[ToolMessage], Dict[str, Any]]`
+- **Behavior**: Processes `tool_calls` inside an `AIMessage`. Returns:
+  1. `tool_messages`: A `List[ToolMessage]` containing execution outputs or error messages to append to history.
+  2. `tool_results`: A `Dict[str, Any]` mapping executed tool names to their raw return values.
+
+### Standard Agent Node Pattern
+```python
+from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
+def agent_node(state: AgentState) -> dict:
+    llm = LargeLanguageModel()
+    
+    # Bind available tools from the global `tools` dict if needed
+    if "MyTool" in tools:
+        llm.bind_tools([tools["MyTool"]])
+    
+    messages = state.get("messages", [])
+    full_messages = [SystemMessage(content="Instructions...")] + messages
+    
+    response: AIMessage = llm.invoke(full_messages)
+    tool_messages, tool_results = execute_tool_calls(response, tools)
+    
+    # Return updated state dictionary (append AIMessage and resulting ToolMessages)
+    return {"messages": [response] + tool_messages}
+```
+
+### Direct Tool Invocation
+
+Tools in the `tools` dictionary can also be invoked directly inside nodes:
+```python
+# Pass keyword arguments as a dictionary to .invoke()
+result = tools["SearchTool"].invoke({"query": "LangGraph documentation"})
+```
+
+---
+
+## Parallel Execution & State Reducers
+
+- Default state updates replace existing values.
+- If multiple parallel nodes update the same state key in a single superstep, you MUST declare a reducer in `AgentState` using `Annotated`:
+```python
+import operator
+from typing import Annotated, TypedDict
+
+def append_results(old: list, new: list) -> list:
+    return (old or []) + (new or [])
+
+class AgentState(TypedDict):
+    messages: Annotated[List[AnyMessage], add_messages]
+    logs: Annotated[List[str], append_results] # Custom reducer
+    score: Annotated[int, operator.add]        # Built-in reducer
+```
+
+---
+
+## Message Types & Context History Trimming
+
+- **Message Types**: `SystemMessage`, `HumanMessage`, `AIMessage`, `ToolMessage` (from `langchain_core.messages`).
+- **Tool Message Rule**: Every `AIMessage` containing `tool_calls` MUST be followed immediately by its corresponding `ToolMessage` objects before the next LLM call.
+- **Context Window Trimming**: Use `trim_messages` from `langchain_core.messages` to prevent token overflow on long trajectories:
+
+```python
+from langchain_core.messages import trim_messages
 from adas_core.llm_wrapper import LargeLanguageModel
-from adas_core.logging_config import get_logger
 
-logger = get_logger("compact_system.utilities")
+# Example: Keep the last 16 messages
+trimmed_messages_by_count = trim_messages(
+    current_messages,
+    max_tokens=16,
+    strategy="last",
+    token_counter=len # len counts messages
+)
 
-
-# Will be rendered in build.py
-agentic_system_documentation = ""
-function_signatures = ""
-code_related_tools = {}
-
-# Prompts with tips from https://cookbook.openai.com/examples/gpt4-1_prompting_guide
+# Example: Trim to a maximum token budget (e.g., 8000 tokens) using the LLM token counter
+trimmed_messages = trim_messages(
+    current_messages,
+    max_tokens=8000,
+    strategy="last",
+    token_counter=LargeLanguageModel.token_counter,
+)
+```
+"""
 
 test_reminder = """
 
@@ -45,14 +148,13 @@ Remember to always structure your output according to the required format and ex
 ```
 """
 
-# System Prompts
 validation_prompt = (
     """
 You validate agentic systems for a given task by writing Python code.
 
 """
     + agentic_system_documentation
-    + '''
+    + """
 
 # Validation
 - Generate a single markdown code block specifically for validating the target system you are designing.
@@ -76,14 +178,14 @@ TARGET_SYSTEM_TEST_CASES = [
 ]
 
 def validate_target_system_output(input_index: int, final_state: Dict[str, Any]) -> Tuple[bool, str]:
-    """
+    \"\"\"
     Validates the output of the target system for a given test case.
 
     Checks performed:
     - final_state contains a 'solution' string.
     - final_state contains a 'messages' list with at least one valid ToolMessage and one valid AIMessage.
     - The solution contains the expected value for the given test case index.
-    """
+    \"\"\"
     solution = final_state.get("solution", "")
     messages = final_state.get("messages", [])
 
@@ -114,7 +216,7 @@ def validate_target_system_output(input_index: int, final_state: Dict[str, Any])
     else:
         return False, f"Expected '{expected_solution}' in the solution, got '{solution}'."
 ```
-'''
+"""
 )
 
 hardening_prompt = """
@@ -129,7 +231,6 @@ Generate a single Python markdown code block containing only:
 1.  A list named `TARGET_SYSTEM_TEST_CASES` with exactly three (3) new, {level} difficult test cases. These should probe for edge cases, complex scenarios, or potential failure points that the previous tests might have missed.
 2.  A validation function named `validate_target_system_output` that validates the output for **only** your three new test cases. The `input_index` argument for this function will be 0, 1, or 2.
 """
-
 
 decorator_tool_prompt = """
 Using these decorators is the only way to design the system. Always enclose them in triple backticks to execute them, e.g.:
@@ -200,27 +301,28 @@ Use `START` and `END` as special markers for `@@manage_edge` entry and exit poin
 """
 
 
-meta_agent = (
-    """
+def build_meta_agent_prompt(function_signatures: str) -> str:
+    return (
+        """
 You are an expert AI software engineer specializing in the design and implementation of agentic systems using LangGraph.
 You create correct, robust systems that tackle any task on the given domain or problem autonomously.
 You reason about implementation decisions methodically and follow instructions with precision.
 You are deeply familiar with advanced prompting techniques and Python programming.
 
 """
-    + agentic_system_documentation
-    + """
+        + agentic_system_documentation
+        + """
 
 # Implementation Phase
 Ensure your implementation is grounded in the available information. Do not make things up.
 
 ## Decorator Tools
 """
-    + function_signatures
-    + """
+        + function_signatures
+        + """
 """
-    + decorator_tool_prompt
-    + """
+        + decorator_tool_prompt
+        + """
 
 ## **Workflow Rules**
 1.  **Setup First**: Use `@@set_imports` to define all necessary Python imports and `@@set_state` for the `AgentState`. State attributes cannot be accessed or updated until defined here.
@@ -261,48 +363,4 @@ Only conclude the design process after you have confirmed that the system is com
 # ... other decorators
 ```
 """
-)
-
-
-def parse_validation_code(response):
-    response_content = response.content
-    if isinstance(response_content, list):
-        # Handles response API format
-        content_parts = []
-        for item in response_content:
-            if isinstance(item, dict) and "text" in item:
-                content_parts.append(str(item.get("text", "")))
-            else:
-                content_parts.append(str(item))
-        response_content = " ".join(content_parts)
-
-    logger.debug(response_content)
-    potential_code_blocks = [str(code["content"]) for code in find_code_blocks(response_content)]
-    validation_errors = []
-
-    for block in potential_code_blocks:
-        try:
-            # Use a temporary, isolated namespace for safe execution
-            temp_namespace = {
-                "LargeLanguageModel": LargeLanguageModel,
-                "HumanMessage": HumanMessage,
-                "ToolMessage": ToolMessage,
-                "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage,
-            }
-            exec(block, temp_namespace)
-            test_cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES")
-            validator_func = temp_namespace.get("validate_target_system_output")
-
-            # Perform the validation checks
-            if isinstance(test_cases, list) and len(test_cases) == 3 and callable(validator_func):
-                logger.info("Validation suite found.")
-                return block, None
-
-        except Exception as e:
-            formatted_error = f"Executing validation code failed: {e!r}"
-            validation_errors.append(formatted_error)
-            logger.error(formatted_error)
-
-    logger.warning("WARNING: No valid validation code block was found in the response.")
-    return None, validation_errors
+    )

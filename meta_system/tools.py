@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import dill as pickle
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 
 from adas_core.decorator_logic import build_decorator_signatures
 from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
@@ -17,45 +18,11 @@ from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from meta_systems.compact_system.configurations import RECURSION_LIMIT
-from meta_systems.compact_system.utilities import test_reminder
+from meta_system.config import RECURSION_LIMIT
+from meta_system.helpers import ignored_nodes_message
+from meta_system.prompts import test_reminder
 
-logger = get_logger("compact_system.tools")
-
-
-def ignored_nodes_message(ignored_nodes: list[ast.AST]) -> str:
-    """Creates a formatted 'Note:' string for any AST nodes that were ignored by a tool."""
-    if not ignored_nodes:
-        return ""
-
-    messages = []
-    for node in ignored_nodes:
-        readable_format = f"A code structure of type '{type(node).__name__}'"
-
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-            readable_format = f"{type(node).__name__} '{node.name}'"
-        elif isinstance(node, ast.Assign):
-            if node.targets and isinstance(node.targets[0], ast.Name):
-                readable_format = f"Variable assignment for '{node.targets[0].id}'"
-            else:
-                readable_format = "A variable assignment"
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name):
-                readable_format = f"Typed variable assignment for '{node.target.id}'"
-            else:
-                readable_format = "A typed variable assignment"
-        messages.append(readable_format)
-
-    note = "\nNote: The following structure(s) were ignored as they are not allowed in this block: "
-    limit = 4
-    if len(messages) > limit:
-        ignored_list_str = ", ".join(messages[:limit])
-        remaining_count = len(messages) - limit
-        note += f"[{ignored_list_str}, ... (and {remaining_count} more)]."
-    else:
-        ignored_list_str = ", ".join(messages)
-        note += f"[{ignored_list_str}]"
-    return note
+logger = get_logger("meta_system.tools")
 
 
 def install_package(package_name: str, state: dict[str, Any]) -> str:
@@ -699,5 +666,16 @@ available_tools = [
 ]
 function_signatures = build_decorator_signatures(available_tools, code_related_tools)
 
-# Rendered during materialization
-tools = {}
+# Registered LangChain tools dictionary
+tools = {
+    "InstallPackage": tool("InstallPackage")(install_package),
+    "SetImports": tool("SetImports")(set_imports),
+    "SetState": tool("SetState")(set_state),
+    "ManageNode": tool("ManageNode")(manage_node),
+    "ManageTool": tool("ManageTool")(manage_tool),
+    "ManageConditionalEdge": tool("ManageConditionalEdge")(manage_conditional_edge),
+    "ManageEdge": tool("ManageEdge")(manage_edge),
+    "ManageUtilities": tool("ManageUtilities")(manage_utilities),
+    "TestSystem": tool("TestSystem")(test_system),
+    "EndDesign": tool("EndDesign")(end_design),
+}

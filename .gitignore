@@ -19,6 +19,5 @@ adasvenv2/
 *.log
 
 # ADAS Framework Artifacts
-/materialized_meta_system
 /generated_systems/*.py
 /generated_systems/*.pkl

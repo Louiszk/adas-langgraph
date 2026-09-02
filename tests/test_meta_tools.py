@@ -9,15 +9,15 @@ import pytest
 from langgraph.graph import START
 
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from meta_systems.compact_system.tools import (
+from meta_system.tools import (
     install_package,
-    set_imports,
-    set_state,
     manage_conditional_edge,
+    manage_edge,
     manage_node,
     manage_tool,
-    manage_edge,
     manage_utilities,
+    set_imports,
+    set_state,
 )
 
 

@@ -1,5 +1,4 @@
 import argparse
-import importlib
 import os
 
 from adas_core.logging_config import get_logger, setup_logging
@@ -68,11 +67,6 @@ def main():
     parser.add_argument("--problem", default=task.problem_statement, help="Problem statement to solve")
     parser.add_argument("--name", default="UnnamedSystem", help="Target system name")
     parser.add_argument(
-        "--meta-system",
-        default="compact_system",
-        help="The name of the meta-system to use from the meta_systems folder.",
-    )
-    parser.add_argument(
         "--optimize-system",
         default=None,
         help="Specify target system name to optimize or change",
@@ -88,24 +82,8 @@ def main():
         default=None,
         help="The base container image to use for the sandbox.",
     )
-
     args = parser.parse_args()
     logger.info(f"Running with arguments: {args}")
-
-    try:
-        module_path = f"meta_systems.{args.meta_system}.build"
-        build_module = importlib.import_module(module_path)
-        create_meta_system_func = build_module.create_meta_system
-
-    except (ImportError, AttributeError) as e:
-        logger.error(f"Could not load the build script for the meta-system '{args.meta_system}'. Details: {e}")
-        return
-    create_meta_system_func()
-
-    if not os.path.exists("materialized_meta_system/MetaSystem.py"):
-        logger.error("The expected MetaSystem.py file was not found.")
-        return
-    logger.info("Meta-system successfully built.")
 
     session = StreamingSandboxSession(
         image=args.base_image,

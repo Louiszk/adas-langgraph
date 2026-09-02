@@ -14,7 +14,7 @@ from adas_core.helpers import remove_old_test_results
 from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
-from meta_systems.compact_system.configurations import (
+from meta_system.config import (
     ACTION_CUTOFF,
     meta_agent_model,
     meta_agent_reasoning_effort,
@@ -22,22 +22,24 @@ from meta_systems.compact_system.configurations import (
     validation_model,
     validation_wrapper,
 )
-from meta_systems.compact_system.tools import tools
-from meta_systems.compact_system.utilities import (
-    code_related_tools,
+from meta_system.helpers import normalize_response_content, parse_validation_code
+from meta_system.prompts import (
+    build_meta_agent_prompt,
     decorator_reminder,
     hardening_prompt,
-    meta_agent,
-    parse_validation_code,
     test_reminder,
     trimming_message,
     validation_prompt,
 )
+from meta_system.state import MetaState
+from meta_system.tools import code_related_tools, function_signatures, tools
 
-logger = get_logger("compact_system.nodes")
+logger = get_logger("meta_system.nodes")
+
+meta_agent_system_prompt = build_meta_agent_prompt(function_signatures)
 
 
-def formatting_function(state: dict[str, Any]) -> dict[str, Any]:
+def formatting_function(state: MetaState) -> dict[str, Any]:
     initial_task = str(state.get("initial_task", ""))
     max_iterations = state.get("max_iterations", 30)
 
@@ -56,7 +58,7 @@ def formatting_function(state: dict[str, Any]) -> dict[str, Any]:
     return new_state
 
 
-def validation_function(state: dict[str, Any]) -> dict[str, Any]:
+def validation_function(state: MetaState) -> dict[str, Any]:
     initial_task = HumanMessage(content=str(state.get("initial_task", "")))
     steps = state.get("hardening_steps", 0)
     snippets = state.get("validation_code_snippets", [])
@@ -135,7 +137,7 @@ def validation_function(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def initial_test_runner_function(state: dict[str, Any]) -> dict[str, Any]:
+def initial_test_runner_function(state: MetaState) -> dict[str, Any]:
     if not state.get("optimize"):
         return {"hardening_passed": None}
 
@@ -180,7 +182,7 @@ def initial_test_runner_function(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def meta_agent_function(state: dict[str, Any]) -> dict[str, Any]:
+def meta_agent_function(state: MetaState) -> dict[str, Any]:
     llm = LargeLanguageModel(
         wrapper=meta_agent_wrapper,
         model_name=meta_agent_model,
@@ -191,16 +193,23 @@ def meta_agent_function(state: dict[str, Any]) -> dict[str, Any]:
 
     context_length = ACTION_CUTOFF * 2
     messages = state.get("messages", [])
-    target_agentic_system = state["target_agentic_system"]
+    target_agentic_system = state.get("target_agentic_system")
+    if target_agentic_system is None:
+        raise ValueError("target_agentic_system is required in MetaState.")
 
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
     current_messages = messages[1:]
-    initial_messages = [state["designer_task"]]
+    initial_messages: list[HumanMessage] = []
+    if designer_task := state.get("designer_task"):
+        initial_messages.append(designer_task)
+
     if state.get("initial_test_results"):
         if iteration > 0:
-            initial_messages.insert(1, state["initial_test_results"])
+            if init_res := state.get("initial_test_results"):
+                initial_messages.append(init_res)
         else:
-            initial_messages.insert(1, state["verbose_initial_test_results"])
+            if verbose_res := state.get("verbose_initial_test_results"):
+                initial_messages.append(verbose_res)
 
     trimmed_messages = current_messages
     try:
@@ -225,20 +234,14 @@ def meta_agent_function(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     full_messages = (
-        [SystemMessage(content=meta_agent)] + initial_messages + trimmed_messages + [HumanMessage(content=code_message)]
+        [SystemMessage(content=meta_agent_system_prompt)]
+        + initial_messages
+        + trimmed_messages
+        + [HumanMessage(content=code_message)]
     )
     response = llm.invoke(messages_input=full_messages, is_meta=True)
 
-    response_content = response.content
-    if isinstance(response_content, list):
-        # Handles response API format
-        content_parts = []
-        for item in response_content:
-            if isinstance(item, dict) and "text" in item:
-                content_parts.append(str(item.get("text", "")))
-            else:
-                content_parts.append(str(item))
-        response_content = " ".join(content_parts)
+    response_content = normalize_response_content(response.content)
 
     cleaned_content = re.sub(r"\[Iteration\s*\d+\]\s*\n*", "", response_content)
     iteration_info = f"[Iteration {iteration}]"
@@ -250,13 +253,12 @@ def meta_agent_function(state: dict[str, Any]) -> dict[str, Any]:
     return new_state
 
 
-# Tool node
-def tool_execution(state: dict[str, Any]) -> dict[str, Any]:
+def tool_execution(state: MetaState) -> dict[str, Any]:
     messages = state.get("messages", [])
     max_iterations = state.get("max_iterations", 30)
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)]) - 1
 
-    response: AIMessage = messages[-1]
+    response = messages[-1] if messages else AIMessage(content="")
     human_message, tool_results = execute_decorator_tool_calls(str(response.content), tools, code_related_tools, state)
 
     if not human_message:

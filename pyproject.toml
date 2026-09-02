@@ -6,7 +6,6 @@ exclude = [
     "**/__pycache__",
     "**/.*",
     "adasvenv",
-    "materialized_meta_system",
     "generated_systems",
     "data",
 ]
@@ -21,7 +20,6 @@ exclude = [
     "**/__pycache__",
     "**/.*",
     "adasvenv/**",
-    "materialized_meta_system/**",
     "generated_systems/**",
     "data/**",
 ]

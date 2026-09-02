@@ -10,7 +10,7 @@ sys.path.append("/sandbox/workspace")
 from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from materialized_meta_system import MetaSystem  # type: ignore
+from meta_system.graph import workflow
 
 logger = get_logger("run_meta")
 
@@ -68,7 +68,6 @@ def main():
         else:
             target_agentic_system = VirtualAgenticSystem(system_name)
 
-        workflow = MetaSystem.workflow
         inputs = {
             "messages": [],
             "initial_task": problem_statement,
