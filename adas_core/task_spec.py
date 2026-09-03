@@ -87,12 +87,17 @@ class ResourceManifest(BaseModel):
 
 
 class FileFixtureSpec(BaseModel):
-    """Specification of a test file to be generated for tests."""
+    """Specification of test file(s) to be generated for tests."""
 
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(..., min_length=1, description="Relative destination path (e.g. 'test.csv')")
+    path: str = Field(
+        ..., min_length=1, description="Relative destination path or directory (e.g. 'test.csv' or 'docs/')"
+    )
+    count: int = Field(
+        default=1, ge=1, description="Number of files to generate (1 for single file, N for batch/folder)"
+    )
     description: str = Field(default="", description="Purpose, schema, or content requirements for this file")
     content_type: Literal["text", "csv", "json", "binary"] = Field(default="text", description="File format")
 
@@ -112,6 +117,7 @@ class DatabaseFixtureSpec(BaseModel):
         default_factory=dict,
         description="Mapping of connection parameters to env vars, e.g. {'uri': 'NEO4J_URI', 'user': 'NEO4J_USER', 'password': 'NEO4J_PASSWORD'}",
     )
+    count: int | None = Field(default=None, ge=1, description="Target number of records, rows, or nodes to seed")
     description: str = Field(default="", description="Schema, entities, tables, or graph structure to populate")
 
     @model_validator(mode="after")

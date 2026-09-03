@@ -75,13 +75,13 @@ The meta system is an agentic system that can design other agentic systems.
 
 **Run design:**
 ```bash
-python run_design.py
+python run_design.py --task-spec configs/tasks/my_task/task.json
 ```
 *Dependencies are installed into a persisted local sandbox image once per dependency version, then reused by later runs.*
 
 **Options:**
-* `--name`: Target system name
-* `--problem`: Problem statement to solve
+* `--task-spec`: Required validated TaskSpec JSON; it defines the target name and goal.
+* `--auto-setup`: Generate frozen fixtures and preflight artifacts before design.
 * `--reinstall`: Force re-installation of dependencies.
 
 ### Running Scripts

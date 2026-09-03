@@ -162,3 +162,69 @@ class TestSandboxSessionSpecification:
         # Check meta_system directory copy was invoked
         copied_dirs = [call.kwargs.get("dest_dir") for call in mock_session.copy_dir_to_runtime.call_args_list]
         assert "/sandbox/workspace/meta_system" in copied_dirs
+
+
+class TestSetupSandboxUtilities:
+    def test_setup_manifest_currentness_tracks_task_spec_contents(self, tmp_path):
+        from create_setup import setup_manifest_is_current
+        import hashlib
+        import json
+
+        task_spec = tmp_path / "task.json"
+        task_spec.write_text('{"name": "first"}', encoding="utf-8")
+        digest = hashlib.sha256(task_spec.read_bytes()).hexdigest()
+        (tmp_path / "setup_manifest.json").write_text(
+            json.dumps({"files": {"task.json": digest}}), encoding="utf-8"
+        )
+        assert setup_manifest_is_current(task_spec)
+
+        task_spec.write_text('{"name": "changed"}', encoding="utf-8")
+        assert not setup_manifest_is_current(task_spec)
+
+    def test_package_pattern_validation(self):
+        from sandbox.run_setup import _PACKAGE_PATTERN, install_packages
+
+        valid_packages = [
+            "neo4j",
+            "neo4j>=5.0",
+            "neo4j>=5.0,<6.0",
+            "uvicorn[standard]",
+            "uvicorn[standard]>=0.20.0",
+            "psycopg2-binary",
+            "duckdb~=0.9.0",
+            "faker",
+        ]
+        for pkg in valid_packages:
+            assert _PACKAGE_PATTERN.fullmatch(pkg), f"Expected valid: {pkg}"
+
+        invalid_packages = [
+            "sh -c rm -rf /",
+            "pkg; rm -rf /",
+            "pkg && curl evil.com",
+            "-r requirements.txt",
+        ]
+        for pkg in invalid_packages:
+            assert not _PACKAGE_PATTERN.fullmatch(pkg), f"Expected invalid: {pkg}"
+
+        with pytest.raises(ValueError, match="Invalid package requirement"):
+            install_packages(["safe-pkg", "bad; rm -rf"])
+
+    def test_copy_tree_from_runtime_handles_object_and_string(self, tmp_path):
+        from create_setup import _copy_tree_from_runtime
+
+        mock_session = MagicMock()
+        # Case 1: command returns object with .stdout
+        mock_result = MagicMock()
+        mock_result.stdout = "/sandbox/task/file1.txt\n/sandbox/task/subdir/file2.txt\n"
+        mock_session.execute_command.return_value = mock_result
+
+        dest = tmp_path / "out1"
+        _copy_tree_from_runtime(mock_session, "/sandbox/task", dest)
+        assert mock_session.copy_from_runtime.call_count == 2
+
+        # Case 2: command returns raw string
+        mock_session.reset_mock()
+        mock_session.execute_command.return_value = "/sandbox/task/file3.txt\n"
+        dest2 = tmp_path / "out2"
+        _copy_tree_from_runtime(mock_session, "/sandbox/task", dest2)
+        assert mock_session.copy_from_runtime.call_count == 1

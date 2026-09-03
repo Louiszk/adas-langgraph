@@ -295,7 +295,9 @@ def setup_sandbox_environment(session, reinstall=False):
     # Copy core framework files
     required_files = [
         "adas_core/ast_parser.py",
+        "adas_core/automatic_setup.py",
         "adas_core/virtual_agentic_system.py",
+        "adas_core/task_spec.py",
         "adas_core/decorator_logic.py",
         "adas_core/llm_wrapper.py",
         "adas_core/materialize.py",
@@ -308,6 +310,7 @@ def setup_sandbox_environment(session, reinstall=False):
     copy_paths = [(path, f"/sandbox/workspace/{path}") for path in required_files] + [
         ("sandbox/run_meta.py", "/sandbox/workspace/run_meta.py"),
         ("sandbox/run_target.py", "/sandbox/workspace/run_target.py"),
+        ("sandbox/run_setup.py", "/sandbox/workspace/run_setup.py"),
     ]
 
     for src_path, dest_path in copy_paths:

@@ -481,38 +481,29 @@ class Orchestrator:
         overall_exit = 0
         iterations = self._parse_iterations(getattr(self.args, "iterations", "1-16"))
         approach = getattr(self.args, "type", "ablationC")
-        benchmark = getattr(self.args, "benchmark", "gsm")
-        bench_dir, _ = self._get_benchmark_info(benchmark)
 
         initial_dir = Path.cwd()
         target_dir = initial_dir / f"ADAS_{approach}"
         work_dir = target_dir if target_dir.is_dir() else initial_dir
 
-        problem_path = getattr(self.args, "problem_path", None)
-        if not problem_path:
-            candidate = work_dir / "generated_systems" / bench_dir / "prompts.txt"
-            problem_path = (
-                candidate if candidate.is_file() else initial_dir / "generated_systems" / bench_dir / "prompts.txt"
-            )
-
-        problem_text = ""
-        if Path(problem_path).is_file():
-            problem_text = Path(problem_path).read_text(encoding="utf-8").strip()
-        else:
-            problem_text = getattr(self.args, "problem", "") or "Solve the benchmark tasks."
+        task_spec_arg = getattr(self.args, "task_spec", None)
+        if not task_spec_arg:
+            logger.error("Design runs require an established --task-spec.")
+            return 2
+        task_spec_path = Path(task_spec_arg)
+        if not task_spec_path.is_file():
+            logger.error("TaskSpec file not found: %s", task_spec_path)
+            return 2
 
         for iter_num in iterations:
-            sys_name = f"{approach}_{benchmark}{iter_num}_gpt"
             logger.info("=========================================================")
-            logger.info(f"   Running Design Generation for {sys_name}")
+            logger.info("   Running Design Generation for %s (run %s)", task_spec_path, iter_num)
             logger.info("=========================================================")
             cmd = [
                 sys.executable,
                 "run_design.py",
-                "--problem",
-                problem_text,
-                "--name",
-                sys_name,
+                "--task-spec",
+                str(task_spec_path.resolve()),
                 "--container",
                 self.args.container,
             ]
@@ -613,8 +604,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="auto",
         help="Container runtime engine.",
     )
-    parser.add_argument("--problem-path", default=None, help="Path to prompt file for design runs.")
-    parser.add_argument("--problem", default="", help="Problem statement for design runs.")
+    parser.add_argument(
+        "--task-spec",
+        default=None,
+        help="Established TaskSpec file for design runs.",
+    )
     parser.add_argument(
         "--system-names", nargs="+", default=["data_analyst_gpt5_v0"], help="System names for target execution."
     )

@@ -98,6 +98,7 @@ class TestTaskSpecModel:
                 files=[
                     FileFixtureSpec(
                         path="input.csv",
+                        count=1,
                         content_type="csv",
                         description="Customer accounts to ingest",
                     )
@@ -107,12 +108,14 @@ class TestTaskSpecModel:
                         name="graph_store",
                         db_type="neo4j",
                         connection_env={"uri": "NEO4J_URI", "user": "NEO4J_USER", "password": "NEO4J_PASSWORD"},
+                        count=500,
                         description="Nodes for Company, Product, and Vulnerability",
                     ),
                     DatabaseFixtureSpec(
                         name="local_cache",
                         db_type="sqlite",
                         file_path="data/cache.db",
+                        count=50,
                         description="SQLite cache table",
                     ),
                 ],
@@ -168,8 +171,10 @@ class TestTaskSpecModel:
         restored = TaskSpec.from_json(json_str)
         assert restored.name == spec.name
         assert restored.required_packages == ["neo4j>=5.0", "fastapi", "httpx"]
+        assert restored.test_fixtures.files[0].count == 1
         assert len(restored.test_fixtures.databases) == 2
         assert restored.test_fixtures.databases[0].db_type == "neo4j"
+        assert restored.test_fixtures.databases[0].count == 500
         assert restored.test_fixtures.databases[0].connection_env["uri"] == "NEO4J_URI"
         assert len(restored.test_fixtures.mcps) == 2
         assert restored.test_fixtures.mcps[0].transport == "stdio"

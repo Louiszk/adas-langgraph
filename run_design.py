@@ -1,8 +1,11 @@
 import argparse
 import os
+from pathlib import Path
 
 from adas_core.logging_config import get_logger, setup_logging
-from config import settings, task
+from adas_core.task_spec import TaskSpec
+from config import settings
+from create_setup import run_setup_for_task, setup_manifest_is_current
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
 logger = get_logger("run_design")
@@ -64,8 +67,12 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run agentic systems in a sandboxed environment")
     parser.add_argument("--reinstall", action="store_true", help="Reinstall dependencies.")
-    parser.add_argument("--problem", default=task.problem_statement, help="Problem statement to solve")
-    parser.add_argument("--name", default="UnnamedSystem", help="Target system name")
+    parser.add_argument("--task-spec", type=Path, required=True, help="Validated TaskSpec JSON file")
+    parser.add_argument(
+        "--auto-setup",
+        action="store_true",
+        help="Generate frozen fixtures and preflight artifacts in a separate sandbox before design.",
+    )
     parser.add_argument(
         "--optimize-system",
         default=None,
@@ -83,7 +90,23 @@ def main():
         help="The base container image to use for the sandbox.",
     )
     args = parser.parse_args()
+    task_spec = TaskSpec.from_file(args.task_spec)
+    problem_statement = task_spec.system_goal
+    target_name = task_spec.name
     logger.info(f"Running with arguments: {args}")
+
+    if args.auto_setup or not setup_manifest_is_current(args.task_spec):
+        logger.info(
+            "Task setup is missing, stale, or --auto-setup was requested; ensuring setup for %s...",
+            args.task_spec,
+        )
+        run_setup_for_task(
+            args.task_spec,
+            force=args.auto_setup,
+            reinstall=args.reinstall,
+            container=args.container,
+            base_image=args.base_image,
+        )
 
     session = StreamingSandboxSession(
         image=args.base_image,
@@ -94,7 +117,7 @@ def main():
     try:
         session.open()
         if setup_sandbox_environment(session, args.reinstall):
-            run_meta_system_in_sandbox(session, args.problem, args.name, args.optimize_system)
+            run_meta_system_in_sandbox(session, problem_statement, target_name, args.optimize_system)
             logger.info("Finished successfully!")
         else:
             logger.error("Failed to set up sandbox environment")
