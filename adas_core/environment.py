@@ -22,6 +22,30 @@ ADAS_WORKSPACE_DIR_ENV = "ADAS_WORKSPACE_DIR"
 ADAS_INPUT_DIR_ENV = "ADAS_INPUT_DIR"
 ADAS_OUTPUT_DIR_ENV = "ADAS_OUTPUT_DIR"
 
+# Central sandbox and container filesystem paths
+SANDBOX_WORKSPACE_DIR = "/sandbox/workspace"
+SANDBOX_TASK_SETUP_DIR = f"{SANDBOX_WORKSPACE_DIR}/task_setup"
+SANDBOX_TASK_SPEC_PATH = f"{SANDBOX_TASK_SETUP_DIR}/task.json"
+SANDBOX_FIXTURES_DIR = f"{SANDBOX_TASK_SETUP_DIR}/fixtures"
+SANDBOX_GENERATED_SYSTEMS_DIR = f"{SANDBOX_WORKSPACE_DIR}/generated_systems"
+SANDBOX_TARGET_METRICS_DIR = f"{SANDBOX_WORKSPACE_DIR}/target_metrics"
+SANDBOX_DATA_DIR = f"{SANDBOX_WORKSPACE_DIR}/data"
+SANDBOX_DATA_OUTPUT_DIR = f"{SANDBOX_DATA_DIR}/output"
+
+DEFAULT_EXCLUDED_PACKAGES: list[str] = [
+    "datasets",
+    "docker",
+    "grpcio-status",
+    "langchain-openai",
+    "wheel",
+    "llm-sandbox",
+    "pip",
+    "dill",
+    "podman",
+    "python-dotenv",
+    "setuptools",
+]
+
 _PACKAGE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?(?:\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+(?:\s*,\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+)*)?$"
 )

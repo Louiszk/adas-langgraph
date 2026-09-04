@@ -7,9 +7,30 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 
+from adas_core.environment import DEFAULT_EXCLUDED_PACKAGES
+
+
+def escape_system_name(system_name: str) -> str:
+    """Sanitize a system name by removing path and filesystem separator characters."""
+    return system_name.replace("/", "").replace("\\", "").replace(":", "")
+
+
+def sanitize_identifier(name: str, prefix_if_digit: str = "") -> str:
+    """Convert an arbitrary string into a safe Python identifier component."""
+    cleaned = re.sub(r"[^0-9a-zA-Z_]", "_", name.strip())
+    if cleaned and cleaned[0].isdigit() and prefix_if_digit:
+        cleaned = f"{prefix_if_digit}{cleaned}"
+    return cleaned or "default"
+
+
+def sanitize_test_id(test_id: str) -> str:
+    """Convert a test-case identifier into a Python identifier component."""
+    return sanitize_identifier(test_id, prefix_if_digit="case_")
+
+
 def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str]:
     if exclude_packages is None:
-        exclude_packages = []
+        exclude_packages = DEFAULT_EXCLUDED_PACKAGES
 
     result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True)
 

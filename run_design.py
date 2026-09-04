@@ -2,6 +2,13 @@ import argparse
 import os
 from pathlib import Path
 
+from adas_core.environment import (
+    SANDBOX_FIXTURES_DIR,
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_WORKSPACE_DIR,
+)
+from adas_core.helpers import escape_system_name
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from config import settings
@@ -19,9 +26,9 @@ def run_meta_system_in_sandbox(
 ):
     quoted_problem = problem_statement.replace('"', '\\"')
     command = (
-        "ADAS_FIXTURES_DIR=/sandbox/workspace/task_setup/fixtures "
+        f"ADAS_FIXTURES_DIR={SANDBOX_FIXTURES_DIR} "
         "ADAS_WORKSPACE_ROOT=/tmp/adas-runs "
-        f'python3 /sandbox/workspace/run_meta.py "{quoted_problem}" "{target_name}" "{settings.max_iterations}" '
+        f'python3 {SANDBOX_WORKSPACE_DIR}/run_meta.py "{quoted_problem}" "{target_name}" "{settings.max_iterations}" '
     )
     command += f'"{optimize_system}"' if optimize_system else ""
 
@@ -30,33 +37,33 @@ def run_meta_system_in_sandbox(
 
     logger.info("Meta system execution completed!")
 
-    if "generated_systems" in str(session.execute_command("ls -la /sandbox/workspace")):
+    if "generated_systems" in str(session.execute_command(f"ls -la {SANDBOX_WORKSPACE_DIR}")):
         logger.info("Copying generated systems and metrics back to host...")
         os.makedirs("generated_systems", exist_ok=True)
-        escaped_target_name = target_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+        escaped_target_name = escape_system_name(target_name)
         target_file_name = escaped_target_name + ".py"
         target_pickle_name = escaped_target_name + ".pkl"
 
-        as_dir = str(session.execute_command("ls -la /sandbox/workspace/generated_systems"))
+        as_dir = str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}"))
         if target_file_name in as_dir:
             session.copy_from_runtime(
-                f"/sandbox/workspace/generated_systems/{target_file_name}",
+                f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_file_name}",
                 f"generated_systems/{target_file_name}",
             )
         if target_pickle_name in as_dir:
             session.copy_from_runtime(
-                f"/sandbox/workspace/generated_systems/{target_pickle_name}",
+                f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_pickle_name}",
                 f"generated_systems/{target_pickle_name}",
             )
         logger.info(f"Copied {target_file_name} and .pkl back to host")
 
-        if "metrics" in str(session.execute_command("ls -la /sandbox/workspace/generated_systems")):
-            metrics_file = target_name.replace("/", "_").replace("\\", "_").replace(":", "_") + ".json"
+        if "metrics" in str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}")):
+            metrics_file = f"{escaped_target_name}.json"
 
-            if metrics_file in str(session.execute_command("ls -la /sandbox/workspace/generated_systems/metrics")):
+            if metrics_file in str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}/metrics")):
                 os.makedirs("generated_systems/metrics", exist_ok=True)
                 session.copy_from_runtime(
-                    f"/sandbox/workspace/generated_systems/metrics/{metrics_file}",
+                    f"{SANDBOX_GENERATED_SYSTEMS_DIR}/metrics/{metrics_file}",
                     f"generated_systems/metrics/{metrics_file}",
                 )
                 logger.info(f"Copied metrics file {metrics_file} back to host")
@@ -66,7 +73,7 @@ def run_meta_system_in_sandbox(
 
 def copy_task_setup_to_sandbox(session: StreamingSandboxSession, task_dir: Path, task_spec_path: Path) -> str:
     """Copy the visible, frozen setup artifacts into a design sandbox."""
-    runtime_task_dir = "/sandbox/workspace/task_setup"
+    runtime_task_dir = SANDBOX_TASK_SETUP_DIR
     session.execute_command(f"mkdir -p {runtime_task_dir}")
     for source_path in task_dir.rglob("*"):
         if source_path.is_file() and "__pycache__" not in source_path.parts:
@@ -80,7 +87,7 @@ def copy_task_setup_to_sandbox(session: StreamingSandboxSession, task_dir: Path,
 
 def run_sandbox_preflight(session: StreamingSandboxSession, runtime_task_dir: str) -> bool:
     """Install frozen setup requirements and validate them inside the sandbox."""
-    result = session.execute_command(f"python3 /sandbox/workspace/run_preflight.py --task-dir {runtime_task_dir}")
+    result = session.execute_command(f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}")
     if getattr(result, "exit_code", 1) == 0:
         logger.info("Sandbox preflight verification passed.")
         return True

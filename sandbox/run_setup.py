@@ -5,30 +5,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
-import subprocess
-import sys
 from pathlib import Path
 
 from adas_core.automatic_setup import AutomaticSetup
+from adas_core.environment import _PACKAGE_PATTERN, ensure_packages_installed
 from adas_core.task_spec import TaskSpec
 
-_PACKAGE_PATTERN = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?(?:\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+(?:\s*,\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+)*)?$"
-)
+__all__ = ["_PACKAGE_PATTERN", "install_packages", "write_manifest"]
 
 
 def install_packages(packages: list[str]) -> None:
     """Install TaskSpec and generated setup dependencies in the sandbox."""
-    invalid = [package for package in packages if not _PACKAGE_PATTERN.fullmatch(package)]
-    if invalid:
-        raise ValueError(f"Invalid package requirement(s): {invalid}")
-    if not packages:
-        return
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *packages],
-        check=True,
-    )
+    ensure_packages_installed(packages)
 
 
 def write_manifest(task_spec: TaskSpec, task_dir: Path, packages: list[str]) -> Path:

@@ -11,20 +11,32 @@ from pathlib import Path
 from typing import Any, Literal
 
 import dill as pickle
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
-from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
+from adas_core.chat_model import UsageRecorder, usage_scope
 from adas_core.decorator_logic import build_decorator_signatures
-from adas_core.environment import isolated_case_workspace
-from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
+from adas_core.environment import (
+    DEFAULT_EXCLUDED_PACKAGES,
+    SANDBOX_FIXTURES_DIR,
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_TASK_SPEC_PATH,
+    _PACKAGE_PATTERN,
+    isolated_case_workspace,
+)
+from adas_core.helpers import (
+    TruncatingStringIO,
+    get_filtered_packages,
+    sanitize_identifier,
+    truncate_state,
+)
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from config import settings
 from meta_system.config import RECURSION_LIMIT
-from meta_system.helpers import ignored_nodes_message
+from meta_system.helpers import get_validation_exec_globals, ignored_nodes_message
 from meta_system.prompts import test_reminder
 
 logger = get_logger("meta_system.tools")
@@ -37,25 +49,10 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
         package_name: The name of the package to install, optionally with a version specifier (e.g., "numpy", "pandas==2.0.3").
     """
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
-    exclude_packages = [
-        "datasets",
-        "docker",
-        "grpcio-status",
-        "langchain-openai",
-        "wheel",
-        "llm-sandbox",
-        "pip",
-        "dill",
-        "podman",
-        "python-dotenv",
-        "setuptools",
-    ]
     # Validate package name to prevent command injection
-    valid_pattern = r"^[a-zA-Z0-9._-]+(\s*[=<>!]=\s*[0-9a-zA-Z.]+)?$"
-
-    if not re.match(valid_pattern, package_name):
+    if not _PACKAGE_PATTERN.fullmatch(package_name.strip()):
         return f"ERROR: Invalid package name format. Package name '{package_name}' contains invalid characters."
-    if any(ep in package_name for ep in exclude_packages + ["langgraph", "langchain-core"]):
+    if any(ep in package_name for ep in DEFAULT_EXCLUDED_PACKAGES + ["langgraph", "langchain-core"]):
         return f"{package_name} is already installed."
 
     # Parse package name to get the canonical name for `pip show`
@@ -95,7 +92,9 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
             except Exception:
                 target_agentic_system.installed_packages[name_only] = package_name.strip()
 
-            target_agentic_system.packages_info = get_filtered_packages(exclude_packages) + ["langchain-core 0.3.75"]
+            target_agentic_system.packages_info = get_filtered_packages(DEFAULT_EXCLUDED_PACKAGES) + [
+                "langchain-core 0.3.75"
+            ]
             return f"Successfully installed {package_name}"
         else:
             return f"ERROR: installing {package_name}:\n{process.stdout}"
@@ -392,7 +391,7 @@ def _resolve_task_validation(
     if task_spec is None:
         task_dir_env = os.environ.get("ADAS_TASK_DIR")
         candidate_paths: list[Path] = [
-            Path("/sandbox/workspace/task_setup/task.json"),
+            Path(SANDBOX_TASK_SPEC_PATH),
             Path("task_setup/task.json"),
         ]
         if task_dir_env:
@@ -420,14 +419,14 @@ def _resolve_task_validation(
                     task_dir_candidates.append(Path(os.environ["ADAS_TASK_DIR"]))
                 task_dir_candidates.extend(
                     [
-                        Path("/sandbox/workspace/task_setup"),
+                        Path(SANDBOX_TASK_SETUP_DIR),
                         Path("task_setup"),
                         Path("."),
                     ]
                 )
 
                 found_file = None
-                safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+                safe_name = sanitize_identifier(task_spec.name)
                 for td in task_dir_candidates:
                     for name in [f"{safe_name}.validation.py", f"{task_spec.name}.validation.py", "validation.py"]:
                         candidate = td / name
@@ -454,13 +453,7 @@ def _resolve_task_validation(
         all_test_cases: list[Any] = []
         all_validator_funcs: list[Any] = []
         for snippet in snippets:
-            snippet_namespace = {
-                "ChatModel": ChatModel,
-                "HumanMessage": HumanMessage,
-                "ToolMessage": ToolMessage,
-                "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage,
-            }
+            snippet_namespace = get_validation_exec_globals()
             try:
                 exec(snippet, snippet_namespace)
                 cases = snippet_namespace.get("TARGET_SYSTEM_TEST_CASES")
@@ -531,7 +524,7 @@ def test_system(state: dict[str, Any]) -> str:
         target_workflow = main_namespace["workflow"]
 
         fixtures_dir_env = os.environ.get("ADAS_FIXTURES_DIR")
-        fixtures_path = Path(fixtures_dir_env) if fixtures_dir_env else Path("/sandbox/workspace/fixtures")
+        fixtures_path = Path(fixtures_dir_env) if fixtures_dir_env else Path(SANDBOX_FIXTURES_DIR)
         active_fixtures_dir = fixtures_path if fixtures_path.exists() else None
 
         for i, test_case in enumerate(all_test_cases):
@@ -737,7 +730,7 @@ def test_system(state: dict[str, Any]) -> str:
     # Also checkpoint on initial tests so we do not accept a system with decreased performance
     if num_passed_tests > 0:
         try:
-            code_dir = settings.generated_systems_dir
+            code_dir = SANDBOX_GENERATED_SYSTEMS_DIR
             os.makedirs(code_dir, exist_ok=True)
             escaped_name = target_agentic_system.escaped_name
             base_path = os.path.join(code_dir, escaped_name)

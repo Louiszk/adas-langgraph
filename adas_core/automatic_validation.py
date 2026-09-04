@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.decorator_logic import find_code_blocks
+from adas_core.helpers import sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from meta_system.config import validation_model, validation_wrapper
@@ -29,14 +30,6 @@ class ValidationGenerationResult:
     validation_file_path: Path
     required_packages: list[str]
     summary: str
-
-
-def sanitize_test_id(test_id: str) -> str:
-    """Convert a test-case identifier into a Python identifier component."""
-    cleaned = re.sub(r"[^0-9a-zA-Z_]", "_", test_id.strip())
-    if cleaned and cleaned[0].isdigit():
-        cleaned = f"case_{cleaned}"
-    return cleaned or "default"
 
 
 def extract_code_block(content: str) -> str:

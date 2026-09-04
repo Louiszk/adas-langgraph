@@ -5,7 +5,6 @@ from langchain_core.messages import (
     AIMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
     trim_messages,
 )
 
@@ -22,7 +21,11 @@ from meta_system.config import (
     validation_model,
     validation_wrapper,
 )
-from meta_system.helpers import normalize_response_content, parse_validation_code
+from meta_system.helpers import (
+    get_validation_exec_globals,
+    normalize_response_content,
+    parse_validation_code,
+)
 from meta_system.prompts import (
     build_meta_agent_prompt,
     decorator_reminder,
@@ -84,13 +87,7 @@ def validation_function(state: MetaState) -> dict[str, Any]:
 
             # Aggregate previous test cases for context
             previous_test_cases_str = ""
-            temp_namespace = {
-                "ChatModel": ChatModel,
-                "HumanMessage": HumanMessage,
-                "ToolMessage": ToolMessage,
-                "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage,
-            }
+            temp_namespace = get_validation_exec_globals()
             for snippet in snippets:
                 try:
                     exec(snippet, temp_namespace)

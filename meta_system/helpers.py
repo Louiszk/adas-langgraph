@@ -24,6 +24,17 @@ def normalize_response_content(content: Any) -> str:
     return str(content or "")
 
 
+def get_validation_exec_globals() -> dict[str, Any]:
+    """Return standard execution namespace for parsing and validating target system test suites."""
+    return {
+        "ChatModel": ChatModel,
+        "HumanMessage": HumanMessage,
+        "ToolMessage": ToolMessage,
+        "SystemMessage": SystemMessage,
+        "AIMessage": AIMessage,
+    }
+
+
 def parse_validation_code(response: Any) -> tuple[str | None, list[str] | None]:
     """Extract and validate executable Python validation code block from LLM response."""
     response_content = getattr(response, "content", response)
@@ -36,13 +47,7 @@ def parse_validation_code(response: Any) -> tuple[str | None, list[str] | None]:
     for block in potential_code_blocks:
         try:
             # Use a temporary, isolated namespace for safe execution
-            temp_namespace = {
-                "ChatModel": ChatModel,
-                "HumanMessage": HumanMessage,
-                "ToolMessage": ToolMessage,
-                "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage,
-            }
+            temp_namespace = get_validation_exec_globals()
             exec(block, temp_namespace)
             test_cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES")
             validator_func = temp_namespace.get("validate_target_system_output")

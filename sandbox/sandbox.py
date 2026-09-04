@@ -6,6 +6,11 @@ from pathlib import Path
 
 from llm_sandbox import SandboxBackend, create_session
 
+from adas_core.environment import (
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TARGET_METRICS_DIR,
+    SANDBOX_WORKSPACE_DIR,
+)
 from adas_core.logging_config import get_logger
 from config import settings
 
@@ -278,14 +283,14 @@ def setup_sandbox_environment(session, reinstall=False):
     """Set up the sandbox environment with required files and dependencies."""
     logger.info("Setting up sandbox environment...")
 
-    session.execute_command("mkdir -p /sandbox/workspace/meta_system")
-    session.execute_command("mkdir -p /sandbox/workspace/adas_core")
-    session.execute_command("mkdir -p /sandbox/workspace/generated_systems")
-    session.execute_command("mkdir -p /sandbox/workspace/config")
-    session.execute_command("rm -rf /sandbox/workspace/target_metrics")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/meta_system")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/adas_core")
+    session.execute_command(f"mkdir -p {SANDBOX_GENERATED_SYSTEMS_DIR}")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/config")
+    session.execute_command(f"rm -rf {SANDBOX_TARGET_METRICS_DIR}")
 
     # Copy meta-system package files
-    session.copy_dir_to_runtime(src_dir="meta_system", dest_dir="/sandbox/workspace/meta_system", pattern="*.py")
+    session.copy_dir_to_runtime(src_dir="meta_system", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/meta_system", pattern="*.py")
 
     # Copy core framework files
     required_files = [
@@ -306,11 +311,11 @@ def setup_sandbox_environment(session, reinstall=False):
         ".env",
     ]
 
-    copy_paths = [(path, f"/sandbox/workspace/{path}") for path in required_files] + [
-        ("sandbox/run_meta.py", "/sandbox/workspace/run_meta.py"),
-        ("sandbox/run_target.py", "/sandbox/workspace/run_target.py"),
-        ("sandbox/run_setup.py", "/sandbox/workspace/run_setup.py"),
-        ("sandbox/run_preflight.py", "/sandbox/workspace/run_preflight.py"),
+    copy_paths = [(path, f"{SANDBOX_WORKSPACE_DIR}/{path}") for path in required_files] + [
+        ("sandbox/run_meta.py", f"{SANDBOX_WORKSPACE_DIR}/run_meta.py"),
+        ("sandbox/run_target.py", f"{SANDBOX_WORKSPACE_DIR}/run_target.py"),
+        ("sandbox/run_setup.py", f"{SANDBOX_WORKSPACE_DIR}/run_setup.py"),
+        ("sandbox/run_preflight.py", f"{SANDBOX_WORKSPACE_DIR}/run_preflight.py"),
     ]
 
     for src_path, dest_path in copy_paths:
@@ -322,12 +327,12 @@ def setup_sandbox_environment(session, reinstall=False):
     logger.info("Searching for existing agentic systems to copy to sandbox...")
     session.copy_dir_to_runtime(
         src_dir="generated_systems",
-        dest_dir="/sandbox/workspace/generated_systems",
+        dest_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
         pattern="*.py",
     )
     session.copy_dir_to_runtime(
         src_dir="generated_systems",
-        dest_dir="/sandbox/workspace/generated_systems",
+        dest_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
         pattern="*.pkl",
     )
 

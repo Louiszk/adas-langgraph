@@ -10,6 +10,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 # Import ChatModel and UsageRecorder
 from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
+from adas_core.environment import SANDBOX_TARGET_METRICS_DIR
 from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("run_target")
@@ -53,7 +54,7 @@ def main() -> None:
     }
 
     # Define the metrics directory
-    metrics_dir = "/sandbox/workspace/target_metrics"
+    metrics_dir = SANDBOX_TARGET_METRICS_DIR
     os.makedirs(metrics_dir, exist_ok=True)
 
     # Variable to hold the full final state snapshot

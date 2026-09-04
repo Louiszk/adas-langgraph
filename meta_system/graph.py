@@ -4,10 +4,10 @@ import dill as pickle
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 
+from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec
-from config import settings
 from meta_system.config import MAX_HARDENING_STEPS
 from meta_system.nodes import (
     formatting_function,
@@ -63,7 +63,7 @@ def design_completed_condition(state: MetaState) -> str:
             if target_agentic_system is None:
                 return END
             num_test_cases = _get_test_case_count(state)
-            code_dir = settings.generated_systems_dir
+            code_dir = SANDBOX_GENERATED_SYSTEMS_DIR
             escaped_name = target_agentic_system.escaped_name
             base_path = os.path.join(code_dir, escaped_name)
             best_checkpoint_path = None

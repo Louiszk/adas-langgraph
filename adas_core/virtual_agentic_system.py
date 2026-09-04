@@ -13,7 +13,7 @@ from adas_core.ast_parser import (
     extract_top_level_names,
     get_top_level_definitions,
 )
-from adas_core.helpers import validate_node_conditional_edge_signature
+from adas_core.helpers import escape_system_name, validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
 
@@ -27,7 +27,7 @@ class VirtualAgenticSystem:
 
     def __init__(self, system_name: str = "Default") -> None:
         self.system_name = system_name
-        self.escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
+        self.escaped_name = escape_system_name(system_name)
 
         self.nodes = {}  # node_name -> {'description': str, 'source_code': str}
         self.tools = {}  # tool_name -> {'description': str, 'source_code': str}
@@ -60,7 +60,6 @@ class VirtualAgenticSystem:
 
     def set_state_from_node(self, class_def_node: ast.ClassDef) -> str:
         """Validates the AgentState definition from a code string, then sets it."""
-        attributes_found = {}
         attributes_found = {}
         try:
             for item in class_def_node.body:

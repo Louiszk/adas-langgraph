@@ -6,7 +6,15 @@ from typing import Any, cast
 
 import dill as pickle
 
-sys.path.append("/sandbox/workspace")
+from adas_core.environment import (
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_TASK_SPEC_PATH,
+    SANDBOX_WORKSPACE_DIR,
+)
+from adas_core.helpers import escape_system_name
+
+sys.path.append(SANDBOX_WORKSPACE_DIR)
 from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
@@ -14,7 +22,7 @@ from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.graph import workflow
 
 logger = get_logger("run_meta")
-_TASK_SPEC_PATH = "/sandbox/workspace/task_setup/task.json"
+_TASK_SPEC_PATH = SANDBOX_TASK_SPEC_PATH
 
 
 def load_visible_task_spec() -> TaskSpec:
@@ -79,14 +87,12 @@ def main():
 
     try:
         if optimize_from_file:
-            path = "/sandbox/workspace/generated_systems/" + optimize_from_file.replace("/", "").replace(
-                "\\", ""
-            ).replace(":", "")
+            path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/" + escape_system_name(optimize_from_file)
             try:
                 with open(path + ".pkl", "rb") as f:
                     target_agentic_system = cast(VirtualAgenticSystem, pickle.load(f))
                 target_agentic_system.system_name = system_name
-                target_agentic_system.escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
+                target_agentic_system.escaped_name = escape_system_name(system_name)
                 logger.info("System initialized from existing file.")
             except Exception as e:
                 raise RuntimeError(f"Error initializing from file: {e}") from e
@@ -100,7 +106,7 @@ def main():
             "optimize": bool(optimize_from_file),
             "max_iterations": max_iterations,
             "task_spec": task_spec,
-            "task_dir": "/sandbox/workspace/task_setup",
+            "task_dir": SANDBOX_TASK_SETUP_DIR,
         }
 
         processed_msg_count = 0
@@ -149,12 +155,12 @@ def main():
         metrics["usage_metrics"] = ChatModel.usage_metrics
         metrics["scoped_metrics"] = UsageRecorder.get_aggregate(system="meta")
 
-        escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
-        metrics_dir = "/sandbox/workspace/generated_systems/metrics"
+        escaped_name = escape_system_name(system_name)
+        metrics_dir = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/metrics"
         os.makedirs(metrics_dir, exist_ok=True)
 
         # Load the final saved system to get the list of installed packages
-        final_system_path = f"/sandbox/workspace/generated_systems/{escaped_name}.pkl"
+        final_system_path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{escaped_name}.pkl"
         if os.path.exists(final_system_path):
             try:
                 with open(final_system_path, "rb") as f:

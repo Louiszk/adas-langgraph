@@ -3,6 +3,11 @@ import datetime
 import json
 from typing import Any
 
+from adas_core.environment import (
+    SANDBOX_DATA_OUTPUT_DIR,
+    SANDBOX_TARGET_METRICS_DIR,
+    SANDBOX_WORKSPACE_DIR,
+)
 from adas_core.logging_config import get_logger, setup_logging
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
@@ -18,7 +23,7 @@ def run_target_system_in_sandbox(
     """Constructs and executes the command to run the target system inside the sandbox."""
 
     # Construct command with the run_id passed down
-    cmd_parts = [f'python3 /sandbox/workspace/run_target.py --system_name="{system_name}" --run-id="{run_id}"']
+    cmd_parts = [f'python3 {SANDBOX_WORKSPACE_DIR}/run_target.py --system_name="{system_name}" --run-id="{run_id}"']
 
     # Safely serialize and quote the initial state for the command line
     state_str = json.dumps(state)
@@ -96,10 +101,8 @@ def main() -> None:
         if setup_sandbox_environment(session, reinstall=args.reinstall):
             # Purge output and metrics directories to ensure a clean run
             logger.info("Purging sandbox output and metrics directories")
-            session.execute_command("rm -rf /sandbox/workspace/data/output && mkdir -p /sandbox/workspace/data/output")
-            session.execute_command(
-                "rm -rf /sandbox/workspace/target_metrics && mkdir -p /sandbox/workspace/target_metrics"
-            )
+            session.execute_command(f"rm -rf {SANDBOX_DATA_OUTPUT_DIR} && mkdir -p {SANDBOX_DATA_OUTPUT_DIR}")
+            session.execute_command(f"rm -rf {SANDBOX_TARGET_METRICS_DIR} && mkdir -p {SANDBOX_TARGET_METRICS_DIR}")
 
             # Run the target system with the provided state AND the timestamp
             run_target_system_in_sandbox(session, args.system_name, initial_state, run_id=timestamp)
@@ -110,7 +113,7 @@ def main() -> None:
             host_output_folder = f"data/output/{args.system_name}_{timestamp}"
 
             session.copy_dir_from_runtime(
-                src_dir="/sandbox/workspace/data/output",
+                src_dir=SANDBOX_DATA_OUTPUT_DIR,
                 dest_dir=host_output_folder,
                 pattern="*",
             )
@@ -118,7 +121,7 @@ def main() -> None:
 
             logger.info("Checking for metrics files to copy back")
             session.copy_dir_from_runtime(
-                src_dir="/sandbox/workspace/target_metrics",
+                src_dir=SANDBOX_TARGET_METRICS_DIR,
                 dest_dir="target_metrics",
                 pattern="*",
             )

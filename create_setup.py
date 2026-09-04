@@ -7,12 +7,13 @@ import hashlib
 import json
 from pathlib import Path
 
+from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
 logger = get_logger("create_setup")
-_RUNTIME_TASK_DIR = "/sandbox/workspace/task_setup"
+_RUNTIME_TASK_DIR = SANDBOX_TASK_SETUP_DIR
 
 
 def setup_manifest_is_current(task_spec_path: Path) -> bool:
@@ -62,7 +63,7 @@ def run_setup_for_task(
         session.execute_command(f"mkdir -p {_RUNTIME_TASK_DIR}")
         session.copy_to_runtime(str(task_spec_path), f"{_RUNTIME_TASK_DIR}/task.json")
         command = (
-            "python3 /sandbox/workspace/run_setup.py "
+            f"python3 {SANDBOX_WORKSPACE_DIR}/run_setup.py "
             f"--task-spec {_RUNTIME_TASK_DIR}/task.json --task-dir {_RUNTIME_TASK_DIR}"
         )
         result = session.execute_command(command)

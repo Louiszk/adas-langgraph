@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from adas_core.environment import SANDBOX_TASK_SPEC_PATH
 from adas_core.logging_config import get_logger
 from adas_core.tool_calls import execute_tool_calls, validate_tool_history
 
@@ -406,7 +407,7 @@ def get_allowed_target_models() -> list[dict[str, str]]:
     if ChatModel.allowed_target_models is not None:
         return ChatModel.allowed_target_models
 
-    task_spec_path = os.environ.get("ADAS_TASK_SPEC_PATH") or "/sandbox/workspace/task_setup/task.json"
+    task_spec_path = os.environ.get("ADAS_TASK_SPEC_PATH") or SANDBOX_TASK_SPEC_PATH
     if Path(task_spec_path).exists():
         try:
             from adas_core.task_spec import TaskSpec

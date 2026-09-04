@@ -2,21 +2,15 @@ import importlib
 import sys
 import time
 
-from benchmark.benchmark_base import run_benchmark_parallel
+from adas_core.environment import SANDBOX_WORKSPACE_DIR
+from benchmark.benchmark_base import extract_target_usage, reset_target_usage, run_benchmark_parallel
 
-sys.path.append("/sandbox/workspace")
-from adas_core.chat_model import ChatModel
+sys.path.append(SANDBOX_WORKSPACE_DIR)
 
 
 def execute_problem(problem_item: dict, system_path: str) -> dict:
     start_time = time.time()
-
-    ChatModel.usage_metrics["target_usage"]["overall"] = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "llm_calls": 0,
-    }
+    reset_target_usage()
 
     expected = problem_item.get("answer", "")
     predicted = "ERROR"
@@ -43,7 +37,6 @@ def execute_problem(problem_item: dict, system_path: str) -> dict:
 
     finally:
         duration = time.time() - start_time
-        usage = ChatModel.usage_metrics["target_usage"]["overall"]
 
     return {
         "question_id": problem_item.get("question_id", "unknown"),
@@ -52,11 +45,7 @@ def execute_problem(problem_item: dict, system_path: str) -> dict:
         "expected": expected,
         "is_correct": is_correct,
         "category": problem_item.get("category", "unknown"),
-        "duration_seconds": duration,
-        "llm_calls": usage.get("llm_calls", 0),
-        "input_tokens": usage.get("input_tokens", 0),
-        "output_tokens": usage.get("output_tokens", 0),
-        "total_tokens": usage.get("total_tokens", 0),
+        **extract_target_usage(duration),
     }
 
 

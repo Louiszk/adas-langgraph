@@ -181,7 +181,8 @@ class TestSetupSandboxUtilities:
         assert not setup_manifest_is_current(task_spec)
 
     def test_package_pattern_validation(self):
-        from sandbox.run_setup import _PACKAGE_PATTERN, install_packages
+        from adas_core.environment import _PACKAGE_PATTERN
+        from sandbox.run_setup import install_packages
 
         valid_packages = [
             "neo4j",
