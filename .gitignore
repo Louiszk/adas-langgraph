@@ -21,6 +21,7 @@ adasvenv2/
 # ADAS Framework Artifacts
 /generated_systems/*.py
 /generated_systems/*.pkl
+/sandbox/workspace/
 
 # CLI Agents
 AGENTS.md

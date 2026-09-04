@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config import settings
 
 
 def add_node_to_system(system: VirtualAgenticSystem, name: str, code: str, description: str = "Test node") -> bool:
@@ -77,3 +78,10 @@ def sample_state_class_code() -> str:
             context: str
             step_count: int
     """).strip()
+
+
+@pytest.fixture(autouse=True)
+def isolate_generated_systems(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Automatically isolate all generated system checkpoints and files to a temporary directory during tests."""
+    temp_dir = tmp_path_factory.mktemp("generated_systems")
+    monkeypatch.setattr(settings, "generated_systems_dir", str(temp_dir))

@@ -230,6 +230,16 @@ class TestCaseSpec(BaseModel):
     judge_criteria: str | None = Field(
         default=None, description="Detailed rubric and criteria for LLMJudge if llm_judge_needed is True"
     )
+    judge_model: str | None = Field(
+        default=None, description="Optional model override for LLMJudge (defaults to validation_model)"
+    )
+    judge_provider: str | None = Field(
+        default=None, description="Optional provider override for LLMJudge (defaults to validation_wrapper)"
+    )
+    modalities: list[Literal["text", "vision"]] = Field(
+        default_factory=lambda: ["text"],
+        description="Expected output modalities for evaluation, e.g. ['text', 'vision']",
+    )
 
     @field_validator("turns")
     @classmethod
@@ -242,6 +252,14 @@ class TestCaseSpec(BaseModel):
     def validate_judge_criteria_present_if_needed(self) -> TestCaseSpec:
         if self.llm_judge_needed and not (self.judge_criteria and self.judge_criteria.strip()):
             raise ValueError(f"TestCase '{self.id}' sets llm_judge_needed=True but judge_criteria is empty.")
+        if self.judge_model is not None and not self.judge_model.strip():
+            raise ValueError(f"TestCase '{self.id}' specifies an empty judge_model.")
+        if self.judge_provider is not None and not self.judge_provider.strip():
+            raise ValueError(f"TestCase '{self.id}' specifies an empty judge_provider.")
+        if len(set(self.modalities)) != len(self.modalities):
+            raise ValueError(f"TestCase '{self.id}' contains duplicate modalities.")
+        if "vision" in self.modalities and not self.llm_judge_needed:
+            raise ValueError(f"TestCase '{self.id}' requires vision evaluation but llm_judge_needed is False.")
         return self
 
 
@@ -281,6 +299,31 @@ class TaskSpec(BaseModel):
                 raise ValueError(f"Duplicate test case id '{tc.id}' in dev_suite.")
             seen_ids.add(tc.id)
         return v
+
+    @model_validator(mode="after")
+    def validate_judge_model_capabilities(self) -> TaskSpec:
+        """Fail early for judge overrides that cannot evaluate declared modalities."""
+        # Delayed import avoids the TaskSpec <-> ChatModel module dependency at import time.
+        from adas_core.chat_model import ModelRegistry
+        from meta_system.config import validation_wrapper
+
+        for test_case in self.dev_suite:
+            if not test_case.judge_model:
+                continue
+            provider = test_case.judge_provider or validation_wrapper
+            if not ModelRegistry.is_registered_model(provider, test_case.judge_model):
+                raise ValueError(
+                    f"TestCase '{test_case.id}' specifies unregistered judge_model "
+                    f"'{test_case.judge_model}' for provider '{provider}'. "
+                    f"Add it to ModelRegistry before using it in a TaskSpec."
+                )
+            capabilities = ModelRegistry.get_capabilities(provider, test_case.judge_model)
+            if "vision" in test_case.modalities and not capabilities.supports_vision:
+                raise ValueError(
+                    f"TestCase '{test_case.id}' requires vision evaluation but judge_model "
+                    f"'{test_case.judge_model}' ({provider}) is not vision-capable."
+                )
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to standard dictionary."""

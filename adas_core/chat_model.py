@@ -47,6 +47,7 @@ class ModelCapabilities:
     supports_reasoning_effort: bool = False
     supported_reasoning_efforts: frozenset[str] = frozenset()
     supports_structured_output: bool = True
+    supports_vision: bool = True
 
 
 _STANDARD_CHAT_CAPABILITIES = ModelCapabilities(
@@ -55,13 +56,32 @@ _STANDARD_CHAT_CAPABILITIES = ModelCapabilities(
     supports_reasoning_effort=False,
     supported_reasoning_efforts=frozenset(),
     supports_structured_output=True,
+    supports_vision=True,
 )
 
-_OPENAI_REASONING_O_SERIES = ModelCapabilities(
+_LEGACY_TEXT_ONLY_CAPABILITIES = ModelCapabilities(
+    supports_temperature=True,
+    temperature_range=(0.0, 2.0),
+    supports_reasoning_effort=False,
+    supported_reasoning_efforts=frozenset(),
+    supports_structured_output=True,
+    supports_vision=False,
+)
+
+_OPENAI_REASONING_VISION = ModelCapabilities(
     supports_temperature=False,
     supports_reasoning_effort=True,
     supported_reasoning_efforts=frozenset({"low", "medium", "high"}),
     supports_structured_output=True,
+    supports_vision=True,
+)
+
+_OPENAI_REASONING_TEXT_ONLY = ModelCapabilities(
+    supports_temperature=False,
+    supports_reasoning_effort=True,
+    supported_reasoning_efforts=frozenset({"low", "medium", "high"}),
+    supports_structured_output=True,
+    supports_vision=False,
 )
 
 _OPENAI_REASONING_FULL = ModelCapabilities(
@@ -69,6 +89,7 @@ _OPENAI_REASONING_FULL = ModelCapabilities(
     supports_reasoning_effort=True,
     supported_reasoning_efforts=frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
     supports_structured_output=True,
+    supports_vision=True,
 )
 
 
@@ -85,21 +106,23 @@ class ModelRegistry:
             ("openai", "gpt-4o"): _STANDARD_CHAT_CAPABILITIES,
             ("openai", "gpt-4o-mini"): _STANDARD_CHAT_CAPABILITIES,
             ("openai", "gpt-4-turbo"): _STANDARD_CHAT_CAPABILITIES,
-            ("openai", "gpt-4"): _STANDARD_CHAT_CAPABILITIES,
-            ("openai", "gpt-3.5-turbo"): _STANDARD_CHAT_CAPABILITIES,
+            ("openai", "gpt-4"): _LEGACY_TEXT_ONLY_CAPABILITIES,
+            ("openai", "gpt-3.5-turbo"): _LEGACY_TEXT_ONLY_CAPABILITIES,
             # OpenAI reasoning models
-            ("openai", "o1"): _OPENAI_REASONING_O_SERIES,
-            ("openai", "o1-mini"): _OPENAI_REASONING_O_SERIES,
+            ("openai", "o1"): _OPENAI_REASONING_VISION,
+            ("openai", "o1-mini"): _OPENAI_REASONING_TEXT_ONLY,
             ("openai", "o1-preview"): ModelCapabilities(
                 supports_temperature=False,
                 supports_reasoning_effort=False,
                 supports_structured_output=False,
+                supports_vision=False,
             ),
-            ("openai", "o3-mini"): _OPENAI_REASONING_O_SERIES,
-            ("openai", "o3"): _OPENAI_REASONING_O_SERIES,
-            # ADAS benchmark / synthetic models
-            ("openai", "gpt-5.6-luna"): _OPENAI_REASONING_FULL,
+            ("openai", "o3"): _OPENAI_REASONING_VISION,
+            ("openai", "o3-mini"): _OPENAI_REASONING_TEXT_ONLY,
+            # OpenAI GPT-5.6 family
+            ("openai", "gpt-5.6-sol"): _OPENAI_REASONING_FULL,
             ("openai", "gpt-5.6-terra"): _OPENAI_REASONING_FULL,
+            ("openai", "gpt-5.6-luna"): _OPENAI_REASONING_FULL,
             ("openai", "gpt-5.6"): _OPENAI_REASONING_FULL,
         }
         cls._capabilities = dict(defaults)
@@ -119,13 +142,30 @@ class ModelRegistry:
             if key in cls._capabilities:
                 return cls._capabilities[key]
 
-            # Match model family prefixes
-            for (p, m), caps in cls._capabilities.items():
-                if p == provider.lower() and model_name.startswith(m):
-                    return caps
+            # Match model family prefixes sorted by descending prefix length
+            matching_candidates = [
+                (m, caps)
+                for (p, m), caps in cls._capabilities.items()
+                if p == provider.lower() and model_name.startswith(m)
+            ]
+            if matching_candidates:
+                matching_candidates.sort(key=lambda x: len(x[0]), reverse=True)
+                return matching_candidates[0][1]
 
             # Fallback default for unregistered models
             return _STANDARD_CHAT_CAPABILITIES
+
+    @classmethod
+    def is_registered_model(cls, provider: str, model_name: str) -> bool:
+        """Return whether a model has an explicit capability declaration."""
+        with cls._lock:
+            if not cls._capabilities:
+                cls._init_defaults()
+            provider = provider.lower()
+            return any(
+                configured_provider == provider and model_name.startswith(configured_model)
+                for configured_provider, configured_model in cls._capabilities
+            )
 
     @classmethod
     def reset(cls) -> None:
@@ -346,6 +386,16 @@ def _dict_to_message(data: dict[str, Any]) -> BaseMessage:
     raise ValueError(f"Unknown message role in dictionary: '{role}'")
 
 
+def has_image_content(messages: Sequence[BaseMessage]) -> bool:
+    """Check if any message in the sequence contains image blocks."""
+    for msg in messages:
+        if isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, dict) and block.get("type") in ("image_url", "image"):
+                    return True
+    return False
+
+
 # ============================================================================
 # 4. Model Resolution & Provider Construction
 # ============================================================================
@@ -396,11 +446,7 @@ def _resolve_target_model(
         return p, model
 
     if model is not None and provider is not None:
-        matches = [
-            m
-            for m in allowed
-            if m.get("provider", "openai") == provider and m.get("model_name") == model
-        ]
+        matches = [m for m in allowed if m.get("provider", "openai") == provider and m.get("model_name") == model]
         if not matches:
             raise ValueError(f"Model '{model}' with provider '{provider}' is not available. Allowed Models: {allowed}")
         return provider, model
@@ -705,6 +751,11 @@ class ChatModel:
         )
         UsageRecorder.record(record)
 
+    def _validate_input_capabilities(self, messages: Sequence[BaseMessage]) -> None:
+        """Validate that input modalities match declared model capabilities."""
+        if not self.capabilities.supports_vision and has_image_content(messages):
+            raise ValueError(f"Model '{self.model}' ({self.provider}) does not support vision/image inputs.")
+
     def invoke(
         self,
         input: Any,
@@ -715,6 +766,7 @@ class ChatModel:
     ) -> Any:
         messages = convert_to_messages(input)
         validate_tool_history(messages)
+        self._validate_input_capabilities(messages)
 
         response: Any = None
         start_time = time.perf_counter()
@@ -739,6 +791,7 @@ class ChatModel:
     ) -> Any:
         messages = convert_to_messages(input)
         validate_tool_history(messages)
+        self._validate_input_capabilities(messages)
 
         response: Any = None
         start_time = time.perf_counter()
@@ -763,6 +816,7 @@ class ChatModel:
     ) -> Iterator[Any]:
         messages = convert_to_messages(input)
         validate_tool_history(messages)
+        self._validate_input_capabilities(messages)
 
         start_time = time.perf_counter()
         accumulated_usage = None
@@ -800,6 +854,7 @@ class ChatModel:
     ) -> AsyncIterator[Any]:
         messages = convert_to_messages(input)
         validate_tool_history(messages)
+        self._validate_input_capabilities(messages)
 
         start_time = time.perf_counter()
         accumulated_usage = None
@@ -867,6 +922,7 @@ __all__ = [
     "execute_tool_calls",
     "get_allowed_target_models",
     "get_current_scope",
+    "has_image_content",
     "usage_scope",
     "validate_tool_history",
 ]

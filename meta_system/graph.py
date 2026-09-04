@@ -6,6 +6,8 @@ from langgraph.graph import END, START, StateGraph
 
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
+from adas_core.task_spec import TaskSpec
+from config import settings
 from meta_system.config import MAX_HARDENING_STEPS
 from meta_system.nodes import (
     formatting_function,
@@ -17,6 +19,21 @@ from meta_system.nodes import (
 from meta_system.state import MetaState
 
 logger = get_logger("meta_system.graph")
+
+
+def _get_test_case_count(state: MetaState) -> int:
+    """Return the active development-suite size, preferring the TaskSpec path."""
+    raw_spec = state.get("task_spec")
+    try:
+        if isinstance(raw_spec, TaskSpec):
+            return len(raw_spec.dev_suite)
+        if isinstance(raw_spec, dict):
+            return len(TaskSpec.model_validate(raw_spec).dev_suite)
+    except Exception as exc:
+        logger.warning("Could not read TaskSpec while selecting a checkpoint: %r", exc)
+
+    # Transitional support for the legacy validator representation.
+    return len(state.get("validation_code_snippets", [])) * 3
 
 
 def hardening_condition(state: MetaState) -> str:
@@ -45,8 +62,8 @@ def design_completed_condition(state: MetaState) -> str:
             target_agentic_system = state.get("target_agentic_system")
             if target_agentic_system is None:
                 return END
-            num_test_cases = len(state.get("validation_code_snippets", [])) * 3
-            code_dir = "sandbox/workspace/generated_systems"
+            num_test_cases = _get_test_case_count(state)
+            code_dir = settings.generated_systems_dir
             escaped_name = target_agentic_system.escaped_name
             base_path = os.path.join(code_dir, escaped_name)
             best_checkpoint_path = None

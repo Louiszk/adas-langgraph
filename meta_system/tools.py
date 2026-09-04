@@ -20,7 +20,9 @@ from adas_core.environment import isolated_case_workspace
 from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
+from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config import settings
 from meta_system.config import RECURSION_LIMIT
 from meta_system.helpers import ignored_nodes_message
 from meta_system.prompts import test_reminder
@@ -364,46 +366,94 @@ def manage_utilities(
         return f"ERROR: {action}ing utilities: {e!r}"
 
 
-def test_system(state: dict[str, Any]) -> str:
+def _resolve_task_validation(
+    state: dict[str, Any],
+) -> tuple[TaskSpec | None, Any | None, list[Any], list[Any]]:
+    """Resolve TaskSpec, validation module, test cases, and legacy validator functions.
+
+    Returns:
+        (task_spec, validation_module, test_cases, legacy_validator_funcs)
     """
-    Executes the current target system with predefined test input states to validate its functionality.
-    This tool is essential for debugging. It provides a detailed report including the final state,
-    any output printed to stdout/stderr, the execution path of the graph, and performance metrics.
-    Analyze this report carefully to identify errors or confirm correct behavior.
-    """
-    target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
-    validation_code_snippets = state.get("validation_code_snippets", [])
-    full_final_state = None
-    final_test_case_id = ""
-    error_message = ""
-    stdout_capture = TruncatingStringIO()
-    stderr_capture = TruncatingStringIO()
-    final_captured_output = ""
-    final_flow_chart = ""
-    parallel_processing_note = ""
-    start_time = time.time()
-    total_iterations = 0
-    validation_results_summary = []
-    all_tests_passed_overall = True
-    num_passed_tests = 0
-    test_run_id = uuid.uuid4().hex
-    usage_before = UsageRecorder.get_aggregate(system="target", run_id=test_run_id)
-    num_tests = 0
+    # Import lazily: automatic_validation depends on meta_system.config, whose
+    # package initialization imports this module.
+    from adas_core.automatic_validation import load_validation_module
 
-    if not validation_code_snippets:
-        return "ERROR: validation_code_snippets list is empty."
+    # 1. Check if task_spec is explicitly in state
+    task_spec: TaskSpec | None = None
+    raw_spec = state.get("task_spec")
+    if isinstance(raw_spec, TaskSpec):
+        task_spec = raw_spec
+    elif isinstance(raw_spec, dict):
+        task_spec = TaskSpec.model_validate(raw_spec)
+    elif isinstance(raw_spec, (str, Path)):
+        task_spec = TaskSpec.from_file(raw_spec)
 
-    try:
-        validation_errors = target_agentic_system.validate_graph()
-        if validation_errors:
-            return "ERROR: Validation failed before execution. The TargetSystem has structural flaws:\n" + "\n".join(
-                validation_errors
-            )
+    # 2. Check for task.json in task_dir or standard sandbox locations
+    if task_spec is None:
+        task_dir_env = os.environ.get("ADAS_TASK_DIR")
+        candidate_paths: list[Path] = [
+            Path("/sandbox/workspace/task_setup/task.json"),
+            Path("task_setup/task.json"),
+        ]
+        if task_dir_env:
+            candidate_paths.insert(0, Path(task_dir_env) / "task.json")
+        for cp in candidate_paths:
+            if cp.exists():
+                try:
+                    task_spec = TaskSpec.from_file(cp)
+                    break
+                except Exception as e:
+                    logger.debug(f"Could not load TaskSpec from {cp}: {e}")
 
-        # Aggregate test cases and validators from all snippets
-        all_test_cases = []
-        all_validator_funcs = []
-        for snippet in validation_code_snippets:
+    # 3. If TaskSpec is resolved, load or generate the validation module
+    if task_spec is not None:
+        validation_module = state.get("validation_module")
+        if validation_module is None:
+            val_path = state.get("validation_module_path")
+            if val_path and Path(val_path).exists():
+                validation_module = load_validation_module(val_path)
+            else:
+                task_dir_candidates: list[Path] = []
+                if state.get("task_dir"):
+                    task_dir_candidates.append(Path(state["task_dir"]))
+                if os.environ.get("ADAS_TASK_DIR"):
+                    task_dir_candidates.append(Path(os.environ["ADAS_TASK_DIR"]))
+                task_dir_candidates.extend(
+                    [
+                        Path("/sandbox/workspace/task_setup"),
+                        Path("task_setup"),
+                        Path("."),
+                    ]
+                )
+
+                found_file = None
+                safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+                for td in task_dir_candidates:
+                    for name in [f"{safe_name}.validation.py", f"{task_spec.name}.validation.py", "validation.py"]:
+                        candidate = td / name
+                        if candidate.exists():
+                            found_file = candidate
+                            break
+                    if found_file:
+                        break
+
+                if found_file:
+                    validation_module = load_validation_module(found_file)
+                else:
+                    searched = ", ".join(str(path) for path in task_dir_candidates)
+                    raise FileNotFoundError(
+                        f"No frozen validation module found for TaskSpec '{task_spec.name}'. "
+                        f"Generate and review its LLM-authored validator before design. Searched: {searched}"
+                    )
+
+        return task_spec, validation_module, list(task_spec.dev_suite), []
+
+    # 4. Fallback to legacy validation_code_snippets if present
+    snippets = state.get("validation_code_snippets", [])
+    if snippets:
+        all_test_cases: list[Any] = []
+        all_validator_funcs: list[Any] = []
+        for snippet in snippets:
             snippet_namespace = {
                 "ChatModel": ChatModel,
                 "HumanMessage": HumanMessage,
@@ -419,9 +469,58 @@ def test_system(state: dict[str, Any]) -> str:
                     all_test_cases.extend(cases)
                     all_validator_funcs.append(validator)
             except Exception as e_snippet:
-                logger.error(f"Failed to parse a validation code snippet: {e_snippet!r}")
+                logger.error(f"EVALUATOR_ERROR: Failed to parse a validation code snippet: {e_snippet!r}")
+        return None, None, all_test_cases, all_validator_funcs
 
-        num_tests = len(all_test_cases)
+    return None, None, [], []
+
+
+def test_system(state: dict[str, Any]) -> str:
+    """
+    Executes the current target system with predefined test input states to validate its functionality.
+    This tool is essential for debugging. It provides a detailed report including the final state,
+    any output printed to stdout/stderr, the execution path of the graph, and performance metrics.
+    Analyze this report carefully to identify errors or confirm correct behavior.
+    """
+    from adas_core.automatic_validation import sanitize_test_id
+
+    target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
+    full_final_state = None
+    final_test_case_id = ""
+    error_message = ""
+    stdout_capture = TruncatingStringIO()
+    stderr_capture = TruncatingStringIO()
+    final_captured_output = ""
+    final_flow_chart = ""
+    parallel_processing_note = ""
+    start_time = time.time()
+    total_iterations = 0
+    validation_results_summary = []
+    all_tests_passed_overall = True
+    num_passed_tests = 0
+    test_run_id = uuid.uuid4().hex
+    usage_before = UsageRecorder.get_aggregate(system="target", run_id=test_run_id)
+
+    try:
+        task_spec, validation_module, all_test_cases, all_validator_funcs = _resolve_task_validation(state)
+    except Exception as e_prep:
+        eval_err = (
+            f"EVALUATOR_ERROR: Failed to prepare validation environment: {e_prep!r}\n"
+            f"{traceback.format_exc(chain=False)}"
+        )
+        logger.error(eval_err)
+        return f"Test suite aborted.\n\n<ValidatorResult>\nOverall: FAILED\nDetails:\n{eval_err}\n</ValidatorResult>"
+
+    num_tests = len(all_test_cases)
+    if num_tests == 0:
+        return "ERROR: No validation test cases found. Neither a valid TaskSpec dev_suite nor validation_code_snippets was provided."
+
+    try:
+        validation_errors = target_agentic_system.validate_graph()
+        if validation_errors:
+            return "ERROR: Validation failed before execution. The TargetSystem has structural flaws:\n" + "\n".join(
+                validation_errors
+            )
 
         source_code = materialize_system(target_agentic_system, output_dir=None)
         main_namespace = {}
@@ -435,8 +534,16 @@ def test_system(state: dict[str, Any]) -> str:
         fixtures_path = Path(fixtures_dir_env) if fixtures_dir_env else Path("/sandbox/workspace/fixtures")
         active_fixtures_dir = fixtures_path if fixtures_path.exists() else None
 
-        for i, test_input_state in enumerate(all_test_cases):
-            test_case_id = f"Test Case {i + 1}"
+        for i, test_case in enumerate(all_test_cases):
+            if isinstance(test_case, TestCaseSpec):
+                test_case_id = test_case.id
+                test_input_state = test_case.turns[0]
+                case_slug = sanitize_test_id(test_case.id)
+            else:
+                test_case_id = f"Test Case {i + 1}"
+                test_input_state = test_case
+                case_slug = f"case_{i + 1}"
+
             final_test_case_id = test_case_id
             current_test_final_state = {}
             execution_flow: list[Any] = ["START"]
@@ -444,9 +551,9 @@ def test_system(state: dict[str, Any]) -> str:
             with isolated_case_workspace(
                 base_dir=os.environ.get("ADAS_WORKSPACE_ROOT"),
                 run_id=test_run_id,
-                case_id=f"case_{i + 1}",
+                case_id=case_slug,
                 fixtures_dir=active_fixtures_dir,
-            ):
+            ) as workspace_dirs:
                 stdout_capture.truncate(0)
                 stdout_capture.seek(0)
                 stderr_capture.truncate(0)
@@ -475,15 +582,43 @@ def test_system(state: dict[str, Any]) -> str:
                         execution_flow.append("END")
 
                         try:
-                            # Determine which validator to use and the sub-index
-                            validator_index = i // 3
-                            sub_index = i % 3
-                            validator_func = all_validator_funcs[validator_index]
-                            is_pass, message = validator_func(sub_index, current_test_final_state)
+                            if validation_module is not None and isinstance(test_case, TestCaseSpec):
+                                clean_id = sanitize_test_id(test_case.id)
+                                fn_name = f"validate_{clean_id}"
+                                validator_fn: Any = getattr(validation_module, "VALIDATORS", {}).get(test_case.id)
+                                if not validator_fn:
+                                    validator_fn = getattr(validation_module, fn_name, None)
+                                if not validator_fn and hasattr(validation_module, "validate"):
+                                    cid = test_case.id
+
+                                    def _dispatch_validate(s: dict[str, Any], w: dict[str, str]) -> Any:
+                                        return validation_module.validate(cid, s, w)
+
+                                    validator_fn = _dispatch_validate
+
+                                if not validator_fn:
+                                    raise ValueError(f"No validator function '{fn_name}' found in validation module.")
+
+                                workspace_dirs_str = {
+                                    "workspace": str(workspace_dirs.get("workspace", "")),
+                                    "input": str(workspace_dirs.get("input", "")),
+                                    "output": str(workspace_dirs.get("output", "")),
+                                }
+                                is_pass, message = validator_fn(current_test_final_state, workspace_dirs_str)
+                                if not isinstance(is_pass, bool):
+                                    raise TypeError(
+                                        f"Validator for {test_case_id} must return tuple[bool, str], got {type(is_pass).__name__}"
+                                    )
+                            else:
+                                validator_index = i // 3
+                                sub_index = i % 3
+                                validator_func = all_validator_funcs[validator_index]
+                                is_pass, message = validator_func(sub_index, current_test_final_state)
                         except Exception as e_validation:
-                            is_pass, message = (
-                                False,
-                                f"ERROR: executing validation function for {test_case_id}: {e_validation!r}",
+                            is_pass = False
+                            message = (
+                                f"EVALUATOR_ERROR: Validator failed unexpectedly for {test_case_id}: {e_validation!r}\n"
+                                f"{traceback.format_exc(chain=False)}"
                             )
 
                         if is_pass:
@@ -602,7 +737,7 @@ def test_system(state: dict[str, Any]) -> str:
     # Also checkpoint on initial tests so we do not accept a system with decreased performance
     if num_passed_tests > 0:
         try:
-            code_dir = "sandbox/workspace/generated_systems"
+            code_dir = settings.generated_systems_dir
             os.makedirs(code_dir, exist_ok=True)
             escaped_name = target_agentic_system.escaped_name
             base_path = os.path.join(code_dir, escaped_name)

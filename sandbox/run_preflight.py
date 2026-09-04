@@ -7,7 +7,21 @@ import json
 import sys
 from pathlib import Path
 
+from adas_core.automatic_validation import extract_validation_requirements
 from adas_core.environment import ensure_packages_installed, isolated_case_workspace, run_preflight_check
+
+
+def validation_requirements(task_dir: Path) -> list[str]:
+    """Read dependencies declared by an already-frozen validation module.
+
+    Validation is deliberately a separate generation step from fixture setup, so
+    its requirements are composed with the setup manifest at provision time.
+    """
+    candidates = sorted(task_dir.glob("*.validation.py"))
+    validation_file = candidates[0] if candidates else task_dir / "validation.py"
+    if not validation_file.is_file():
+        return []
+    return extract_validation_requirements(validation_file.read_text(encoding="utf-8"))
 
 
 def main() -> int:
@@ -24,7 +38,9 @@ def main() -> int:
         return 1
 
     try:
-        ensure_packages_installed([str(package) for package in packages])
+        packages = [str(package) for package in packages]
+        packages.extend(validation_requirements(args.task_dir))
+        ensure_packages_installed(list(dict.fromkeys(packages)))
     except (RuntimeError, ValueError) as exc:
         print(f"Package provisioning failed: {exc}", file=sys.stderr)
         return 1

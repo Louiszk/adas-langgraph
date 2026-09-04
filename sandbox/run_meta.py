@@ -17,10 +17,15 @@ logger = get_logger("run_meta")
 _TASK_SPEC_PATH = "/sandbox/workspace/task_setup/task.json"
 
 
-def load_visible_task_context() -> str:
-    """Load the visible development contract without any holdout data."""
+def load_visible_task_spec() -> TaskSpec:
+    """Load the visible TaskSpec and configure the target-model allow list."""
     task_spec = TaskSpec.from_file(_TASK_SPEC_PATH)
     ChatModel.allowed_target_models = [m.model_dump() for m in task_spec.available_models]
+    return task_spec
+
+
+def load_visible_task_context(task_spec: TaskSpec) -> str:
+    """Load the visible development contract without any holdout data."""
     return (
         "\n\n--- TaskSpec Design Contract ---\n"
         "Use this contract for architecture, state, declared fixture paths, resources, and output requirements. "
@@ -63,7 +68,8 @@ def main():
 
     metrics["system_name"] = system_name
     try:
-        problem_statement += load_visible_task_context()
+        task_spec = load_visible_task_spec()
+        problem_statement += load_visible_task_context(task_spec)
     except Exception as exc:
         raise RuntimeError(f"Could not load visible TaskSpec context: {exc}") from exc
     metrics["problem_statement"] = problem_statement
@@ -93,6 +99,8 @@ def main():
             "target_agentic_system": target_agentic_system,
             "optimize": bool(optimize_from_file),
             "max_iterations": max_iterations,
+            "task_spec": task_spec,
+            "task_dir": "/sandbox/workspace/task_setup",
         }
 
         processed_msg_count = 0

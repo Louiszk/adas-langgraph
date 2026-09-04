@@ -291,6 +291,8 @@ def setup_sandbox_environment(session, reinstall=False):
     required_files = [
         "adas_core/ast_parser.py",
         "adas_core/automatic_setup.py",
+        "adas_core/automatic_validation.py",
+        "adas_core/judge.py",
         "adas_core/virtual_agentic_system.py",
         "adas_core/task_spec.py",
         "adas_core/decorator_logic.py",

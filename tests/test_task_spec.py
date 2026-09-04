@@ -293,6 +293,91 @@ class TestTaskSpecModel:
                 ],
             )
 
+    def test_test_case_spec_judge_model_and_modalities(self):
+        tc_default = TestCaseSpec(
+            id="c_default",
+            description="Default text case",
+            turns=[{"q": "hello"}],
+        )
+        assert tc_default.judge_model is None
+        assert tc_default.modalities == ["text"]
+
+        tc_custom = TestCaseSpec(
+            id="c_custom",
+            description="Vision evaluation case",
+            turns=[{"q": "generate plot"}],
+            llm_judge_needed=True,
+            judge_criteria="The plot must display all sales bars correctly.",
+            judge_model="o3-mini",
+            modalities=["text", "vision"],
+        )
+        assert tc_custom.judge_model == "o3-mini"
+        assert tc_custom.modalities == ["text", "vision"]
+
+    def test_vision_judge_requires_a_vision_capable_override(self):
+        with pytest.raises(ValidationError, match="not vision-capable"):
+            TaskSpec(
+                name="VisionTask",
+                system_goal="Assess a chart",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                dev_suite=[
+                    TestCaseSpec(
+                        id="vision",
+                        description="Assess a chart",
+                        turns=[{"query": "go"}],
+                        llm_judge_needed=True,
+                        judge_criteria="The chart is readable.",
+                        judge_model="o3-mini",
+                        modalities=["vision"],
+                    )
+                ],
+            )
+
+    def test_unknown_modalities_are_rejected(self):
+        with pytest.raises(ValidationError):
+            TestCaseSpec.model_validate({"id": "audio", "description": "Audio", "turns": [{}], "modalities": ["audio"]})
+
+    def test_judge_provider_override_validation(self):
+        with pytest.raises(ValidationError, match="specifies an empty judge_provider"):
+            TestCaseSpec(
+                id="case_prov",
+                description="desc",
+                turns=[{"query": "run"}],
+                llm_judge_needed=True,
+                judge_criteria="criteria",
+                judge_provider="   ",
+            )
+
+        tc = TestCaseSpec(
+            id="case_prov",
+            description="desc",
+            turns=[{"query": "run"}],
+            llm_judge_needed=True,
+            judge_criteria="criteria",
+            judge_model="gpt-4o",
+            judge_provider="openai",
+        )
+        assert tc.judge_provider == "openai"
+
+    def test_judge_provider_unregistered_model_rejected(self):
+        with pytest.raises(ValidationError, match="specifies unregistered judge_model"):
+            TaskSpec(
+                name="CustomProvTask",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                dev_suite=[
+                    TestCaseSpec(
+                        id="case_1",
+                        description="desc",
+                        turns=[{"query": "run"}],
+                        llm_judge_needed=True,
+                        judge_criteria="criteria",
+                        judge_model="unknown-custom-model",
+                        judge_provider="openai",
+                    )
+                ],
+            )
+
 
 class TestHoldoutSuiteSpecModel:
     def test_valid_holdout_suite_spec(self, tmp_path):

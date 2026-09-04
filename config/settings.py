@@ -7,3 +7,4 @@ dependencies = [
     "dill==0.3.9",
 ]
 max_iterations = 40  # Maximum number of steps the meta system should perform (e.g., LLM calls)
+generated_systems_dir = "sandbox/workspace/generated_systems"

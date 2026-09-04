@@ -86,13 +86,15 @@ class TestModelResolutionAndAuthorization:
     def test_task_spec_file_allowlist_enforcement(self, tmp_path, monkeypatch):
         task_json = tmp_path / "task.json"
         task_json.write_text(
-            json.dumps({
-                "name": "SpecAgent",
-                "system_goal": "Goal",
-                "architecture_contract": {"execution_mode": "single_turn", "state_schema": {"q": "str"}},
-                "available_models": [{"provider": "openai", "model_name": "permitted-model"}],
-                "dev_suite": [{"id": "c1", "description": "d", "turns": [{"q": "1"}]}],
-            }),
+            json.dumps(
+                {
+                    "name": "SpecAgent",
+                    "system_goal": "Goal",
+                    "architecture_contract": {"execution_mode": "single_turn", "state_schema": {"q": "str"}},
+                    "available_models": [{"provider": "openai", "model_name": "permitted-model"}],
+                    "dev_suite": [{"id": "c1", "description": "d", "turns": [{"q": "1"}]}],
+                }
+            ),
             encoding="utf-8",
         )
         monkeypatch.setenv("ADAS_TASK_SPEC_PATH", str(task_json))
@@ -621,3 +623,99 @@ class TestExecuteToolCalls:
 
         assert chat_etc is execute_tool_calls
         assert chat_vth is validate_tool_history
+
+
+# ============================================================================
+# 8. Vision Modality & Capabilities Tests
+# ============================================================================
+
+
+class TestVisionCapabilities:
+    def test_model_registry_vision_capabilities_and_prefix_ordering(self):
+        # Explicit models
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o-mini").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4-turbo").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4").supports_vision is False
+        assert ModelRegistry.get_capabilities("openai", "gpt-3.5-turbo").supports_vision is False
+
+        # Reasoning models
+        assert ModelRegistry.get_capabilities("openai", "o1").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "o1-mini").supports_vision is False
+        assert ModelRegistry.get_capabilities("openai", "o1-preview").supports_vision is False
+        assert ModelRegistry.get_capabilities("openai", "o3").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "o3-mini").supports_vision is False
+
+        # GPT-5.6 family
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-sol").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-terra").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-luna").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6").supports_vision is True
+
+        # Prefix sorting tests: ensure longer prefixes match before shorter prefixes
+        # 1. o1-mini prefix must match o1-mini (False), NOT o1 (True)
+        assert ModelRegistry.get_capabilities("openai", "o1-mini-2024-09-12").supports_vision is False
+        assert ModelRegistry.get_capabilities("openai", "o1-2024-12-17").supports_vision is True
+
+        # 2. gpt-4o prefix must match gpt-4o (True), NOT gpt-4 (False)
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o-2024-08-06").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4-0613").supports_vision is False
+
+    def test_has_image_content_detection(self):
+        from adas_core.chat_model import has_image_content
+
+        msg_text = [HumanMessage(content="Simple text prompt")]
+        assert has_image_content(msg_text) is False
+
+        msg_blocks_text = [
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "Part 1"},
+                    {"type": "text", "text": "Part 2"},
+                ]
+            )
+        ]
+        assert has_image_content(msg_blocks_text) is False
+
+        msg_with_img = [
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "Inspect image"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                ]
+            )
+        ]
+        assert has_image_content(msg_with_img) is True
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_rejects_images_for_non_vision_model(self, mock_chat_openai):
+        mock_chat_openai.return_value = MagicMock()
+        llm = ChatModel(model="o3-mini", provider="openai", is_meta=True)
+
+        image_message = HumanMessage(
+            content=[
+                {"type": "text", "text": "Analyze this chart:"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,fake"}},
+            ]
+        )
+
+        with pytest.raises(ValueError, match="does not support vision/image inputs"):
+            llm.invoke([image_message])
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_allows_images_for_vision_model(self, mock_chat_openai):
+        mock_instance = MagicMock()
+        mock_instance.invoke.return_value = AIMessage(content="I see the chart")
+        mock_chat_openai.return_value = mock_instance
+
+        llm = ChatModel(model="gpt-4o", provider="openai", is_meta=True)
+        image_message = HumanMessage(
+            content=[
+                {"type": "text", "text": "Analyze this chart:"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+            ]
+        )
+
+        response = llm.invoke([image_message])
+        assert response.content == "I see the chart"
+        mock_instance.invoke.assert_called_once()
