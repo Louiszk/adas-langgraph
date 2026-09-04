@@ -282,12 +282,7 @@ def setup_sandbox_environment(session, reinstall=False):
     session.execute_command("mkdir -p /sandbox/workspace/adas_core")
     session.execute_command("mkdir -p /sandbox/workspace/generated_systems")
     session.execute_command("mkdir -p /sandbox/workspace/config")
-    session.execute_command("rm -rf /sandbox/workspace/data/input")
-    session.execute_command("rm -rf /sandbox/workspace/data/output")
     session.execute_command("rm -rf /sandbox/workspace/target_metrics")
-
-    session.execute_command("mkdir -p /sandbox/workspace/data/output")
-    session.copy_dir_to_runtime(src_dir="data/input", dest_dir="/sandbox/workspace/data/input", pattern="*")
 
     # Copy meta-system package files
     session.copy_dir_to_runtime(src_dir="meta_system", dest_dir="/sandbox/workspace/meta_system", pattern="*.py")
@@ -301,6 +296,7 @@ def setup_sandbox_environment(session, reinstall=False):
         "adas_core/decorator_logic.py",
         "adas_core/llm_wrapper.py",
         "adas_core/materialize.py",
+        "adas_core/environment.py",
         "adas_core/helpers.py",
         "adas_core/logging_config.py",
         "config/settings.py",
@@ -311,6 +307,7 @@ def setup_sandbox_environment(session, reinstall=False):
         ("sandbox/run_meta.py", "/sandbox/workspace/run_meta.py"),
         ("sandbox/run_target.py", "/sandbox/workspace/run_target.py"),
         ("sandbox/run_setup.py", "/sandbox/workspace/run_setup.py"),
+        ("sandbox/run_preflight.py", "/sandbox/workspace/run_preflight.py"),
     ]
 
     for src_path, dest_path in copy_paths:

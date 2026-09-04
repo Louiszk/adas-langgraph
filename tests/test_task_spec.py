@@ -12,10 +12,10 @@ from adas_core.task_spec import (
     MockServiceFixtureSpec,
     ResourceEntry,
     ResourceManifest,
+    TaskSpec,
     TestCaseSpec,
     TestFixturesSpec,
     ToolRequirement,
-    TaskSpec,
 )
 
 
@@ -43,6 +43,11 @@ class TestTaskSpecModel:
         assert spec.name == "SimpleMathAgent"
         assert len(spec.dev_suite) == 1
         assert spec.dev_suite[0].turns[0]["query"] == "What is 2 + 2?"
+        context = spec.to_design_context()
+        assert '"schema_version": "1.0"' in context
+        assert '"dev_suite"' not in context
+        assert "case_1_addition" not in context
+        assert '"holdout_suite"' not in context
 
     def test_multi_turn_auto_configures_persistence(self):
         spec = TaskSpec(

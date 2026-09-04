@@ -9,10 +9,24 @@ import dill as pickle
 sys.path.append("/sandbox/workspace")
 from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger, setup_logging
+from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.graph import workflow
 
 logger = get_logger("run_meta")
+_TASK_SPEC_PATH = "/sandbox/workspace/task_setup/task.json"
+
+
+def load_visible_task_context() -> str:
+    """Load the visible development contract without any holdout data."""
+    task_spec = TaskSpec.from_file(_TASK_SPEC_PATH)
+    return (
+        "\n\n--- TaskSpec Design Contract ---\n"
+        "Use this contract for architecture, state, declared fixture paths, resources, and output requirements. "
+        "Concrete development cases are intentionally withheld; generalize to the stated goal.\n"
+        f"```json\n{task_spec.to_design_context()}\n```\n"
+        "--- End TaskSpec Design Contract ---"
+    )
 
 
 def main():
@@ -29,13 +43,13 @@ def main():
         "installed_packages": "",
     }
 
-    problem_statement = "Create me a simple system that can solve math problems."
-    if len(sys.argv) >= 2:
-        problem_statement = sys.argv[1]
+    if len(sys.argv) < 3:
+        raise ValueError(
+            "run_meta.py requires at least 2 arguments: <problem_statement> <system_name> [max_iterations] [optimize_from_file]"
+        )
 
-    system_name = "MathProblemSolver"
-    if len(sys.argv) >= 3:
-        system_name = sys.argv[2]
+    problem_statement = sys.argv[1]
+    system_name = sys.argv[2]
 
     max_iterations = 30
     if len(sys.argv) >= 4:
@@ -47,6 +61,10 @@ def main():
         metrics["optimize_from_file"] = optimize_from_file
 
     metrics["system_name"] = system_name
+    try:
+        problem_statement += load_visible_task_context()
+    except Exception as exc:
+        raise RuntimeError(f"Could not load visible TaskSpec context: {exc}") from exc
     metrics["problem_statement"] = problem_statement
     logger.info(f"Running meta system for '{system_name}'...")
 

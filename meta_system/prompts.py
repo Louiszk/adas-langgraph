@@ -20,6 +20,37 @@ agentic_system_documentation = """
 
 ---
 
+## Runtime Filesystem Contract
+
+Every evaluation case receives its own filesystem. Resolve these variables **inside nodes or tools when they run**; never resolve them as module-level constants because their values differ per test case.
+
+- `ADAS_INPUT_DIR` is the only root for reading supplied task files and frozen fixtures.
+- `ADAS_OUTPUT_DIR` is the only root for required output artifacts. Create parent directories before writing.
+- `ADAS_WORKSPACE_DIR` is only for temporary, case-local scratch data.
+- Never use hard-coded paths such as `/sandbox/workspace/data/input`, `data/input`, `data/output`, or host paths.
+- Any filename supplied by state or the task is a relative path. Reject absolute paths and traversal that escapes its assigned root. Return logical artifact names or metadata in state, not host/container paths.
+
+Use this pattern when a task accepts a caller-specified filename:
+```python
+from pathlib import Path
+import os
+
+def resolve_under(root: Path, relative_name: str) -> Path:
+    candidate = (root / relative_name).resolve()
+    candidate.relative_to(root.resolve())
+    return candidate
+
+input_dir = Path(os.environ["ADAS_INPUT_DIR"])
+output_dir = Path(os.environ["ADAS_OUTPUT_DIR"])
+source = resolve_under(input_dir, state["input_filename"])
+target = resolve_under(output_dir, state["output_filename"])
+target.parent.mkdir(parents=True, exist_ok=True)
+```
+
+For a fixed-file task, use the declared fixture's relative path beneath `ADAS_INPUT_DIR` and write the declared artifact path beneath `ADAS_OUTPUT_DIR`.
+
+---
+
 ## ADAS Core Module (`adas_core.llm_wrapper`)
 
 ### `LargeLanguageModel` Class

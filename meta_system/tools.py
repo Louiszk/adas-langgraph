@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
+from pathlib import Path
 from typing import Any, Literal
 
 import dill as pickle
@@ -13,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import tool
 
 from adas_core.decorator_logic import build_decorator_signatures
+from adas_core.environment import isolated_case_workspace
 from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
 from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
@@ -385,6 +388,7 @@ def test_system(state: dict[str, Any]) -> str:
     num_passed_tests = 0
     usage_before = LargeLanguageModel.usage_metrics["target_usage"]["overall"].copy()
     num_tests = 0
+    test_run_id = uuid.uuid4().hex
 
     if not validation_code_snippets:
         return "ERROR: validation_code_snippets list is empty."
@@ -427,56 +431,82 @@ def test_system(state: dict[str, Any]) -> str:
             raise Exception("Could not find 'workflow' in generated code.")
         target_workflow = main_namespace["workflow"]
 
+        fixtures_dir_env = os.environ.get("ADAS_FIXTURES_DIR")
+        fixtures_path = Path(fixtures_dir_env) if fixtures_dir_env else Path("/sandbox/workspace/fixtures")
+        active_fixtures_dir = fixtures_path if fixtures_path.exists() else None
+
         for i, test_input_state in enumerate(all_test_cases):
             test_case_id = f"Test Case {i + 1}"
             final_test_case_id = test_case_id
             current_test_final_state = {}
             execution_flow: list[Any] = ["START"]
 
-            purge_command = "rm -rf /sandbox/workspace/data/output && mkdir -p /sandbox/workspace/data/output"
-            subprocess.run(purge_command, shell=True, check=False)
-
-            stdout_capture.truncate(0)
-            stdout_capture.seek(0)
-            stderr_capture.truncate(0)
-            stderr_capture.seek(0)
-
-            with (
-                contextlib.redirect_stdout(stdout_capture),
-                contextlib.redirect_stderr(stderr_capture),
+            with isolated_case_workspace(
+                base_dir=os.environ.get("ADAS_WORKSPACE_ROOT"),
+                run_id=test_run_id,
+                case_id=f"case_{i + 1}",
+                fixtures_dir=active_fixtures_dir,
             ):
-                try:
-                    for stream_mode, update in target_workflow.stream(
-                        test_input_state,
-                        config={"recursion_limit": RECURSION_LIMIT},
-                        stream_mode=["values", "debug"],
-                    ):
-                        if stream_mode == "values":
-                            current_test_final_state = update
-                        elif stream_mode == "debug" and update["type"] == "task_result":
-                            step = update["step"]
-                            if step >= len(execution_flow):
-                                execution_flow.append([update["payload"]["name"]])
-                            else:
-                                execution_flow[step].append(update["payload"]["name"])
-                            total_iterations = step + 1
-                    execution_flow.append("END")
+                stdout_capture.truncate(0)
+                stdout_capture.seek(0)
+                stderr_capture.truncate(0)
+                stderr_capture.seek(0)
 
+                with (
+                    contextlib.redirect_stdout(stdout_capture),
+                    contextlib.redirect_stderr(stderr_capture),
+                ):
                     try:
-                        # Determine which validator to use and the sub-index
-                        validator_index = i // 3
-                        sub_index = i % 3
-                        validator_func = all_validator_funcs[validator_index]
-                        is_pass, message = validator_func(sub_index, current_test_final_state)
-                    except Exception as e_validation:
-                        is_pass, message = (
-                            False,
-                            f"ERROR: executing validation function for {test_case_id}: {e_validation!r}",
-                        )
+                        for stream_mode, update in target_workflow.stream(
+                            test_input_state,
+                            config={"recursion_limit": RECURSION_LIMIT},
+                            stream_mode=["values", "debug"],
+                        ):
+                            if stream_mode == "values":
+                                current_test_final_state = update
+                            elif stream_mode == "debug" and update["type"] == "task_result":
+                                step = update["step"]
+                                if step >= len(execution_flow):
+                                    execution_flow.append([update["payload"]["name"]])
+                                else:
+                                    execution_flow[step].append(update["payload"]["name"])
+                                total_iterations = step + 1
+                        execution_flow.append("END")
 
-                    if is_pass:
-                        num_passed_tests += 1
-                    else:
+                        try:
+                            # Determine which validator to use and the sub-index
+                            validator_index = i // 3
+                            sub_index = i % 3
+                            validator_func = all_validator_funcs[validator_index]
+                            is_pass, message = validator_func(sub_index, current_test_final_state)
+                        except Exception as e_validation:
+                            is_pass, message = (
+                                False,
+                                f"ERROR: executing validation function for {test_case_id}: {e_validation!r}",
+                            )
+
+                        if is_pass:
+                            num_passed_tests += 1
+                        else:
+                            all_tests_passed_overall = False
+                            if num_passed_tests > 0:
+                                success_message = (
+                                    f"Test cases 1-{num_passed_tests} passed."
+                                    if num_passed_tests > 1
+                                    else "Test case 1 passed."
+                                )
+                                validation_results_summary.append(success_message)
+                            validation_results_summary.append(f"{test_case_id}: FAIL - {message}")
+
+                    except Exception as e_test_case:
+                        execution_flow.append("... -> FAILED_DURING_EXECUTION")
+                        e_message = f"ERROR: during {test_case_id} execution: {e_test_case!r}"
+
+                        if "GraphRecursionError" in repr(e_test_case):
+                            e_message += " The TargetSystem hit the 20 iteration recursion limit during the test case."
+                        else:
+                            e_message += f"\n{traceback.format_exc(chain=False)}"
+
                         all_tests_passed_overall = False
                         if num_passed_tests > 0:
                             success_message = (
@@ -485,26 +515,7 @@ def test_system(state: dict[str, Any]) -> str:
                                 else "Test case 1 passed."
                             )
                             validation_results_summary.append(success_message)
-                        validation_results_summary.append(f"{test_case_id}: FAIL - {message}")
-
-                except Exception as e_test_case:
-                    execution_flow.append("... -> FAILED_DURING_EXECUTION")
-                    e_message = f"ERROR: during {test_case_id} execution: {e_test_case!r}"
-
-                    if "GraphRecursionError" in repr(e_test_case):
-                        e_message += " The TargetSystem hit the 20 iteration recursion limit during the test case."
-                    else:
-                        e_message += f"\n{traceback.format_exc(chain=False)}"
-
-                    all_tests_passed_overall = False
-                    if num_passed_tests > 0:
-                        success_message = (
-                            f"Test cases 1-{num_passed_tests} passed."
-                            if num_passed_tests > 1
-                            else "Test case 1 passed."
-                        )
-                        validation_results_summary.append(success_message)
-                    validation_results_summary.append(f"{test_case_id}: FAIL - {e_message}")
+                        validation_results_summary.append(f"{test_case_id}: FAIL - {e_message}")
 
             full_final_state = current_test_final_state
             final_captured_output = stdout_capture.getvalue() + stderr_capture.getvalue()

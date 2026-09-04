@@ -18,7 +18,11 @@ def run_meta_system_in_sandbox(
     optimize_system=None,
 ):
     quoted_problem = problem_statement.replace('"', '\\"')
-    command = f'python3 /sandbox/workspace/run_meta.py "{quoted_problem}" "{target_name}" "{settings.max_iterations}" '
+    command = (
+        "ADAS_FIXTURES_DIR=/sandbox/workspace/task_setup/fixtures "
+        "ADAS_WORKSPACE_ROOT=/tmp/adas-runs "
+        f'python3 /sandbox/workspace/run_meta.py "{quoted_problem}" "{target_name}" "{settings.max_iterations}" '
+    )
     command += f'"{optimize_system}"' if optimize_system else ""
 
     for chunk in session.execute_command_streaming(command):
@@ -57,9 +61,32 @@ def run_meta_system_in_sandbox(
                 )
                 logger.info(f"Copied metrics file {metrics_file} back to host")
 
-    session.copy_dir_from_runtime(src_dir="/sandbox/workspace/data/output", dest_dir="data/output", pattern="*")
-
     return True
+
+
+def copy_task_setup_to_sandbox(session: StreamingSandboxSession, task_dir: Path, task_spec_path: Path) -> str:
+    """Copy the visible, frozen setup artifacts into a design sandbox."""
+    runtime_task_dir = "/sandbox/workspace/task_setup"
+    session.execute_command(f"mkdir -p {runtime_task_dir}")
+    for source_path in task_dir.rglob("*"):
+        if source_path.is_file() and "__pycache__" not in source_path.parts:
+            relative_path = source_path.relative_to(task_dir).as_posix()
+            session.copy_to_runtime(str(source_path), f"{runtime_task_dir}/{relative_path}")
+    # The sandbox entry point always loads the explicit, visible TaskSpec from
+    # this stable path, regardless of the host file's chosen name.
+    session.copy_to_runtime(str(task_spec_path), f"{runtime_task_dir}/task.json")
+    return runtime_task_dir
+
+
+def run_sandbox_preflight(session: StreamingSandboxSession, runtime_task_dir: str) -> bool:
+    """Install frozen setup requirements and validate them inside the sandbox."""
+    result = session.execute_command(f"python3 /sandbox/workspace/run_preflight.py --task-dir {runtime_task_dir}")
+    if getattr(result, "exit_code", 1) == 0:
+        logger.info("Sandbox preflight verification passed.")
+        return True
+    output = getattr(result, "stdout", "") or getattr(result, "stderr", "") or result
+    logger.error("Sandbox preflight verification failed: %s", output)
+    return False
 
 
 def main():
@@ -108,6 +135,8 @@ def main():
             base_image=args.base_image,
         )
 
+    task_dir = args.task_spec.resolve().parent
+
     session = StreamingSandboxSession(
         image=args.base_image,
         verbose=True,
@@ -117,16 +146,23 @@ def main():
     try:
         session.open()
         if setup_sandbox_environment(session, args.reinstall):
-            run_meta_system_in_sandbox(session, problem_statement, target_name, args.optimize_system)
-            logger.info("Finished successfully!")
+            runtime_task_dir = copy_task_setup_to_sandbox(session, task_dir, args.task_spec.resolve())
+            if run_sandbox_preflight(session, runtime_task_dir):
+                run_meta_system_in_sandbox(session, problem_statement, target_name, args.optimize_system)
+                logger.info("Finished successfully!")
+            else:
+                return 1
         else:
             logger.error("Failed to set up sandbox environment")
+            return 1
     except Exception as e:
         logger.exception(f"Error during execution: {e}")
+        return 1
     finally:
         logger.info("Session closed.")
         session.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -71,6 +71,8 @@ class TestMetaSystemPromptsAndSignatures:
         """Prompt constants must contain essential instructions and documentation."""
         assert "LangGraph + ADAS Core Reference" in agentic_system_documentation
         assert "You validate agentic systems" in validation_prompt
+        assert "ADAS_INPUT_DIR" in agentic_system_documentation
+        assert "ADAS_OUTPUT_DIR" in validation_prompt
         assert "TARGET_SYSTEM_TEST_CASES" in hardening_prompt
         assert "@@decorator_name" in decorator_reminder
         assert "Analyze these test result logs" in test_reminder

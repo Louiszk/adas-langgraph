@@ -273,6 +273,16 @@ class TaskSpec(BaseModel):
         """Serialize to standard dictionary."""
         return self.model_dump(mode="json")
 
+    def to_design_context(self) -> str:
+        """Render the generalization-focused task contract supplied to the meta-agent.
+
+        This intentionally excludes the concrete development cases. 
+        TaskSpec also has no holdout fields, so this representation cannot expose a private evaluation suite.
+        """
+        context = self.to_dict()
+        context.pop("dev_suite", None)
+        return json.dumps(context, indent=2, sort_keys=True)
+
     def to_json(self, indent: int = 2) -> str:
         """Serialize to formatted JSON string."""
         return json.dumps(self.to_dict(), indent=indent)

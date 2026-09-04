@@ -18,9 +18,9 @@ from adas_core.task_spec import (
     MockServiceFixtureSpec,
     ResourceEntry,
     ResourceManifest,
+    TaskSpec,
     TestCaseSpec,
     TestFixturesSpec,
-    TaskSpec,
 )
 
 

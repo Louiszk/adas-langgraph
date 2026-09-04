@@ -166,16 +166,15 @@ class TestSandboxSessionSpecification:
 
 class TestSetupSandboxUtilities:
     def test_setup_manifest_currentness_tracks_task_spec_contents(self, tmp_path):
-        from create_setup import setup_manifest_is_current
         import hashlib
         import json
+
+        from create_setup import setup_manifest_is_current
 
         task_spec = tmp_path / "task.json"
         task_spec.write_text('{"name": "first"}', encoding="utf-8")
         digest = hashlib.sha256(task_spec.read_bytes()).hexdigest()
-        (tmp_path / "setup_manifest.json").write_text(
-            json.dumps({"files": {"task.json": digest}}), encoding="utf-8"
-        )
+        (tmp_path / "setup_manifest.json").write_text(json.dumps({"files": {"task.json": digest}}), encoding="utf-8")
         assert setup_manifest_is_current(task_spec)
 
         task_spec.write_text('{"name": "changed"}', encoding="utf-8")
