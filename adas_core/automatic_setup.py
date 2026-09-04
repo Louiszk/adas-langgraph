@@ -7,8 +7,8 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.decorator_logic import find_code_blocks
-from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 from adas_core.task_spec import (
     CustomFixtureSpec,
@@ -80,11 +80,18 @@ def _has_declared_fixtures(task_spec: TaskSpec) -> bool:
 class AutomaticSetup:
     """Ahead-of-time synthesizer for test fixtures and preflight scripts using setup_model."""
 
-    def __init__(self, llm: LargeLanguageModel | None = None) -> None:
-        self.llm = llm or LargeLanguageModel(
-            wrapper=validation_wrapper,
-            model_name=validation_model,
+    def __init__(self, llm: ChatModel | None = None) -> None:
+        self.llm = llm or ChatModel(
+            provider=validation_wrapper,
+            model=validation_model,
+            name="AutomaticSetup",
+            is_meta=True,
         )
+
+    def _invoke_setup_model(self, messages: list[SystemMessage | HumanMessage]) -> Any:
+        """Invoke setup generation under its durable telemetry scope."""
+        with usage_scope(system="meta", node="automatic_setup"):
+            return self.llm.invoke(messages)
 
     def _build_system_prompt(self, task_instructions: str) -> str:
         """Compose the base generation prompt with task-specific instructions."""
@@ -122,7 +129,7 @@ class AutomaticSetup:
             "Write the complete Python generator script:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = extract_code_block(str(response.content))
         reqs = extract_setup_requirements(code)
         return code, reqs
@@ -157,7 +164,7 @@ class AutomaticSetup:
             "Write the complete Python seeding script:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = extract_code_block(str(response.content))
         reqs = extract_setup_requirements(code)
         return code, reqs
@@ -183,7 +190,7 @@ class AutomaticSetup:
             "Write the complete FastMCP server script:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = extract_code_block(str(response.content))
         reqs = extract_setup_requirements(code)
         if "mcp" not in reqs:
@@ -210,7 +217,7 @@ class AutomaticSetup:
             "Write the complete FastAPI mock server script:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = extract_code_block(str(response.content))
         reqs = extract_setup_requirements(code)
         if "fastapi" not in reqs:
@@ -234,7 +241,7 @@ class AutomaticSetup:
             "Write the complete setup script:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = extract_code_block(str(response.content))
         reqs = extract_setup_requirements(code)
         return code, reqs
@@ -262,7 +269,7 @@ class AutomaticSetup:
             "Write the complete preflight.py module:"
         )
 
-        response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         return extract_code_block(str(response.content))
 
     def generate_all(
@@ -417,7 +424,7 @@ def ensure_automatic_setup(
     task_spec: TaskSpec,
     task_dir: Path | str,
     force: bool = False,
-    llm: LargeLanguageModel | None = None,
+    llm: ChatModel | None = None,
 ) -> SetupGenerationResult | None:
     """Ensure task fixtures and preflight script exist; invoke AutomaticSetup if missing.
 

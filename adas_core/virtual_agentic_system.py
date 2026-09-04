@@ -38,7 +38,8 @@ class VirtualAgenticSystem:
         self.packages_info = ["langchain-core 1.5.1", "langgraph 1.2.9"]
         self.installed_packages = {}
         self.base_imports = [
-            "from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls",
+            "from adas_core.chat_model import ChatModel",
+            "from adas_core.tool_calls import execute_tool_calls",
             "from typing import Dict, List, Any, Callable, Optional, Union, TypeVar, Generic, Tuple, Set, TypedDict, Iterable, Sequence, Annotated",
             "from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, AnyMessage, trim_messages",
             "from langgraph.graph import StateGraph, START, END",

@@ -6,7 +6,7 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 voter_prompt = """
 You are a Computer Science expert solving multiple-choice questions.
@@ -80,7 +80,7 @@ def run_voter(state: AgentState, subset_index: int, voter_name: str) -> dict[str
 
     problem_text = f"--- Question ---\n{state['question']}\n\n--- Option Subset ---\n{formatted_options}\n\n"
 
-    llm = LargeLanguageModel(temperature=0)
+    llm = ChatModel(temperature=0)
     response = llm.invoke([SystemMessage(content=voter_prompt), HumanMessage(content=problem_text)])
     response_text = response.content
 
@@ -129,7 +129,7 @@ def finalize_node(state):
 
         judge_text = f"--- Question ---\n{state['question']}\n\n--- All Options ---\n{formatted_all}"
 
-        judge_llm = LargeLanguageModel(temperature=0)
+        judge_llm = ChatModel(temperature=0)
         response = judge_llm.invoke(
             [
                 SystemMessage(content=blind_judge_prompt),
@@ -168,7 +168,7 @@ def finalize_node(state):
                 f"--- Question ---\n{state['question']}\n\n--- All Options ---\n{formatted_all}\n\n{reasoning_context}"
             )
 
-            judge_llm = LargeLanguageModel(temperature=0)
+            judge_llm = ChatModel(temperature=0)
             response = judge_llm.invoke(
                 [
                     SystemMessage(content=context_judge_prompt),

@@ -33,7 +33,7 @@ full_page = response.text # str
 ```
 
 --- Specific Validation Instructions ---
-For validation, incorporate a `LargeLanguageModel` instance from `adas_core.llm_wrapper` to assess the analysis based on the task.
+For validation, incorporate a `ChatModel` instance from `adas_core.chat_model` to assess the analysis based on the task.
 Set up the language model correctly to give a fair judgment; avoid heuristics for assessing the analysis.
 Provide the LLM with the current date to avoid hallucinations and the rejection of recent papers.
 Your test cases should include:

@@ -51,17 +51,34 @@ For a fixed-file task, use the declared fixture's relative path beneath `ADAS_IN
 
 ---
 
-## ADAS Core Module (`adas_core.llm_wrapper`)
+## ADAS Core Module (`adas_core.chat_model`)
 
-### `LargeLanguageModel` Class
-A standardized wrapper for interacting with LLMs.
-- **Initialization**: `llm = LargeLanguageModel()`
-- **Tool Binding**: `llm.bind_tools(tool_objects: List[Any]) -> LargeLanguageModel`
-  Informs the LLM about available tool functions.
+### `ChatModel` Class
+A standardized, composition-based wrapper for interacting with LLMs.
+- **Initialization**:
+  ```python
+  llm = ChatModel()  # Automatically defaults to the primary model declared in available_models
+  llm = ChatModel(model="gpt-5.6-terra", reasoning_effort="medium")
+  llm = ChatModel(provider="openai", model="gpt-4o-mini", temperature=0.7)
+  ```
+- **Allowed Models (`available_models`)**:
+  - The target system may **only** instantiate models declared in the task's `available_models` contract.
+  - Calling `ChatModel()` with no arguments automatically defaults to the primary model declared in `available_models`.
+  - You can leverage multi-model architectures by selecting different models from `available_models` for different nodes (e.g. a lightweight model for classification and a reasoning model for complex planning).
+  - Attempting to instantiate an unlisted model will raise an authorization error.
+- **Parameters**:
+  - `model`: Model name from `available_models`.
+  - `provider`: Provider name (`"openai"`). Optional unless the model name is ambiguous across multiple providers.
+  - `temperature`: Sampling temperature (0.0 to 2.0). Only supported by standard chat models. Unsupported combinations fail explicitly.
+  - `reasoning_effort`: Reasoning intensity for reasoning models (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`). Only passed when explicitly specified.
+- **Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = True) -> ChatModel`
+  Returns a **new** `ChatModel` instance with tools bound (immutable).
+- **Structured Output**: `structured_llm = llm.with_structured_output(schema: Any) -> ChatModel`
+  Returns a **new** `ChatModel` instance bound to output the schema.
 - **Invocation**: `response = llm.invoke(messages_input: List[Any]) -> AIMessage`
   Sends requests to the model and returns an `AIMessage` (which may contain `tool_calls`).
-- **Token Counter**: `LargeLanguageModel.token_counter`
-  Tokenizer property used for exact token count calculations in message trimming.
+- **Token Counter**: `ChatModel.token_counter` or `llm.get_num_tokens_from_messages`
+  Callable token counter used for exact token count calculations in message trimming.
 
 ### `execute_tool_calls` Function
 - **Signature**: `execute_tool_calls(response: AIMessage, available_tools: Dict[str, Any]) -> Tuple[List[ToolMessage], Dict[str, Any]]`
@@ -71,15 +88,16 @@ A standardized wrapper for interacting with LLMs.
 
 ### Standard Agent Node Pattern
 ```python
-from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls
+from adas_core.chat_model import ChatModel
+from adas_core.tool_calls import execute_tool_calls
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 def agent_node(state: AgentState) -> dict:
-    llm = LargeLanguageModel()
+    llm = ChatModel()
     
     # Bind available tools from the global `tools` dict if needed
     if "MyTool" in tools:
-        llm.bind_tools([tools["MyTool"]])
+        llm = llm.bind_tools([tools["MyTool"]])
     
     messages = state.get("messages", [])
     full_messages = [SystemMessage(content="Instructions...")] + messages
@@ -128,7 +146,7 @@ class AgentState(TypedDict):
 
 ```python
 from langchain_core.messages import trim_messages
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 # Example: Keep the last 16 messages
 trimmed_messages_by_count = trim_messages(
@@ -143,7 +161,7 @@ trimmed_messages = trim_messages(
     current_messages,
     max_tokens=8000,
     strategy="last",
-    token_counter=LargeLanguageModel.token_counter,
+    token_counter=ChatModel.token_counter,
 )
 ```
 """
@@ -274,7 +292,7 @@ Using these decorators is the only way to design the system. Always enclose them
 Example for `@@set_imports`:
 ```python
 @@set_imports()
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 # ... other imports
 ```
 

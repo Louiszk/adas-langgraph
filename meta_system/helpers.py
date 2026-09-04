@@ -4,8 +4,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from adas_core.chat_model import ChatModel
 from adas_core.decorator_logic import find_code_blocks
-from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 
 logger = get_logger("meta_system.helpers")
@@ -37,7 +37,7 @@ def parse_validation_code(response: Any) -> tuple[str | None, list[str] | None]:
         try:
             # Use a temporary, isolated namespace for safe execution
             temp_namespace = {
-                "LargeLanguageModel": LargeLanguageModel,
+                "ChatModel": ChatModel,
                 "HumanMessage": HumanMessage,
                 "ToolMessage": ToolMessage,
                 "SystemMessage": SystemMessage,

@@ -8,8 +8,8 @@ from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 
-# Import the LLM wrapper to access usage metrics
-from adas_core.llm_wrapper import LargeLanguageModel
+# Import ChatModel and UsageRecorder
+from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
 from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("run_target")
@@ -90,19 +90,20 @@ def main() -> None:
         logger.info("Starting system execution with initial state:")
         logger.info(json.dumps(initial_state, indent=2))
 
-        for mode, payload in workflow.stream(
-            initial_state,
-            config={"recursion_limit": 20},
-            stream_mode=["updates", "values"],
-        ):
-            if mode == "updates" and isinstance(payload, dict):
-                step_counter += 1
-                logger.info(f"[Step {step_counter}]")
-                for node_name, state_update in payload.items():
-                    logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
+        with usage_scope(system="target", run_id=args.run_id):
+            for mode, payload in workflow.stream(
+                initial_state,
+                config={"recursion_limit": 20},
+                stream_mode=["updates", "values"],
+            ):
+                if mode == "updates" and isinstance(payload, dict):
+                    step_counter += 1
+                    logger.info(f"[Step {step_counter}]")
+                    for node_name, state_update in payload.items():
+                        logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
 
-            elif mode == "values":
-                final_state_snapshot = payload
+                elif mode == "values":
+                    final_state_snapshot = payload
 
         metrics["status"] = "completed"
         logger.info("System execution finished successfully")
@@ -123,7 +124,8 @@ def main() -> None:
         end_time = time.time()
         metrics["duration_seconds"] = round(end_time - start_time, 2)
         metrics["iterations"] = step_counter
-        metrics["usage_metrics"] = LargeLanguageModel.usage_metrics.get("target_usage", {})
+        metrics["usage_metrics"] = ChatModel.usage_metrics.get("target_usage", {})
+        metrics["scoped_metrics"] = UsageRecorder.get_aggregate(system="target", run_id=args.run_id)
 
         if args.run_id:
             run_id = args.run_id

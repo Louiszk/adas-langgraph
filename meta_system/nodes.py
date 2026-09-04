@@ -9,9 +9,9 @@ from langchain_core.messages import (
     trim_messages,
 )
 
+from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.decorator_logic import execute_decorator_tool_calls
 from adas_core.helpers import remove_old_test_results
-from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from meta_system.config import (
@@ -66,60 +66,60 @@ def validation_function(state: MetaState) -> dict[str, Any]:
     reasoning_effort = "medium" if steps <= 1 else "high"
     level = "more" if steps <= 1 else "maximally"
 
-    llm = LargeLanguageModel(
-        reasoning_effort=reasoning_effort,
-        wrapper=validation_wrapper,
-        model_name=validation_model,
-        name="Validation",
-        is_meta=True,
-    )
-
-    if steps == 0:
-        # First-time generation of validation code
-        logger.info("--- Generating initial validation suite ---")
-        prompt_messages = [SystemMessage(content=validation_prompt), initial_task]
-    else:
-        # Hardening existing validation code
-        logger.info(f"--- System passed. Generating more difficult test cases (Iteration {steps}) ---")
-
-        # Aggregate previous test cases for context
-        previous_test_cases_str = ""
-        temp_namespace = {
-            "LargeLanguageModel": LargeLanguageModel,
-            "HumanMessage": HumanMessage,
-            "ToolMessage": ToolMessage,
-            "SystemMessage": SystemMessage,
-            "AIMessage": AIMessage,
-        }
-        for snippet in snippets:
-            try:
-                exec(snippet, temp_namespace)
-                cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES", [])
-                previous_test_cases_str += "\n".join([f"    {case}," for case in cases])
-            except Exception:
-                pass
-
-        formatted_hardening_prompt = hardening_prompt.format(
-            previous_test_cases_str=previous_test_cases_str, level=level
+    with usage_scope(system="meta", node="validation_generation"):
+        llm = ChatModel(
+            provider=validation_wrapper,
+            model=validation_model,
+            reasoning_effort=reasoning_effort,
+            name="Validation",
         )
-        prompt_messages = [
-            SystemMessage(content=validation_prompt),
-            initial_task,
-            HumanMessage(content=formatted_hardening_prompt),
-        ]
 
-    validation_error = None
-    new_snippet = None
-    for _ in range(3):
-        response = llm.invoke(messages_input=prompt_messages, is_meta=True)
-        new_snippet, validation_errors_list = parse_validation_code(response)
-        if new_snippet:
-            break
-        validation_error = (
-            "\n".join(validation_errors_list) if validation_errors_list else "No valid markdown block found."
-        )
-        failed_attempt_message = validation_error + "\nPlease try again."
-        prompt_messages.extend([response, HumanMessage(content=failed_attempt_message)])
+        if steps == 0:
+            # First-time generation of validation code
+            logger.info("--- Generating initial validation suite ---")
+            prompt_messages = [SystemMessage(content=validation_prompt), initial_task]
+        else:
+            # Hardening existing validation code
+            logger.info(f"--- System passed. Generating more difficult test cases (Iteration {steps}) ---")
+
+            # Aggregate previous test cases for context
+            previous_test_cases_str = ""
+            temp_namespace = {
+                "ChatModel": ChatModel,
+                "HumanMessage": HumanMessage,
+                "ToolMessage": ToolMessage,
+                "SystemMessage": SystemMessage,
+                "AIMessage": AIMessage,
+            }
+            for snippet in snippets:
+                try:
+                    exec(snippet, temp_namespace)
+                    cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES", [])
+                    previous_test_cases_str += "\n".join([f"    {case}," for case in cases])
+                except Exception:
+                    pass
+
+            formatted_hardening_prompt = hardening_prompt.format(
+                previous_test_cases_str=previous_test_cases_str, level=level
+            )
+            prompt_messages = [
+                SystemMessage(content=validation_prompt),
+                initial_task,
+                HumanMessage(content=formatted_hardening_prompt),
+            ]
+
+        validation_error = None
+        new_snippet = None
+        for _ in range(3):
+            response = llm.invoke(prompt_messages)
+            new_snippet, validation_errors_list = parse_validation_code(response)
+            if new_snippet:
+                break
+            validation_error = (
+                "\n".join(validation_errors_list) if validation_errors_list else "No valid markdown block found."
+            )
+            failed_attempt_message = validation_error + "\nPlease try again."
+            prompt_messages.extend([response, HumanMessage(content=failed_attempt_message)])
 
     if not new_snippet:
         if not snippets:
@@ -183,74 +183,76 @@ def initial_test_runner_function(state: MetaState) -> dict[str, Any]:
 
 
 def meta_agent_function(state: MetaState) -> dict[str, Any]:
-    llm = LargeLanguageModel(
-        wrapper=meta_agent_wrapper,
-        model_name=meta_agent_model,
-        reasoning_effort=meta_agent_reasoning_effort,
-        name="MetaAgent",
-        is_meta=True,
-    )
-
-    context_length = ACTION_CUTOFF * 2
-    messages = state.get("messages", [])
-    target_agentic_system = state.get("target_agentic_system")
-    if target_agentic_system is None:
-        raise ValueError("target_agentic_system is required in MetaState.")
-
-    iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
-    current_messages = messages[1:]
-    initial_messages: list[HumanMessage] = []
-    if designer_task := state.get("designer_task"):
-        initial_messages.append(designer_task)
-
-    if state.get("initial_test_results"):
-        if iteration > 0:
-            if init_res := state.get("initial_test_results"):
-                initial_messages.append(init_res)
-        else:
-            if verbose_res := state.get("verbose_initial_test_results"):
-                initial_messages.append(verbose_res)
-
-    trimmed_messages = current_messages
-    try:
-        trimmed_messages = trim_messages(
-            current_messages,
-            max_tokens=context_length,
-            strategy="last",
-            token_counter=len,
-            allow_partial=False,
+    with usage_scope(system="meta", node="meta_agent"):
+        llm = ChatModel(
+            provider=meta_agent_wrapper,
+            model=meta_agent_model,
+            reasoning_effort=meta_agent_reasoning_effort,
+            name="MetaAgent",
         )
-    except Exception as e:
-        logger.warning(f"Error during message trimming: {e}")
 
-    # Reminder that messages have been trimmed
-    trimmed_iterations = (len(current_messages) - len(trimmed_messages)) // 2
-    if trimmed_iterations > 0:
-        initial_messages.append(HumanMessage(content=trimming_message.format(trimmed_iterations=trimmed_iterations)))
+        context_length = ACTION_CUTOFF * 2
+        messages = state.get("messages", [])
+        target_agentic_system = state.get("target_agentic_system")
+        if target_agentic_system is None:
+            raise ValueError("target_agentic_system is required in MetaState.")
 
-    code = materialize_system(target_agentic_system, output_dir=None)
-    code_message = (
-        f"\n\n**You are now in Iteration {iteration}**\n--- Current Code of the TargetSystem ---\n```\n{code}\n```"
-    )
+        iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
+        current_messages = messages[1:]
+        initial_messages: list[HumanMessage] = []
+        if designer_task := state.get("designer_task"):
+            initial_messages.append(designer_task)
 
-    full_messages = (
-        [SystemMessage(content=meta_agent_system_prompt)]
-        + initial_messages
-        + trimmed_messages
-        + [HumanMessage(content=code_message)]
-    )
-    response = llm.invoke(messages_input=full_messages, is_meta=True)
+        if state.get("initial_test_results"):
+            if iteration > 0:
+                if init_res := state.get("initial_test_results"):
+                    initial_messages.append(init_res)
+            else:
+                if verbose_res := state.get("verbose_initial_test_results"):
+                    initial_messages.append(verbose_res)
 
-    response_content = normalize_response_content(response.content)
+        trimmed_messages = current_messages
+        try:
+            trimmed_messages = trim_messages(
+                current_messages,
+                max_tokens=context_length,
+                strategy="last",
+                token_counter=len,
+                allow_partial=False,
+            )
+        except Exception as e:
+            logger.warning(f"Error during message trimming: {e}")
 
-    cleaned_content = re.sub(r"\[Iteration\s*\d+\]\s*\n*", "", response_content)
-    iteration_info = f"[Iteration {iteration}]"
-    response.content = f"{iteration_info}\n\n{cleaned_content}"
+        # Reminder that messages have been trimmed
+        trimmed_iterations = (len(current_messages) - len(trimmed_messages)) // 2
+        if trimmed_iterations > 0:
+            initial_messages.append(
+                HumanMessage(content=trimming_message.format(trimmed_iterations=trimmed_iterations))
+            )
 
-    updated_messages = messages + [response]
+        code = materialize_system(target_agentic_system, output_dir=None)
+        code_message = (
+            f"\n\n**You are now in Iteration {iteration}**\n--- Current Code of the TargetSystem ---\n```\n{code}\n```"
+        )
 
-    new_state = {"messages": updated_messages}
-    return new_state
+        full_messages = (
+            [SystemMessage(content=meta_agent_system_prompt)]
+            + initial_messages
+            + trimmed_messages
+            + [HumanMessage(content=code_message)]
+        )
+        response = llm.invoke(full_messages)
+
+        response_content = normalize_response_content(response.content)
+
+        cleaned_content = re.sub(r"\[Iteration\s*\d+\]\s*\n*", "", response_content)
+        iteration_info = f"[Iteration {iteration}]"
+        response.content = f"{iteration_info}\n\n{cleaned_content}"
+
+        updated_messages = messages + [response]
+
+        new_state = {"messages": updated_messages}
+        return new_state
 
 
 def tool_execution(state: MetaState) -> dict[str, Any]:

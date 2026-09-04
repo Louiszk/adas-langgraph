@@ -14,10 +14,10 @@ import dill as pickle
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
+from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
 from adas_core.decorator_logic import build_decorator_signatures
 from adas_core.environment import isolated_case_workspace
 from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
-from adas_core.llm_wrapper import LargeLanguageModel
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
@@ -386,9 +386,9 @@ def test_system(state: dict[str, Any]) -> str:
     validation_results_summary = []
     all_tests_passed_overall = True
     num_passed_tests = 0
-    usage_before = LargeLanguageModel.usage_metrics["target_usage"]["overall"].copy()
-    num_tests = 0
     test_run_id = uuid.uuid4().hex
+    usage_before = UsageRecorder.get_aggregate(system="target", run_id=test_run_id)
+    num_tests = 0
 
     if not validation_code_snippets:
         return "ERROR: validation_code_snippets list is empty."
@@ -405,7 +405,7 @@ def test_system(state: dict[str, Any]) -> str:
         all_validator_funcs = []
         for snippet in validation_code_snippets:
             snippet_namespace = {
-                "LargeLanguageModel": LargeLanguageModel,
+                "ChatModel": ChatModel,
                 "HumanMessage": HumanMessage,
                 "ToolMessage": ToolMessage,
                 "SystemMessage": SystemMessage,
@@ -457,20 +457,21 @@ def test_system(state: dict[str, Any]) -> str:
                     contextlib.redirect_stderr(stderr_capture),
                 ):
                     try:
-                        for stream_mode, update in target_workflow.stream(
-                            test_input_state,
-                            config={"recursion_limit": RECURSION_LIMIT},
-                            stream_mode=["values", "debug"],
-                        ):
-                            if stream_mode == "values":
-                                current_test_final_state = update
-                            elif stream_mode == "debug" and update["type"] == "task_result":
-                                step = update["step"]
-                                if step >= len(execution_flow):
-                                    execution_flow.append([update["payload"]["name"]])
-                                else:
-                                    execution_flow[step].append(update["payload"]["name"])
-                                total_iterations = step + 1
+                        with usage_scope(system="target", run_id=test_run_id, case_id=test_case_id):
+                            for stream_mode, update in target_workflow.stream(
+                                test_input_state,
+                                config={"recursion_limit": RECURSION_LIMIT},
+                                stream_mode=["values", "debug"],
+                            ):
+                                if stream_mode == "values":
+                                    current_test_final_state = update
+                                elif stream_mode == "debug" and update["type"] == "task_result":
+                                    step = update["step"]
+                                    if step >= len(execution_flow):
+                                        execution_flow.append([update["payload"]["name"]])
+                                    else:
+                                        execution_flow[step].append(update["payload"]["name"])
+                                    total_iterations = step + 1
                         execution_flow.append("END")
 
                         try:
@@ -540,8 +541,11 @@ def test_system(state: dict[str, Any]) -> str:
 
     end_time = time.time()
     duration = end_time - start_time
-    usage_after = LargeLanguageModel.usage_metrics["target_usage"]["overall"].copy()
-    metrics = {metric: usage_after[metric] - usage_before[metric] for metric in usage_before}
+    usage_after = UsageRecorder.get_aggregate(system="target", run_id=test_run_id)
+    metrics = {
+        metric: usage_after[metric] - usage_before.get(metric, 0)
+        for metric in ["llm_calls", "input_tokens", "output_tokens", "total_tokens"]
+    }
 
     captured_output_str = f"\n{final_test_case_id}:\n<STDOUT+STDERR>\n{final_captured_output}\n</STDOUT+STDERR>"
     flow_chart_str = (

@@ -10,6 +10,7 @@ from adas_core.task_spec import (
     HoldoutSuiteSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
+    ModelSpec,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -228,6 +229,54 @@ class TestTaskSpecModel:
                 llm_judge_needed=True,
                 judge_criteria=None,
             )
+
+    def test_default_available_models(self):
+        spec = TaskSpec(
+            name="DefaultModelAgent",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"q": "str"},
+            ),
+            dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
+        )
+        assert len(spec.available_models) == 1
+        assert spec.available_models[0].provider == "openai"
+        assert spec.available_models[0].model_name == "gpt-5.6-luna"
+
+        context = spec.to_design_context()
+        assert "available_models" in context
+        assert "gpt-5.6-luna" in context
+
+    def test_custom_available_models(self):
+        spec = TaskSpec(
+            name="MultiModelAgent",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"q": "str"},
+            ),
+            available_models=[
+                ModelSpec(provider="openai", model_name="gpt-4o-mini"),
+                ModelSpec(provider="openai", model_name="gpt-5.6-luna"),
+            ],
+            dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
+        )
+        assert len(spec.available_models) == 2
+        assert spec.available_models[0].model_name == "gpt-4o-mini"
+        assert spec.available_models[1].model_name == "gpt-5.6-luna"
+
+        context = spec.to_design_context()
+        assert "gpt-4o-mini" in context
+        assert "gpt-5.6-luna" in context
+
+    def test_model_spec_forbids_extra_fields(self):
+        with pytest.raises(ValidationError):
+            ModelSpec(provider="openai", model_name="gpt-4o", extra_field="forbidden")  # type: ignore
+
+    def test_model_spec_forbids_legacy_wrapper_field(self):
+        with pytest.raises(ValidationError):
+            ModelSpec.model_validate({"wrapper": "openai", "model_name": "gpt-4o"})
 
     def test_duplicate_dev_suite_ids_rejected(self):
         with pytest.raises(ValidationError):

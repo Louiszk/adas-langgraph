@@ -16,6 +16,15 @@ class ToolRequirement(BaseModel):
     description: str = Field(..., min_length=1, description="Purpose and usage instructions for the tool")
 
 
+class ModelSpec(BaseModel):
+    """Specification of an allowed model available for target system use."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(default="openai", description="Provider name (e.g. 'openai')")
+    model_name: str = Field(..., min_length=1, description="Model identifier (e.g. 'gpt-5.6-luna')")
+
+
 class PersistenceContract(BaseModel):
     """Configuration for state persistence and checkpointers."""
 
@@ -245,6 +254,10 @@ class TaskSpec(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the target system to design")
     system_goal: str = Field(..., min_length=1, description="Primary goal and problem statement for the Meta-Agent")
     architecture_contract: ArchitectureContract = Field(..., description="Execution mode, schema, and persistence")
+    available_models: list[ModelSpec] = Field(
+        default_factory=lambda: [ModelSpec(provider="openai", model_name="gpt-5.6-luna")],
+        description="Allowed models available for target system nodes within ChatModel.",
+    )
     resource_manifest: ResourceManifest = Field(
         default_factory=ResourceManifest, description="Available resources and API keys"
     )
@@ -276,7 +289,7 @@ class TaskSpec(BaseModel):
     def to_design_context(self) -> str:
         """Render the generalization-focused task contract supplied to the meta-agent.
 
-        This intentionally excludes the concrete development cases. 
+        This intentionally excludes the concrete development cases.
         TaskSpec also has no holdout fields, so this representation cannot expose a private evaluation suite.
         """
         context = self.to_dict()

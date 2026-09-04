@@ -7,7 +7,7 @@ from typing import Any, cast
 import dill as pickle
 
 sys.path.append("/sandbox/workspace")
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
@@ -20,6 +20,7 @@ _TASK_SPEC_PATH = "/sandbox/workspace/task_setup/task.json"
 def load_visible_task_context() -> str:
     """Load the visible development contract without any holdout data."""
     task_spec = TaskSpec.from_file(_TASK_SPEC_PATH)
+    ChatModel.allowed_target_models = [m.model_dump() for m in task_spec.available_models]
     return (
         "\n\n--- TaskSpec Design Contract ---\n"
         "Use this contract for architecture, state, declared fixture paths, resources, and output requirements. "
@@ -97,29 +98,30 @@ def main():
         processed_msg_count = 0
         logger.info("Streaming meta system execution...")
 
-        for output in workflow.stream(cast(Any, inputs), config={"recursion_limit": 999}):
-            metrics["iterations"] += 1
+        with usage_scope(system="meta"):
+            for output in workflow.stream(cast(Any, inputs), config={"recursion_limit": 999}):
+                metrics["iterations"] += 1
 
-            for out in output.values():
-                if "messages" in out:
-                    messages = out["messages"]
-                    if messages:
-                        new_messages = messages[processed_msg_count:]
-                        for msg in new_messages:
-                            msg_type = getattr(msg, "type", "Unknown")
-                            content = getattr(msg, "content", "")
-                            stream_content = f"\n[{msg_type}]: {content}\n"
-                            metrics["stream_content"] += stream_content
-                            logger.info(stream_content.strip())
+                for out in output.values():
+                    if "messages" in out:
+                        messages = out["messages"]
+                        if messages:
+                            new_messages = messages[processed_msg_count:]
+                            for msg in new_messages:
+                                msg_type = getattr(msg, "type", "Unknown")
+                                content = getattr(msg, "content", "")
+                                stream_content = f"\n[{msg_type}]: {content}\n"
+                                metrics["stream_content"] += stream_content
+                                logger.info(stream_content.strip())
 
-                        processed_msg_count = len(messages)
+                            processed_msg_count = len(messages)
 
-                if out.get("validation_code_snippets"):
-                    metrics["validation_code_snippets"] = out["validation_code_snippets"]
+                    if out.get("validation_code_snippets"):
+                        metrics["validation_code_snippets"] = out["validation_code_snippets"]
 
-                if out.get("design_completed"):
-                    logger.info("Design completed.")
-                    metrics["status"] = "completed"
+                    if out.get("design_completed"):
+                        logger.info("Design completed.")
+                        metrics["status"] = "completed"
 
         metrics["status"] = "completed"
 
@@ -136,7 +138,8 @@ def main():
         # Finalize metrics
         end_time = time.time()
         metrics["duration_seconds"] = end_time - start_time
-        metrics["usage_metrics"] = LargeLanguageModel.usage_metrics
+        metrics["usage_metrics"] = ChatModel.usage_metrics
+        metrics["scoped_metrics"] = UsageRecorder.get_aggregate(system="meta")
 
         escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
         metrics_dir = "/sandbox/workspace/generated_systems/metrics"

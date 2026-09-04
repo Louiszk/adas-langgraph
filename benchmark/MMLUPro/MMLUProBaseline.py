@@ -4,7 +4,7 @@ from typing import TypedDict
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 
 class AgentState(TypedDict):
@@ -18,7 +18,7 @@ graph = StateGraph(AgentState)
 
 
 def agent_node(state):
-    llm = LargeLanguageModel(temperature=0)
+    llm = ChatModel(temperature=0)
     system_prompt = """
         You will solve multiple-choice questions in computer science.
         
