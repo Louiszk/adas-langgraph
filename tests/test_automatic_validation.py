@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage
 import pytest
+from langchain_core.messages import AIMessage
 
 from adas_core.automatic_validation import (
     AutomaticValidation,
@@ -109,8 +109,8 @@ class TestTaskSpecRunner:
 
     def test_checkpoint_selection_counts_task_spec_cases(self):
         spec = self._spec()
-        assert _get_test_case_count({"task_spec": spec, "validation_code_snippets": []}) == 1
-        assert _get_test_case_count({"task_spec": spec.model_dump(), "validation_code_snippets": []}) == 1
+        assert _get_test_case_count({"task_spec": spec}) == 1
+        assert _get_test_case_count({"task_spec": spec.model_dump()}) == 1
 
     def test_uses_frozen_validation_module(self, tmp_path):
         (tmp_path / "SimpleTask.validation.py").write_text(

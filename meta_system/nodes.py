@@ -18,21 +18,15 @@ from meta_system.config import (
     meta_agent_model,
     meta_agent_reasoning_effort,
     meta_agent_wrapper,
-    validation_model,
-    validation_wrapper,
 )
 from meta_system.helpers import (
-    get_validation_exec_globals,
     normalize_response_content,
-    parse_validation_code,
 )
 from meta_system.prompts import (
     build_meta_agent_prompt,
     decorator_reminder,
-    hardening_prompt,
     test_reminder,
     trimming_message,
-    validation_prompt,
 )
 from meta_system.state import MetaState
 from meta_system.tools import code_related_tools, function_signatures, tools
@@ -55,127 +49,53 @@ def formatting_function(state: MetaState) -> dict[str, Any]:
         "messages": [HumanMessage(new_task_statement)],
         "designer_task": HumanMessage(new_task_statement),
         "system_passed": False,
-        "hardening_steps": 0,
-        "validation_code_snippets": [],
     }
     return new_state
 
 
-def validation_function(state: MetaState) -> dict[str, Any]:
-    initial_task = HumanMessage(content=str(state.get("initial_task", "")))
-    steps = state.get("hardening_steps", 0)
-    snippets = state.get("validation_code_snippets", [])
-
-    reasoning_effort = "medium" if steps <= 1 else "high"
-    level = "more" if steps <= 1 else "maximally"
-
-    with usage_scope(system="meta", node="validation_generation"):
-        llm = ChatModel(
-            provider=validation_wrapper,
-            model=validation_model,
-            reasoning_effort=reasoning_effort,
-            name="Validation",
-        )
-
-        if steps == 0:
-            # First-time generation of validation code
-            logger.info("--- Generating initial validation suite ---")
-            prompt_messages = [SystemMessage(content=validation_prompt), initial_task]
-        else:
-            # Hardening existing validation code
-            logger.info(f"--- System passed. Generating more difficult test cases (Iteration {steps}) ---")
-
-            # Aggregate previous test cases for context
-            previous_test_cases_str = ""
-            temp_namespace = get_validation_exec_globals()
-            for snippet in snippets:
-                try:
-                    exec(snippet, temp_namespace)
-                    cases = temp_namespace.get("TARGET_SYSTEM_TEST_CASES", [])
-                    previous_test_cases_str += "\n".join([f"    {case}," for case in cases])
-                except Exception:
-                    pass
-
-            formatted_hardening_prompt = hardening_prompt.format(
-                previous_test_cases_str=previous_test_cases_str, level=level
-            )
-            prompt_messages = [
-                SystemMessage(content=validation_prompt),
-                initial_task,
-                HumanMessage(content=formatted_hardening_prompt),
-            ]
-
-        validation_error = None
-        new_snippet = None
-        for _ in range(3):
-            response = llm.invoke(prompt_messages)
-            new_snippet, validation_errors_list = parse_validation_code(response)
-            if new_snippet:
-                break
-            validation_error = (
-                "\n".join(validation_errors_list) if validation_errors_list else "No valid markdown block found."
-            )
-            failed_attempt_message = validation_error + "\nPlease try again."
-            prompt_messages.extend([response, HumanMessage(content=failed_attempt_message)])
-
-    if not new_snippet:
-        if not snippets:
-            raise ValueError("Unable to generate initial Validation Code.")
-        else:
-            logger.warning("Failed to generate a valid hardened test suite.")
-            return {"hardening_passed": None}
-
-    updated_snippets = snippets + [new_snippet]
-
-    return {
-        "validation_code_snippets": updated_snippets,
-        "hardening_steps": steps + 1,
-        "hardening_passed": None,
-    }
-
-
 def initial_test_runner_function(state: MetaState) -> dict[str, Any]:
     if not state.get("optimize"):
-        return {"hardening_passed": None}
+        return {}
 
-    steps = state.get("hardening_steps", 0)
-    initial_test_passes = state.get("initial_test_passes", 0)
-    logger.info(f"--- Hardening Loop: (Iteration {steps}) ---")
     test_system_tool = tools.get("TestSystem")
     if not test_system_tool:
         raise ValueError("TestSystem tool not found.")
 
-    # The test_system tool now internally handles the list of snippets
+    logger.info("--- Running baseline evaluation for initial target system ---")
     test_result_str = test_system_tool.invoke({"state": state})  # type: ignore
-    pattern = r"The system passed (\d+)/\d+ tests\."
-    match = re.search(pattern, test_result_str)
-    new_initial_test_passes = int(match.group(1)) if match else 0
-    initial_test_passes = max(new_initial_test_passes, initial_test_passes)
 
-    validator_split = test_result_str.split("<ValidatorResult>")
-    validator_result = validator_split[-1] if len(validator_split) > 1 else ""
+    test_metrics = state.get("test_metrics", {})
+    passed = test_metrics.get("passed", 0)
+    total = test_metrics.get("total", 0)
 
-    if "Overall: PASSED" in validator_result:
-        return {"hardening_passed": True, "initial_test_passes": initial_test_passes}
-    logger.info("--- System failed. Handing off hardened test suite to meta-agent. ---")
+    if passed >= total:
+        target_goal = (
+            f"The initial system already passes all {total}/{total} development tests (100% pass rate).\n"
+            "Your goal is to optimize the system for greater robustness, token efficiency, and lower latency "
+            "while maintaining a 100% pass rate across all tests."
+        )
+    else:
+        target_goal = (
+            f"The initial system passed {passed}/{total} development tests.\n"
+            f"Improve upon this baseline by achieving passing tests for all {total} test cases."
+        )
 
     verbose_test_results_content = (
         "--- Initial Test Results ---\n"
-        + test_result_str
-        + "\nThese tests were run right at the start of the design process (Iteration 0), before you made any changes to the system."
-        + f"\nImprove upon this baseline by achieving at least {max(2, initial_test_passes + 1)} passing tests."
-        + "\nCrucially, the system must be generalized and adaptable to the broader problem domain. Do not hardcode logic tailored only to these specific test inputs."
+        f"{test_result_str}\n"
+        "These tests were run right at the start of the design process (Iteration 0), before you made any changes to the system.\n\n"
+        f"{target_goal}\n\n"
+        "Crucially, the system must be generalized and adaptable to the broader problem domain. "
+        "Do not hardcode logic tailored only to these specific test inputs."
     )
 
     pattern_to_remove = r"<FinalState>.*?</FinalState>|<STDOUT\+STDERR>.*?</STDOUT\+STDERR>"
     cleaned_test_results_content = re.sub(pattern_to_remove, "", verbose_test_results_content, flags=re.DOTALL)
 
-    # Return both versions to update the state
     return {
         "verbose_initial_test_results": HumanMessage(content=verbose_test_results_content),
         "initial_test_results": HumanMessage(content=cleaned_test_results_content),
-        "initial_test_passes": initial_test_passes,
-        "hardening_passed": False,
+        "test_metrics": test_metrics,
     }
 
 

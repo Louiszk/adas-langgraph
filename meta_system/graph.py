@@ -8,13 +8,11 @@ from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec
-from meta_system.config import MAX_HARDENING_STEPS
 from meta_system.nodes import (
     formatting_function,
     initial_test_runner_function,
     meta_agent_function,
     tool_execution,
-    validation_function,
 )
 from meta_system.state import MetaState
 
@@ -32,25 +30,7 @@ def _get_test_case_count(state: MetaState) -> int:
     except Exception as exc:
         logger.warning("Could not read TaskSpec while selecting a checkpoint: %r", exc)
 
-    # Transitional support for the legacy validator representation.
-    return len(state.get("validation_code_snippets", [])) * 3
-
-
-def hardening_condition(state: MetaState) -> str:
-    """Routes to Validation for test hardening or to MetaAgent to start design."""
-    if not state.get("optimize"):
-        return "MetaAgent"
-
-    passed = state.get("hardening_passed", False)
-    steps = state.get("hardening_steps", 0)
-
-    if passed:
-        if steps < MAX_HARDENING_STEPS:
-            return "Validation"
-        else:
-            return END
-    else:
-        return "MetaAgent"
+    return 0
 
 
 def design_completed_condition(state: MetaState) -> str:
@@ -113,28 +93,17 @@ def create_meta_workflow():
 
     # Nodes
     graph.add_node("Formatting", formatting_function)
-    graph.add_node("Validation", validation_function)
     graph.add_node("InitialTestRunner", initial_test_runner_function)
     graph.add_node("MetaAgent", meta_agent_function)
     graph.add_node("ToolExecution", tool_execution)
 
     # Edges
     graph.add_edge(START, "Formatting")
-    graph.add_edge("Formatting", "Validation")
-    graph.add_edge("Validation", "InitialTestRunner")
+    graph.add_edge("Formatting", "InitialTestRunner")
+    graph.add_edge("InitialTestRunner", "MetaAgent")
     graph.add_edge("MetaAgent", "ToolExecution")
 
     # Conditional Edges
-    graph.add_conditional_edges(
-        "InitialTestRunner",
-        hardening_condition,
-        path_map={
-            "MetaAgent": "MetaAgent",
-            "Validation": "Validation",
-            END: END,
-        },
-    )
-
     graph.add_conditional_edges(
         "ToolExecution",
         design_completed_condition,

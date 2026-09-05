@@ -618,7 +618,8 @@ class TestExecuteToolCalls:
         assert "not found" in tool_msgs[1].content
 
     def test_tool_calls_reexported_from_chat_model(self):
-        from adas_core.chat_model import execute_tool_calls as chat_etc, validate_tool_history as chat_vth
+        from adas_core.chat_model import execute_tool_calls as chat_etc
+        from adas_core.chat_model import validate_tool_history as chat_vth
         from adas_core.tool_calls import execute_tool_calls, validate_tool_history
 
         assert chat_etc is execute_tool_calls

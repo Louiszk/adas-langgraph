@@ -222,6 +222,7 @@ def benchmark_cli_main(
 ) -> None:
     """Unified CLI entry point for benchmark sandbox runners."""
     import argparse
+
     from adas_core.logging_config import setup_logging
     from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 

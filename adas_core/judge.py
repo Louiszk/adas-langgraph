@@ -123,7 +123,7 @@ class LLMJudge:
         self,
         prompt: str,
         *,
-        schema: type[T] | type[JudgeEvaluation] = JudgeEvaluation,
+        schema: type[T | JudgeEvaluation] = JudgeEvaluation,
         system_prompt: str | None = None,
         images: list[str | Path] | str | Path | None = None,
         model: str | None = None,
@@ -203,9 +203,9 @@ class LLMJudge:
 __all__ = [
     "DEFAULT_JUDGE_SYSTEM_PROMPT",
     "JUDGE_SYSTEM_PROMPT",
-    "JudgeEvaluation",
-    "LLMJudge",
     "MAX_IMAGE_SIZE_BYTES",
     "SUPPORTED_IMAGE_EXTENSIONS",
+    "JudgeEvaluation",
+    "LLMJudge",
     "format_image_payload",
 ]

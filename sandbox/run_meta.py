@@ -130,9 +130,6 @@ def main():
 
                             processed_msg_count = len(messages)
 
-                    if out.get("validation_code_snippets"):
-                        metrics["validation_code_snippets"] = out["validation_code_snippets"]
-
                     if out.get("design_completed"):
                         logger.info("Design completed.")
                         metrics["status"] = "completed"

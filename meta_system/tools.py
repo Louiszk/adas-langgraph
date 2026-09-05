@@ -17,12 +17,12 @@ from langchain_core.tools import tool
 from adas_core.chat_model import UsageRecorder, usage_scope
 from adas_core.decorator_logic import build_decorator_signatures
 from adas_core.environment import (
+    _PACKAGE_PATTERN,
     DEFAULT_EXCLUDED_PACKAGES,
     SANDBOX_FIXTURES_DIR,
     SANDBOX_GENERATED_SYSTEMS_DIR,
     SANDBOX_TASK_SETUP_DIR,
     SANDBOX_TASK_SPEC_PATH,
-    _PACKAGE_PATTERN,
     isolated_case_workspace,
 )
 from adas_core.helpers import (
@@ -36,7 +36,7 @@ from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.config import RECURSION_LIMIT
-from meta_system.helpers import get_validation_exec_globals, ignored_nodes_message
+from meta_system.helpers import ignored_nodes_message
 from meta_system.prompts import test_reminder
 
 logger = get_logger("meta_system.tools")
@@ -367,11 +367,11 @@ def manage_utilities(
 
 def _resolve_task_validation(
     state: dict[str, Any],
-) -> tuple[TaskSpec | None, Any | None, list[Any], list[Any]]:
-    """Resolve TaskSpec, validation module, test cases, and legacy validator functions.
+) -> tuple[TaskSpec | None, Any | None, list[TestCaseSpec]]:
+    """Resolve TaskSpec, validation module, and dev suite test cases.
 
     Returns:
-        (task_spec, validation_module, test_cases, legacy_validator_funcs)
+        (task_spec, validation_module, test_cases)
     """
     # Import lazily: automatic_validation depends on meta_system.config, whose
     # package initialization imports this module.
@@ -445,27 +445,9 @@ def _resolve_task_validation(
                         f"Generate and review its LLM-authored validator before design. Searched: {searched}"
                     )
 
-        return task_spec, validation_module, list(task_spec.dev_suite), []
+        return task_spec, validation_module, list(task_spec.dev_suite)
 
-    # 4. Fallback to legacy validation_code_snippets if present
-    snippets = state.get("validation_code_snippets", [])
-    if snippets:
-        all_test_cases: list[Any] = []
-        all_validator_funcs: list[Any] = []
-        for snippet in snippets:
-            snippet_namespace = get_validation_exec_globals()
-            try:
-                exec(snippet, snippet_namespace)
-                cases = snippet_namespace.get("TARGET_SYSTEM_TEST_CASES")
-                validator = snippet_namespace.get("validate_target_system_output")
-                if isinstance(cases, list) and len(cases) == 3 and callable(validator):
-                    all_test_cases.extend(cases)
-                    all_validator_funcs.append(validator)
-            except Exception as e_snippet:
-                logger.error(f"EVALUATOR_ERROR: Failed to parse a validation code snippet: {e_snippet!r}")
-        return None, None, all_test_cases, all_validator_funcs
-
-    return None, None, [], []
+    return None, None, []
 
 
 def test_system(state: dict[str, Any]) -> str:
@@ -495,7 +477,7 @@ def test_system(state: dict[str, Any]) -> str:
     usage_before = UsageRecorder.get_aggregate(system="target", run_id=test_run_id)
 
     try:
-        task_spec, validation_module, all_test_cases, all_validator_funcs = _resolve_task_validation(state)
+        task_spec, validation_module, all_test_cases = _resolve_task_validation(state)
     except Exception as e_prep:
         eval_err = (
             f"EVALUATOR_ERROR: Failed to prepare validation environment: {e_prep!r}\n"
@@ -506,7 +488,9 @@ def test_system(state: dict[str, Any]) -> str:
 
     num_tests = len(all_test_cases)
     if num_tests == 0:
-        return "ERROR: No validation test cases found. Neither a valid TaskSpec dev_suite nor validation_code_snippets was provided."
+        return "ERROR: No validation test cases found. No valid TaskSpec dev_suite was provided."
+    if validation_module is None:
+        return "ERROR: No validation module found to validate test execution."
 
     try:
         validation_errors = target_agentic_system.validate_graph()
@@ -528,14 +512,9 @@ def test_system(state: dict[str, Any]) -> str:
         active_fixtures_dir = fixtures_path if fixtures_path.exists() else None
 
         for i, test_case in enumerate(all_test_cases):
-            if isinstance(test_case, TestCaseSpec):
-                test_case_id = test_case.id
-                test_input_state = test_case.turns[0]
-                case_slug = sanitize_test_id(test_case.id)
-            else:
-                test_case_id = f"Test Case {i + 1}"
-                test_input_state = test_case
-                case_slug = f"case_{i + 1}"
+            test_case_id = test_case.id
+            test_input_state = test_case.turns[0]
+            case_slug = sanitize_test_id(test_case.id)
 
             final_test_case_id = test_case_id
             current_test_final_state = {}
@@ -575,38 +554,33 @@ def test_system(state: dict[str, Any]) -> str:
                         execution_flow.append("END")
 
                         try:
-                            if validation_module is not None and isinstance(test_case, TestCaseSpec):
-                                clean_id = sanitize_test_id(test_case.id)
-                                fn_name = f"validate_{clean_id}"
-                                validator_fn: Any = getattr(validation_module, "VALIDATORS", {}).get(test_case.id)
-                                if not validator_fn:
-                                    validator_fn = getattr(validation_module, fn_name, None)
-                                if not validator_fn and hasattr(validation_module, "validate"):
-                                    cid = test_case.id
+                            clean_id = sanitize_test_id(test_case.id)
+                            fn_name = f"validate_{clean_id}"
+                            validator_fn: Any = getattr(validation_module, "VALIDATORS", {}).get(test_case.id)
+                            if not validator_fn:
+                                validator_fn = getattr(validation_module, fn_name, None)
+                            if not validator_fn and hasattr(validation_module, "validate"):
+                                cid = test_case.id
+                                active_module = validation_module
 
-                                    def _dispatch_validate(s: dict[str, Any], w: dict[str, str]) -> Any:
-                                        return validation_module.validate(cid, s, w)
+                                def _dispatch_validate(s: dict[str, Any], w: dict[str, str]) -> Any:
+                                    return active_module.validate(cid, s, w)
 
-                                    validator_fn = _dispatch_validate
+                                validator_fn = _dispatch_validate
 
-                                if not validator_fn:
-                                    raise ValueError(f"No validator function '{fn_name}' found in validation module.")
+                            if not validator_fn:
+                                raise ValueError(f"No validator function '{fn_name}' found in validation module.")
 
-                                workspace_dirs_str = {
-                                    "workspace": str(workspace_dirs.get("workspace", "")),
-                                    "input": str(workspace_dirs.get("input", "")),
-                                    "output": str(workspace_dirs.get("output", "")),
-                                }
-                                is_pass, message = validator_fn(current_test_final_state, workspace_dirs_str)
-                                if not isinstance(is_pass, bool):
-                                    raise TypeError(
-                                        f"Validator for {test_case_id} must return tuple[bool, str], got {type(is_pass).__name__}"
-                                    )
-                            else:
-                                validator_index = i // 3
-                                sub_index = i % 3
-                                validator_func = all_validator_funcs[validator_index]
-                                is_pass, message = validator_func(sub_index, current_test_final_state)
+                            workspace_dirs_str = {
+                                "workspace": str(workspace_dirs.get("workspace", "")),
+                                "input": str(workspace_dirs.get("input", "")),
+                                "output": str(workspace_dirs.get("output", "")),
+                            }
+                            is_pass, message = validator_fn(current_test_final_state, workspace_dirs_str)
+                            if not isinstance(is_pass, bool):
+                                raise TypeError(
+                                    f"Validator for {test_case_id} must return tuple[bool, str], got {type(is_pass).__name__}"
+                                )
                         except Exception as e_validation:
                             is_pass = False
                             message = (
@@ -727,7 +701,16 @@ def test_system(state: dict[str, Any]) -> str:
         f"{validator_result_str}"
     )
 
-    # Also checkpoint on initial tests so we do not accept a system with decreased performance
+    # Record structured test metrics in state
+    state["test_metrics"] = {
+        "passed": num_passed_tests,
+        "total": num_tests,
+        "pass_rate": (num_passed_tests / num_tests) if num_tests > 0 else 0.0,
+    }
+
+    test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests."
+
+    # Also checkpoint on passing tests so we do not accept a system with decreased performance
     if num_passed_tests > 0:
         try:
             code_dir = SANDBOX_GENERATED_SYSTEMS_DIR
@@ -739,7 +722,7 @@ def test_system(state: dict[str, Any]) -> str:
             with open(checkpoint_path, "wb") as f:
                 pickle.dump(target_agentic_system, f)
 
-            test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests. A snapshot of the current system has been saved."
+            test_result += " A snapshot of the current system has been saved."
 
         except Exception:
             logger.error(f"Error during system checkpoint saving: {traceback.format_exc(chain=False)}")
@@ -748,23 +731,22 @@ def test_system(state: dict[str, Any]) -> str:
     if is_initial_test:
         return test_result + error_message
 
-    if num_passed_tests >= num_tests:
-        state["design_completed"] = True
-        return test_result + "\nThe design process will now end automatically."
-
-    initial_test_passes = state.get("initial_test_passes")
-    tests_to_pass = 2
-    if initial_test_passes is not None:
-        tests_to_pass = max(2, initial_test_passes + 1)
-
-    if num_passed_tests >= tests_to_pass:
+    all_passed = num_tests > 0 and num_passed_tests >= num_tests
+    if all_passed:
         state["system_passed"] = True
-        test_result += (
-            "\nYou can continue improving the system, or execute `@@end_design()` if it fulfills all task requirements."
-        )
+        if not state.get("optimize"):
+            state["design_completed"] = True
+            return test_result + "\nAll tests passed successfully! The design process will now end automatically."
+        else:
+            test_result += (
+                "\nAll tests passed successfully! You can continue optimizing the system's architecture, efficiency, or robustness, "
+                "or execute `@@end_design()` if you are satisfied."
+            )
+    else:
+        state["system_passed"] = False
 
     final_test_output = test_result + error_message
-    if num_passed_tests < tests_to_pass:
+    if not all_passed:
         final_test_output += test_reminder
     return final_test_output
 

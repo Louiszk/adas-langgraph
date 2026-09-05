@@ -6,7 +6,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-
 from adas_core.environment import DEFAULT_EXCLUDED_PACKAGES
 
 
