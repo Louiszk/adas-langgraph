@@ -216,4 +216,3 @@ class TestDecoratorExecutionEngine:
         assert human_msg is not None
         assert "Execution halted after @@test_system." in str(human_msg.content)
         assert "1 subsequent decorator call(s) in this response were skipped." in str(human_msg.content)
-

@@ -11,6 +11,7 @@ from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+
 DEFAULT_OPTIMIZATION_METRIC: Literal["tokens", "runtime"] = "tokens"
 DEFAULT_CLEANUP_CHECKPOINTS: bool = True
 
@@ -53,9 +54,7 @@ def save_candidate_checkpoint(
     try:
         os.makedirs(checkpoints_dir, exist_ok=True)
         escaped_name = getattr(system, "escaped_name", "agentic_system")
-        checkpoint_path = os.path.join(
-            checkpoints_dir, f"{escaped_name}_candidate_iter_{iteration}.pkl"
-        )
+        checkpoint_path = os.path.join(checkpoints_dir, f"{escaped_name}_candidate_iter_{iteration}.pkl")
         with open(checkpoint_path, "wb") as f:
             pickle.dump(system, f)
         return checkpoint_path
@@ -235,16 +234,16 @@ def finalize_best_candidate(
         should_cleanup = (
             cleanup_checkpoints
             if cleanup_checkpoints is not None
-            else (state.get("cleanup_checkpoints") if state.get("cleanup_checkpoints") is not None else DEFAULT_CLEANUP_CHECKPOINTS)
+            else (
+                state.get("cleanup_checkpoints")
+                if state.get("cleanup_checkpoints") is not None
+                else DEFAULT_CLEANUP_CHECKPOINTS
+            )
         )
         if should_cleanup:
             for cand in candidates:
                 ckpt = cand.get("checkpoint_path", "")
-                if (
-                    ckpt
-                    and os.path.exists(ckpt)
-                    and os.path.abspath(ckpt) != os.path.abspath(final_system_path)
-                ):
+                if ckpt and os.path.exists(ckpt) and os.path.abspath(ckpt) != os.path.abspath(final_system_path):
                     try:
                         os.remove(ckpt)
                         logger.debug("Cleaned up intermediate checkpoint: %s", ckpt)
