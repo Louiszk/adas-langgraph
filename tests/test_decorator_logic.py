@@ -9,7 +9,6 @@ from typing import Any
 from adas_core.decorator_logic import (
     build_decorator_signatures,
     execute_decorator_tool_calls,
-    find_code_blocks,
     parse_arguments,
     parse_decorator_tool_calls,
 )
@@ -20,27 +19,6 @@ from meta_system.tools import (
     manage_tool,
     manage_utilities,
 )
-
-
-class TestMarkdownCodeBlockParsing:
-    def test_find_code_blocks_extracts_multiple_blocks(self):
-        """Contract: Must extract valid Python code blocks with line bounds using tokenizer."""
-        markdown_text = textwrap.dedent("""
-            Here is Python code:
-            ```python
-            def foo():
-                return 42
-            ```
-            And another block:
-            ```python
-            x = 10 + 20
-            ```
-        """)
-        blocks = find_code_blocks(markdown_text)
-        assert len(blocks) == 2
-        assert "def foo():" in str(blocks[0]["content"])
-        assert "x = 10 + 20" in str(blocks[1]["content"])
-        assert "start_line" in blocks[0] and "end_line" in blocks[0]
 
 
 class TestDecoratorArgumentParsing:

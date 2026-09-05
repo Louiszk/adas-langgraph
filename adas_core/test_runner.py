@@ -43,6 +43,8 @@ class SingleTestCaseResult:
 class TestSuiteExecutionResult:
     """Aggregate result from executing a suite of test cases against a VirtualAgenticSystem."""
 
+    __test__ = False
+
     system_name: str
     total_tests: int
     passed_count: int

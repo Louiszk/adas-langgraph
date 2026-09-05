@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.decorator_logic import find_code_blocks
+from adas_core.markdown_parser import find_code_blocks
 from adas_core.logging_config import get_logger
 from adas_core.task_spec import (
     CustomFixtureSpec,

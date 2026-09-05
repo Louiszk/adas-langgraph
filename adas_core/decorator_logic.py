@@ -3,6 +3,7 @@ import io
 import re
 import textwrap
 import tokenize
+from adas_core.markdown_parser import find_code_blocks
 from collections.abc import Callable, Iterable
 from typing import (
     Any,
@@ -62,51 +63,6 @@ def extract_parenthesized_content(
         content_tokens.append(tok)
 
     return None, None
-
-
-def find_code_blocks(markdown: str) -> list[dict[str, str | int]]:
-    """
-    Finds Python code blocks in markdown, using the built-in `tokenize` module
-    to correctly handle Python's own syntax.
-    """
-    lines = markdown.splitlines()
-    found_blocks = []
-
-    in_code_block = False
-    current_block_content: list[str] = []
-    current_block_start_line = None
-
-    for i, line in enumerate(lines):
-        stripped_line = line.strip()
-
-        if not in_code_block:
-            if stripped_line.startswith("```"):
-                in_code_block = True
-                current_block_content = []
-                current_block_start_line = i + 1
-        else:
-            if stripped_line == "```":
-                block_so_far = "\n".join(current_block_content)
-
-                try:
-                    list(tokenize.generate_tokens(io.StringIO(block_so_far).readline))
-
-                    in_code_block = False
-                    found_blocks.append(
-                        {
-                            "content": block_so_far,
-                            "start_line": current_block_start_line,
-                            "end_line": i + 1,
-                        }
-                    )
-                    current_block_content = []
-
-                except tokenize.TokenError:
-                    current_block_content.append(line)
-            else:
-                current_block_content.append(line)
-
-    return found_blocks
 
 
 def parse_arguments(args_str: str | None) -> tuple[tuple[Any, ...], dict[str, Any]]:
