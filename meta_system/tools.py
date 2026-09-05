@@ -10,7 +10,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal
 
-import dill as pickle
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
@@ -35,6 +34,7 @@ from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from adas_core.candidate_selection import record_candidate_evaluation
 from meta_system.config import RECURSION_LIMIT
 from meta_system.helpers import ignored_nodes_message
 from meta_system.prompts import test_reminder
@@ -710,22 +710,21 @@ def test_system(state: dict[str, Any]) -> str:
 
     test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests."
 
-    # Also checkpoint on passing tests so we do not accept a system with decreased performance
-    if num_passed_tests > 0:
-        try:
-            code_dir = SANDBOX_GENERATED_SYSTEMS_DIR
-            os.makedirs(code_dir, exist_ok=True)
-            escaped_name = target_agentic_system.escaped_name
-            base_path = os.path.join(code_dir, escaped_name)
-
-            checkpoint_path = f"{base_path}_checkpoint_{num_passed_tests}.pkl"
-            with open(checkpoint_path, "wb") as f:
-                pickle.dump(target_agentic_system, f)
-
-            test_result += " A snapshot of the current system has been saved."
-
-        except Exception:
-            logger.error(f"Error during system checkpoint saving: {traceback.format_exc(chain=False)}")
+    messages = state.get("messages", [])
+    iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
+    candidate = record_candidate_evaluation(
+        state=state,
+        system=target_agentic_system,
+        iteration=iteration,
+        passed_count=num_passed_tests,
+        total_count=num_tests,
+        total_tokens=metrics.get("total_tokens", 0),
+        duration_seconds=round(duration, 3),
+        llm_calls=metrics.get("llm_calls", 0),
+        code_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
+    )
+    if candidate.get("checkpoint_path") and num_passed_tests > 0:
+        test_result += " A snapshot of the current system has been saved."
 
     is_initial_test = state.get("optimize") and state.get("initial_test_results") is None
     if is_initial_test:

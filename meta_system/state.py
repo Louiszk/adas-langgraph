@@ -8,12 +8,17 @@ from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 
+from adas_core.candidate_selection import CandidateRecord
+
+
 class MetaState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     target_agentic_system: VirtualAgenticSystem
     verbose_initial_test_results: HumanMessage | None
     initial_test_results: HumanMessage | None
     test_metrics: dict[str, Any]
+    candidates: list[CandidateRecord]
+    best_candidate: CandidateRecord | None
     system_passed: bool
     design_completed: bool
     initial_task: str

@@ -96,6 +96,7 @@ def initial_test_runner_function(state: MetaState) -> dict[str, Any]:
         "verbose_initial_test_results": HumanMessage(content=verbose_test_results_content),
         "initial_test_results": HumanMessage(content=cleaned_test_results_content),
         "test_metrics": test_metrics,
+        "candidates": state.get("candidates", []),
     }
 
 
@@ -210,5 +211,7 @@ def tool_execution(state: MetaState) -> dict[str, Any]:
         "messages": messages,
         "system_passed": state.get("system_passed", False),
         "design_completed": state.get("design_completed", False),
+        "test_metrics": state.get("test_metrics", {}),
+        "candidates": state.get("candidates", []),
     }
     return new_state

@@ -263,7 +263,11 @@ def execute_decorator_tool_calls(
                     add_skipped_calls_message(idx, "Execution halted. Design completed.")
                     break
 
-                if "ERROR:" in result_str.split("</Metrics>")[-1]:
+                if tool_name == "TestSystem":
+                    add_skipped_calls_message(idx, "Execution halted after @@test_system.")
+                    break
+
+                if "ERROR:" in result_str:
                     add_skipped_calls_message(idx, "Execution halted due to error.")
                     break
 

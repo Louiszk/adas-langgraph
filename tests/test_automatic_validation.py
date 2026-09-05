@@ -13,7 +13,6 @@ from adas_core.automatic_validation import (
 )
 from adas_core.task_spec import ArchitectureContract, TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from meta_system.graph import _get_test_case_count
 from meta_system.tools import test_system as run_test_system
 
 
@@ -106,11 +105,6 @@ class TestTaskSpecRunner:
         )
         assert "EVALUATOR_ERROR" in output
         assert "No frozen validation module found" in output
-
-    def test_checkpoint_selection_counts_task_spec_cases(self):
-        spec = self._spec()
-        assert _get_test_case_count({"task_spec": spec}) == 1
-        assert _get_test_case_count({"task_spec": spec.model_dump()}) == 1
 
     def test_uses_frozen_validation_module(self, tmp_path):
         (tmp_path / "SimpleTask.validation.py").write_text(

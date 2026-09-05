@@ -8,3 +8,7 @@ meta_agent_reasoning_effort = "medium"
 
 validation_wrapper = "openai"
 validation_model = "gpt-5.6-luna"
+
+# Candidate Selection & Checkpoint Management
+CANDIDATE_OPTIMIZATION_METRIC: str = "tokens"  # "tokens" (lowest token count) or "runtime" (lowest latency)
+CLEANUP_CHECKPOINTS_ON_FINALIZATION: bool = True  # Automatically delete intermediate candidate checkpoints on finalize
