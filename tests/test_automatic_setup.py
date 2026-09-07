@@ -288,9 +288,9 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         system_msg = invoked_messages[0].content
         user_msg = invoked_messages[1].content
 
-        assert "repo/" in system_msg
+        assert custom_fixture.path in system_msg
         assert "workspace_dirs['ADAS_INPUT_DIR']" in system_msg
-        assert "repo/" in user_msg
+        assert custom_fixture.path in user_msg
         assert 'workspace_dirs["ADAS_INPUT_DIR"]' in user_msg
 
     def test_generate_preflight_script_normalizes_future_imports(self):

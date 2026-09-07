@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from adas_core.helpers import normalize_fixture_path
 from adas_core.logging_config import get_logger
 
 logger = get_logger("adas_core.environment")
@@ -188,22 +189,7 @@ def isolated_case_workspace(
                 resolved_fixtures = fixtures_path.resolve()
                 resolved_input = input_dir.resolve()
                 for rel_path in allowed_files:
-                    if not rel_path or not str(rel_path).strip():
-                        raise ValueError(f"Invalid fixture path '{rel_path}': path cannot be empty.")
-                    raw = str(rel_path).strip()
-                    if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
-                        raise ValueError(f"Invalid fixture path '{rel_path}': absolute paths are not allowed.")
-                    clean = raw.replace("\\", "/")
-                    parts = [p for p in clean.split("/") if p and p != "."]
-                    if not parts or ".." in parts:
-                        if ".." in parts:
-                            raise ValueError(
-                                f"Invalid fixture path '{rel_path}': path traversal ('..') is not allowed."
-                            )
-                        raise ValueError(
-                            f"Invalid fixture path '{rel_path}': empty or root normalized path is not allowed."
-                        )
-                    clean_rel = "/".join(parts)
+                    clean_rel = normalize_fixture_path(rel_path)
                     src = (fixtures_path / clean_rel).resolve()
                     target = (input_dir / clean_rel).resolve()
 

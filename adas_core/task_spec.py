@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from adas_core.helpers import sanitize_test_id, validate_safe_relative_path
+from adas_core.helpers import normalize_fixture_path, sanitize_test_id
 
 
 class ToolRequirement(BaseModel):
@@ -125,8 +125,7 @@ class FileFixtureSpec(BaseModel):
     @field_validator("path")
     @classmethod
     def validate_file_path(cls, v: str) -> str:
-        validate_safe_relative_path(v, field_name="path")
-        return v
+        return normalize_fixture_path(v, field_name="path")
 
     @model_validator(mode="after")
     def set_default_id(self) -> FileFixtureSpec:
@@ -158,7 +157,7 @@ class DatabaseFixtureSpec(BaseModel):
     @classmethod
     def validate_db_file_path(cls, v: str | None) -> str | None:
         if v is not None:
-            validate_safe_relative_path(v, field_name="file_path")
+            return normalize_fixture_path(v, field_name="file_path")
         return v
 
     @model_validator(mode="after")
@@ -168,7 +167,7 @@ class DatabaseFixtureSpec(BaseModel):
         if self.db_type in ("sqlite", "duckdb") and not self.file_path:
             self.file_path = f"data/{self.name}.{self.db_type}"
         if self.file_path is not None:
-            validate_safe_relative_path(self.file_path, field_name="file_path")
+            self.file_path = normalize_fixture_path(self.file_path, field_name="file_path")
         return self
 
 
@@ -255,7 +254,7 @@ class CustomFixtureSpec(BaseModel):
     @classmethod
     def validate_custom_path(cls, v: str | None) -> str | None:
         if v is not None:
-            validate_safe_relative_path(v, field_name="path")
+            return normalize_fixture_path(v, field_name="path")
         return v
 
     @model_validator(mode="after")
@@ -320,38 +319,27 @@ class TestFixturesSpec(BaseModel):
         if fixture_ids is None:
             return None
         target_ids = set(fixture_ids)
+        # Normalize target IDs where applicable so querying with raw fixture path works seamlessly
+        normalized_targets = set(target_ids)
+        for tid in target_ids:
+            try:
+                normalized_targets.add(normalize_fixture_path(tid))
+            except ValueError:
+                pass
+
         paths: list[str] = []
 
-        def _clean_path(raw: str) -> str:
-            if not raw or not str(raw).strip():
-                return ""
-            clean_rel = str(raw).replace("\\", "/").strip().lstrip("/")
-            for prefix in ("sandbox/workspace/data/input/", "sandbox/workspace/input/", "data/input/", "input/"):
-                if clean_rel.startswith(prefix):
-                    clean_rel = clean_rel[len(prefix) :]
-                    break
-            parts = [p for p in clean_rel.split("/") if p and p != "."]
-            if not parts or ".." in parts:
-                return ""
-            return "/".join(parts)
-
         for f in self.files:
-            if f.id in target_ids or f.path in target_ids:
-                cleaned = _clean_path(f.path)
-                if cleaned:
-                    paths.append(cleaned)
+            if f.id in normalized_targets or f.path in normalized_targets:
+                paths.append(normalize_fixture_path(f.path))
 
         for db in self.databases:
-            if (db.id in target_ids or db.name in target_ids) and db.file_path:
-                cleaned = _clean_path(db.file_path)
-                if cleaned:
-                    paths.append(cleaned)
+            if (db.id in normalized_targets or db.name in normalized_targets) and db.file_path:
+                paths.append(normalize_fixture_path(db.file_path))
 
         for cf in self.custom_fixtures:
-            if (cf.id in target_ids or cf.name in target_ids) and cf.path:
-                cleaned = _clean_path(cf.path)
-                if cleaned:
-                    paths.append(cleaned)
+            if (cf.id in normalized_targets or cf.name in normalized_targets) and cf.path:
+                paths.append(normalize_fixture_path(cf.path))
 
         return list(dict.fromkeys(paths))
 
@@ -382,11 +370,7 @@ class TestFixturesSpec(BaseModel):
             return names
 
         if isinstance(fix, FileFixtureSpec):
-            clean_rel = fix.path.replace("\\", "/").strip().lstrip("/")
-            for prefix in ("sandbox/workspace/data/input/", "sandbox/workspace/input/", "data/input/", "input/"):
-                if clean_rel.startswith(prefix):
-                    clean_rel = clean_rel[len(prefix) :]
-                    break
+            clean_rel = normalize_fixture_path(fix.path)
             clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
             names.extend([f"generate_{fix.id}.py", f"generate_{clean_name}.py"])
         elif isinstance(fix, DatabaseFixtureSpec):

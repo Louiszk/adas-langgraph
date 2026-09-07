@@ -3,13 +3,12 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.helpers import normalize_future_imports
+from adas_core.helpers import normalize_fixture_path, normalize_future_imports
 from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
@@ -79,53 +78,7 @@ def _has_declared_fixtures(task_spec: TaskSpec) -> bool:
     return bool(tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures)
 
 
-def normalize_fixture_path(raw_path: str) -> str:
-    """Normalize fixture path to be relative to the fixtures/input directory, stripping environment prefixes.
-
-    Rejects absolute paths, empty/current-dir paths ('.', './', ''), and directory traversal ('..').
-    """
-    if not raw_path or not str(raw_path).strip():
-        raise ValueError(f"Invalid fixture path '{raw_path}': path cannot be empty.")
-
-    raw = str(raw_path).strip()
-
-    # Reject absolute paths (POSIX root, Windows drive letters, or UNC paths)
-    if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
-        raise ValueError(f"Invalid fixture path '{raw_path}': absolute paths are not allowed.")
-
-    clean = raw.replace("\\", "/")
-
-    # Reject directory traversal components in raw path
-    raw_parts = [p for p in clean.split("/") if p]
-    if ".." in raw_parts:
-        raise ValueError(f"Invalid fixture path '{raw_path}': path traversal ('..') is not allowed.")
-
-    # Strip environment prefixes
-    for prefix in (
-        "sandbox/workspace/data/input/",
-        "sandbox/workspace/input/",
-        "data/input/",
-        "input/",
-        "sandbox/workspace/data/input",
-        "sandbox/workspace/input",
-        "data/input",
-        "input",
-    ):
-        if clean == prefix:
-            raise ValueError(f"Invalid fixture path '{raw_path}': resolves to root input directory.")
-        prefix_with_slash = prefix.rstrip("/") + "/"
-        if clean.startswith(prefix_with_slash):
-            clean = clean[len(prefix_with_slash) :]
-            break
-
-    clean = clean.strip()
-    clean_parts = [p for p in clean.split("/") if p and p != "."]
-    if not clean_parts or ".." in clean_parts:
-        if ".." in clean_parts:
-            raise ValueError(f"Invalid fixture path '{raw_path}': path traversal ('..') is not allowed.")
-        raise ValueError(f"Invalid fixture path '{raw_path}': empty or root normalized path is not allowed.")
-
-    return "/".join(clean_parts)
+# normalize_fixture_path is imported from adas_core.helpers and re-exported
 
 
 class AutomaticSetup:

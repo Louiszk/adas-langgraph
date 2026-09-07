@@ -7,8 +7,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from adas_core.environment import DEFAULT_EXCLUDED_PACKAGES
-
 
 def escape_system_name(system_name: str) -> str:
     """Sanitize a system name by removing path and filesystem separator characters."""
@@ -28,24 +26,76 @@ def sanitize_test_id(test_id: str) -> str:
     return sanitize_identifier(test_id, prefix_if_digit="case_")
 
 
-def validate_safe_relative_path(raw_path: str, field_name: str = "path") -> str:
-    """Validate that raw_path is a safe relative path, rejecting empty, traversal, and absolute paths."""
+KNOWN_FIXTURE_PREFIXES: tuple[str, ...] = (
+    "sandbox/workspace/data/input/",
+    "sandbox/workspace/input/",
+    "data/input/",
+    "input/",
+    "sandbox/workspace/data/input",
+    "sandbox/workspace/input",
+    "data/input",
+    "input",
+)
+
+
+def normalize_fixture_path(raw_path: str, field_name: str = "fixture path") -> str:
+    """Validate that raw_path is a safe relative path and return its canonical POSIX-normalized form.
+
+    - Rejects empty or whitespace-only paths.
+    - Rejects absolute paths (POSIX root, Windows drive letters, or UNC paths).
+    - Rejects directory traversal components ('..').
+    - Strips known environment input directory prefixes.
+    - Eliminates redundant current-directory '.' components.
+    - Returns a normalized POSIX relative path (e.g. 'sales.csv' or 'reports/q1.csv').
+    """
     if not raw_path or not str(raw_path).strip():
-        raise ValueError(f"Invalid {field_name}: path cannot be empty.")
+        raise ValueError(f"Invalid {field_name} '{raw_path}': path cannot be empty.")
+
     raw = str(raw_path).strip()
+
+    # Reject absolute paths (POSIX root, Windows drive letters, or UNC paths)
     if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
         raise ValueError(f"Invalid {field_name} '{raw_path}': absolute paths are not allowed.")
+
     clean = raw.replace("\\", "/")
-    parts = [p for p in clean.split("/") if p and p != "."]
-    if not parts or ".." in parts:
-        if ".." in parts:
+
+    # Reject directory traversal components in raw path
+    raw_parts = [p for p in clean.split("/") if p]
+    if ".." in raw_parts:
+        raise ValueError(f"Invalid {field_name} '{raw_path}': path traversal ('..') is not allowed.")
+
+    # Strip leading redundant ./
+    while clean.startswith("./"):
+        clean = clean[2:]
+
+    # Strip environment prefixes
+    for prefix in KNOWN_FIXTURE_PREFIXES:
+        if clean == prefix:
+            raise ValueError(f"Invalid {field_name} '{raw_path}': resolves to root input directory.")
+        prefix_with_slash = prefix.rstrip("/") + "/"
+        if clean.startswith(prefix_with_slash):
+            clean = clean[len(prefix_with_slash) :]
+            break
+
+    clean = clean.strip()
+    clean_parts = [p for p in clean.split("/") if p and p != "."]
+    if not clean_parts or ".." in clean_parts:
+        if ".." in clean_parts:
             raise ValueError(f"Invalid {field_name} '{raw_path}': path traversal ('..') is not allowed.")
         raise ValueError(f"Invalid {field_name} '{raw_path}': empty or root normalized path is not allowed.")
-    return raw_path
+
+    return "/".join(clean_parts)
+
+
+def validate_safe_relative_path(raw_path: str, field_name: str = "path") -> str:
+    """Validate that raw_path is a safe relative path and return its canonical normalized form."""
+    return normalize_fixture_path(raw_path, field_name=field_name)
 
 
 def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str]:
     if exclude_packages is None:
+        from adas_core.environment import DEFAULT_EXCLUDED_PACKAGES
+
         exclude_packages = DEFAULT_EXCLUDED_PACKAGES
 
     result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True)

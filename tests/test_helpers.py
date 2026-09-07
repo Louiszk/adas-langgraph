@@ -2,13 +2,16 @@
 Specification and contract tests for core helper utilities.
 """
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from adas_core.helpers import (
     clean_messages,
+    normalize_fixture_path,
     normalize_future_imports,
     truncate_state,
     validate_node_conditional_edge_signature,
+    validate_safe_relative_path,
 )
 
 
@@ -121,3 +124,62 @@ class TestNormalizeFutureImports:
         normalized = normalize_future_imports(code)
         assert normalized.startswith('#!/usr/bin/env python3\n"""Module docstring."""')
         compile(normalized, "<test>", "exec")
+
+
+class TestNormalizeFixturePath:
+    def test_valid_fixture_paths(self):
+        assert normalize_fixture_path("test.csv") == "test.csv"
+        assert normalize_fixture_path("reports/") == "reports"
+        assert normalize_fixture_path("nested/dir/file.json") == "nested/dir/file.json"
+        assert normalize_fixture_path("nested\\dir\\file.json") == "nested/dir/file.json"
+        assert normalize_fixture_path("./reports/q1.csv") == "reports/q1.csv"
+
+    def test_strips_environment_prefixes(self):
+        assert normalize_fixture_path("sandbox/workspace/data/input/orders.csv") == "orders.csv"
+        assert normalize_fixture_path("sandbox/workspace/input/metrics.json") == "metrics.json"
+        assert normalize_fixture_path("data/input/sales.csv") == "sales.csv"
+        assert normalize_fixture_path("input/sub/report.pdf") == "sub/report.pdf"
+        assert normalize_fixture_path("input\\sub\\report.pdf") == "sub/report.pdf"
+        assert normalize_fixture_path("./data/input/sales.csv") == "sales.csv"
+
+    def test_rejects_empty_and_whitespace(self):
+        with pytest.raises(ValueError, match="path cannot be empty"):
+            normalize_fixture_path("")
+        with pytest.raises(ValueError, match="path cannot be empty"):
+            normalize_fixture_path("   ")
+
+    def test_rejects_absolute_paths(self):
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path("/etc/passwd")
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path("C:/Windows/System32")
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path(r"\\server\share\file.csv")
+
+    def test_rejects_path_traversal(self):
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("../../outside.txt")
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("input/../../outside.txt")
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("sub/../..")
+
+    def test_rejects_root_and_input_directories(self):
+        with pytest.raises(ValueError, match="empty or root normalized path"):
+            normalize_fixture_path(".")
+        with pytest.raises(ValueError, match="empty or root normalized path"):
+            normalize_fixture_path("./")
+        with pytest.raises(ValueError, match="resolves to root input directory"):
+            normalize_fixture_path("input")
+        with pytest.raises(ValueError, match="resolves to root input directory"):
+            normalize_fixture_path("input/")
+        with pytest.raises(ValueError, match="resolves to root input directory"):
+            normalize_fixture_path("sandbox/workspace/input/")
+
+    def test_validate_safe_relative_path_equivalence(self):
+        assert validate_safe_relative_path("data/input/sales.csv") == "sales.csv"
+        assert validate_safe_relative_path("reports/") == "reports"
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            validate_safe_relative_path("/abs/path.csv")
+        with pytest.raises(ValueError, match="path traversal"):
+            validate_safe_relative_path("../outside.csv")
