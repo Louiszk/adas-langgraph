@@ -148,6 +148,7 @@ def isolated_case_workspace(
     run_id: str | None = None,
     case_id: str = "case_default",
     fixtures_dir: Path | str | None = None,
+    allowed_files: list[str] | None = None,
     clean_up: bool = False,
 ) -> Iterator[dict[str, Path]]:
     """Context manager setting up isolated input, output, and workspace directories for a test case.
@@ -160,6 +161,7 @@ def isolated_case_workspace(
         run_id: Unique run identifier (defaults to random 8-char hex).
         case_id: Identifier for the test case.
         fixtures_dir: Optional path to directory containing frozen fixtures to seed into input/.
+        allowed_files: Optional list of relative file paths to seed into input/. If None, seeds all fixtures.
         clean_up: If True, deletes the case directory upon exit.
 
     Yields:
@@ -181,7 +183,50 @@ def isolated_case_workspace(
     if fixtures_dir:
         fixtures_path = Path(fixtures_dir)
         if fixtures_path.exists():
-            copied_count = copy_directory_contents(fixtures_path, input_dir)
+            if allowed_files is not None:
+                copied_count = 0
+                resolved_fixtures = fixtures_path.resolve()
+                resolved_input = input_dir.resolve()
+                for rel_path in allowed_files:
+                    if not rel_path or not str(rel_path).strip():
+                        raise ValueError(f"Invalid fixture path '{rel_path}': path cannot be empty.")
+                    raw = str(rel_path).strip()
+                    if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
+                        raise ValueError(f"Invalid fixture path '{rel_path}': absolute paths are not allowed.")
+                    clean = raw.replace("\\", "/")
+                    parts = [p for p in clean.split("/") if p and p != "."]
+                    if not parts or ".." in parts:
+                        if ".." in parts:
+                            raise ValueError(
+                                f"Invalid fixture path '{rel_path}': path traversal ('..') is not allowed."
+                            )
+                        raise ValueError(
+                            f"Invalid fixture path '{rel_path}': empty or root normalized path is not allowed."
+                        )
+                    clean_rel = "/".join(parts)
+                    src = (fixtures_path / clean_rel).resolve()
+                    target = (input_dir / clean_rel).resolve()
+
+                    # Containment verification: ensure paths do not escape base directories
+                    try:
+                        src.relative_to(resolved_fixtures)
+                    except ValueError:
+                        raise ValueError(f"Invalid fixture path '{rel_path}': path escapes fixtures directory.")
+                    try:
+                        target.relative_to(resolved_input)
+                    except ValueError:
+                        raise ValueError(f"Invalid fixture path '{rel_path}': path escapes input directory.")
+
+                    if not src.exists():
+                        continue
+                    if src.is_file():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, target)
+                        copied_count += 1
+                    elif src.is_dir():
+                        copied_count += copy_directory_contents(src, target)
+            else:
+                copied_count = copy_directory_contents(fixtures_path, input_dir)
             logger.debug(f"Seeded {copied_count} fixture file(s) into {input_dir}")
 
     # Preserve previous environment variables

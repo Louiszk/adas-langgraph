@@ -9,7 +9,7 @@ agentic_system_documentation = """
    - Any extra custom state keys must be declared in `AgentState` before use.
 
 2. **Node and Conditional-Edge Function Signatures**:
-   - **Strict Rule**: EVERY node and conditional-edge function MUST accept **exactly one** argument named `state`.
+   - **Strict Rule**: EVERY node and conditional-edge function must accept **exactly one** argument named `state`.
      - Node Signature: `def my_node(state: AgentState) -> dict:`
      - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
    - Nodes return a dictionary containing state keys to update (e.g., `{"final_answer": "42"}`).
@@ -122,7 +122,7 @@ result = tools["SearchTool"].invoke({"query": "LangGraph documentation"})
 ## Parallel Execution & State Reducers
 
 - Default state updates replace existing values.
-- If multiple parallel nodes update the same state key in a single superstep, you MUST declare a reducer in `AgentState` using `Annotated`:
+- If multiple parallel nodes update the same state key in a single superstep, you must declare a reducer in `AgentState` using `Annotated`:
 ```python
 import operator
 from typing import Annotated, TypedDict
@@ -141,7 +141,7 @@ class AgentState(TypedDict):
 ## Message Types & Context History Trimming
 
 - **Message Types**: `SystemMessage`, `HumanMessage`, `AIMessage`, `ToolMessage` (from `langchain_core.messages`).
-- **Tool Message Rule**: Every `AIMessage` containing `tool_calls` MUST be followed immediately by its corresponding `ToolMessage` objects before the next LLM call.
+- **Tool Message Rule**: Every `AIMessage` containing `tool_calls` must be followed immediately by its corresponding `ToolMessage` objects before the next LLM call.
 - **Context Window Trimming**: Use `trim_messages` from `langchain_core.messages` to prevent token overflow on long trajectories:
 
 ```python
@@ -236,7 +236,7 @@ def my_helper_function(input_list: List[str]) -> str:
     # ... helper implementation
 ```
 
-Use `@@manage_node`, `@@manage_tool`, and `@@manage_conditional_edge` with `action="create"`, `"update"`, or `"delete"`. Create requires a missing item; update requires an existing item; delete may target a missing item and returns a warning. The `source` argument identifies a conditional edge. Create and update conditional edges MUST include a non-empty explicit `path_map` mapping every condition-function return value to its destination node (or `END`).
+Use `@@manage_node`, `@@manage_tool`, and `@@manage_conditional_edge` with `action="create"`, `"update"`, or `"delete"`. Create requires a missing item; update requires an existing item; delete may target a missing item and returns a warning. The `source` argument identifies a conditional edge. Create and update conditional edges must include a non-empty explicit `path_map` mapping every condition-function return value to its destination node (or `END`).
 ```python
 @@manage_conditional_edge(action="create", source="SourceNodeName", path_map={"continue": "WorkerNode", "complete": END})
 def route_from_source_node(state: dict) -> str | List[str]:

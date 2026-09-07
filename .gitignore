@@ -22,9 +22,11 @@ adasvenv2/
 /generated_systems/*.py
 /generated_systems/*.pkl
 /sandbox/workspace/
+/specs
 
 # CLI Agents
 AGENTS.md
 GEMINI.md
 CLAUDE.md
 *plan.md
+*log.md

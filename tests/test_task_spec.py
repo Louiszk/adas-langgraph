@@ -135,7 +135,7 @@ class TestTaskSpecModel:
                     ),
                     MCPFixtureSpec(
                         name="remote_docs_mcp",
-                        transport="streamable_http",
+                        transport="streamable-http",
                         port=8090,
                         endpoint_path="/mcp",
                         url_env="DOCS_MCP_URL",
@@ -184,7 +184,7 @@ class TestTaskSpecModel:
         assert restored.test_fixtures.databases[0].connection_env["uri"] == "NEO4J_URI"
         assert len(restored.test_fixtures.mcps) == 2
         assert restored.test_fixtures.mcps[0].transport == "stdio"
-        assert restored.test_fixtures.mcps[1].transport == "streamable_http"
+        assert restored.test_fixtures.mcps[1].transport == "streamable-http"
         assert restored.test_fixtures.mcps[1].endpoint_path == "/mcp"
         assert restored.test_fixtures.mock_services[0].port == 8080
         assert restored.test_fixtures.custom_fixtures[0].name == "git_repo"
@@ -277,6 +277,46 @@ class TestTaskSpecModel:
     def test_model_spec_forbids_legacy_wrapper_field(self):
         with pytest.raises(ValidationError):
             ModelSpec.model_validate({"wrapper": "openai", "model_name": "gpt-4o"})
+
+    def test_fixture_ids_scoping_and_validation(self):
+        # Valid fixture IDs
+        spec = TaskSpec(
+            name="ScopedFixtureAgent",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"q": "str"},
+            ),
+            test_fixtures=TestFixturesSpec(
+                files=[
+                    FileFixtureSpec(id="clean_csv", path="clean.csv"),
+                    FileFixtureSpec(id="dirty_json", path="dirty.json"),
+                ],
+                mock_services=[MockServiceFixtureSpec(id="api_mock", name="api_mock", port=8080)],
+            ),
+            dev_suite=[
+                TestCaseSpec(id="case_1", description="Clean only", fixture_ids=["clean_csv"], turns=[{"q": "1"}]),
+                TestCaseSpec(id="case_2", description="All", fixture_ids=["clean_csv", "api_mock"], turns=[{"q": "2"}]),
+            ],
+        )
+        assert spec.test_fixtures.all_fixture_ids() == {"clean_csv", "dirty_json", "api_mock"}
+        assert spec.test_fixtures.get_file_paths_for_fixture_ids(["clean_csv"]) == ["clean.csv"]
+        assert spec.test_fixtures.get_file_paths_for_fixture_ids(None) is None
+
+        # Unknown fixture_id raises ValidationError
+        with pytest.raises(ValidationError, match="references unknown fixture_id 'nonexistent'"):
+            TaskSpec(
+                name="BadFixtureRefAgent",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(
+                    execution_mode="single_turn",
+                    state_schema={"q": "str"},
+                ),
+                test_fixtures=TestFixturesSpec(
+                    files=[FileFixtureSpec(id="clean_csv", path="clean.csv")],
+                ),
+                dev_suite=[TestCaseSpec(id="c1", description="d", fixture_ids=["nonexistent"], turns=[{"q": "1"}])],
+            )
 
     def test_duplicate_dev_suite_ids_rejected(self):
         with pytest.raises(ValidationError):
@@ -425,4 +465,128 @@ class TestHoldoutSuiteSpecModel:
                     TestCaseSpec(id="dup", description="A", turns=[{"x": 1}]),
                     TestCaseSpec(id="dup", description="B", turns=[{"x": 2}]),
                 ],
+            )
+
+    def test_duplicate_dev_suite_ids_rejected(self):
+        with pytest.raises(ValidationError, match="Duplicate test case id 'case_1' in dev_suite"):
+            TaskSpec(
+                name="DupDevSuite",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(state_schema={"q": "str"}),
+                dev_suite=[
+                    TestCaseSpec(id="case_1", description="A", turns=[{"q": "1"}]),
+                    TestCaseSpec(id="case_1", description="B", turns=[{"q": "2"}]),
+                ],
+            )
+
+    def test_duplicate_fixture_ids_in_test_fixtures_rejected(self):
+        with pytest.raises(ValidationError, match="Duplicate fixture id 'shared_id' in test_fixtures"):
+            TestFixturesSpec(
+                files=[FileFixtureSpec(id="shared_id", path="test.csv", description="CSV")],
+                databases=[DatabaseFixtureSpec(id="shared_id", name="db", db_type="sqlite", description="DB")],
+            )
+
+    def test_duplicate_fixture_ids_in_test_case_rejected(self):
+        with pytest.raises(ValidationError, match="contains duplicate fixture_ids"):
+            TestCaseSpec(
+                id="case_1",
+                description="Duplicate fixture ref",
+                turns=[{"q": "1"}],
+                fixture_ids=["f1", "f1"],
+            )
+
+    def test_get_file_paths_for_fixture_ids_batch_and_directory(self):
+        tf = TestFixturesSpec(
+            files=[
+                FileFixtureSpec(id="single_file", path="data/input/sales.csv", description="Single file"),
+                FileFixtureSpec(id="batch_dir", path="reports/", count=5, description="Batch of report files"),
+                FileFixtureSpec(id="nested_dir", path="input/metrics/monthly/", count=3, description="Nested batch"),
+            ]
+        )
+
+        assert tf.get_file_paths_for_fixture_ids(["single_file"]) == ["sales.csv"]
+        assert tf.get_file_paths_for_fixture_ids(["batch_dir"]) == ["reports"]
+        assert tf.get_file_paths_for_fixture_ids(["nested_dir"]) == ["metrics/monthly"]
+        assert tf.get_file_paths_for_fixture_ids(["single_file", "batch_dir"]) == ["sales.csv", "reports"]
+        assert tf.get_file_paths_for_fixture_ids(None) is None
+
+    def test_get_file_paths_includes_embedded_databases_and_custom_fixtures(self):
+        tf = TestFixturesSpec(
+            files=[FileFixtureSpec(id="sales_csv", path="sales.csv", description="Sales")],
+            databases=[
+                DatabaseFixtureSpec(
+                    id="sqlite_cache", name="cache_db", db_type="sqlite", file_path="data/cache.db", description="Cache"
+                ),
+                DatabaseFixtureSpec(id="remote_neo4j", name="graph_db", db_type="neo4j", description="Remote Neo4j"),
+            ],
+            custom_fixtures=[
+                CustomFixtureSpec(id="sample_repo", name="sample_repo", path="repo/", description="Git repo"),
+                CustomFixtureSpec(id="no_path_custom", name="no_path_custom", description="No path custom"),
+            ],
+        )
+
+        # Scoped to sqlite db only
+        assert tf.get_file_paths_for_fixture_ids(["sqlite_cache"]) == ["data/cache.db"]
+        # Scoped to custom fixture with directory path
+        assert tf.get_file_paths_for_fixture_ids(["sample_repo"]) == ["repo"]
+        # Combined files, sqlite db, and custom path
+        assert tf.get_file_paths_for_fixture_ids(["sales_csv", "sqlite_cache", "sample_repo"]) == [
+            "sales.csv",
+            "data/cache.db",
+            "repo",
+        ]
+        # Remote db and custom without path yield no file paths
+        assert tf.get_file_paths_for_fixture_ids(["remote_neo4j", "no_path_custom"]) == []
+
+    def test_fixture_specs_reject_unsafe_paths(self):
+        # FileFixtureSpec
+        with pytest.raises(ValidationError, match="path traversal"):
+            FileFixtureSpec(path="../../secret.txt")
+        with pytest.raises(ValidationError, match="absolute paths are not allowed"):
+            FileFixtureSpec(path="/abs/path.csv")
+        with pytest.raises(ValidationError, match="absolute paths are not allowed"):
+            FileFixtureSpec(path="C:/Windows/System32")
+        with pytest.raises(ValidationError, match="empty or root normalized path"):
+            FileFixtureSpec(path=".")
+
+        # DatabaseFixtureSpec
+        with pytest.raises(ValidationError, match="path traversal"):
+            DatabaseFixtureSpec(name="mydb", db_type="sqlite", file_path="../mydb.sqlite")
+        with pytest.raises(ValidationError, match="absolute paths are not allowed"):
+            DatabaseFixtureSpec(name="mydb", db_type="sqlite", file_path="/var/lib/mydb.sqlite")
+
+        # CustomFixtureSpec
+        with pytest.raises(ValidationError, match="path traversal"):
+            CustomFixtureSpec(name="mycustom", description="test", path="../../repo")
+        with pytest.raises(ValidationError, match="absolute paths are not allowed"):
+            CustomFixtureSpec(name="mycustom", description="test", path="/etc/git")
+
+    def test_task_spec_rejects_colliding_sanitized_test_case_ids(self):
+        # case-a and case_a both sanitize to case_a
+        cases = [
+            TestCaseSpec(id="case-a", description="Case A", turns=[{"input": "a"}]),
+            TestCaseSpec(id="case_a", description="Case A duplicate", turns=[{"input": "b"}]),
+        ]
+        with pytest.raises(ValidationError, match="Duplicate sanitized test case id 'case_a'"):
+            TaskSpec(
+                name="CollisionTest",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(
+                    execution_mode="single_turn", state_schema={"status": "str"}
+                ),
+                dev_suite=cases,
+            )
+
+    def test_holdout_suite_rejects_colliding_sanitized_test_case_ids(self):
+        # eval-1 and eval_1 both sanitize to eval_1
+        from adas_core.task_spec import HoldoutSuiteSpec
+
+        cases = [
+            TestCaseSpec(id="eval-1", description="Eval 1", turns=[{"input": "1"}]),
+            TestCaseSpec(id="eval_1", description="Eval 1 duplicate", turns=[{"input": "2"}]),
+        ]
+        with pytest.raises(ValidationError, match="Duplicate sanitized test case id 'eval_1'"):
+            HoldoutSuiteSpec(
+                task_name="CollisionTest",
+                holdout_suite=cases,
             )

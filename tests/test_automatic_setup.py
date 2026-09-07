@@ -1,4 +1,6 @@
+import textwrap
 from unittest.mock import MagicMock
+import pytest
 
 from langchain_core.messages import AIMessage
 
@@ -7,6 +9,7 @@ from adas_core.automatic_setup import (
     ensure_automatic_setup,
     extract_code_block,
     extract_setup_requirements,
+    normalize_fixture_path,
 )
 from adas_core.task_spec import (
     ApiKeyRequirement,
@@ -42,6 +45,50 @@ def seed():
 
         no_reqs_code = "def foo(): pass"
         assert extract_setup_requirements(no_reqs_code) == []
+
+    def test_normalize_fixture_path_valid(self):
+        assert normalize_fixture_path("test.csv") == "test.csv"
+        assert normalize_fixture_path("data/input/sales.csv") == "sales.csv"
+        assert normalize_fixture_path("input/sub/report.pdf") == "sub/report.pdf"
+        assert normalize_fixture_path("sandbox/workspace/input/metrics.json") == "metrics.json"
+        assert normalize_fixture_path("sandbox/workspace/data/input/orders.csv") == "orders.csv"
+        assert normalize_fixture_path("reports/") == "reports"
+        assert normalize_fixture_path("./reports/q1.csv") == "reports/q1.csv"
+
+    def test_normalize_fixture_path_rejects_unsafe(self):
+        # Empty paths
+        with pytest.raises(ValueError, match="cannot be empty"):
+            normalize_fixture_path("")
+        with pytest.raises(ValueError, match="cannot be empty"):
+            normalize_fixture_path("   ")
+
+        # Absolute paths
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path("/etc/passwd")
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path("C:/Windows/System32")
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            normalize_fixture_path("\\\\server\\share\\file.csv")
+
+        # Path traversal
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("../../outside.txt")
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("input/../../outside.txt")
+        with pytest.raises(ValueError, match="path traversal"):
+            normalize_fixture_path("sub/../..")
+
+        # Empty normalized / root paths
+        with pytest.raises(ValueError, match="empty or root normalized path|resolves to root"):
+            normalize_fixture_path(".")
+        with pytest.raises(ValueError, match="empty or root normalized path|resolves to root"):
+            normalize_fixture_path("./")
+        with pytest.raises(ValueError, match="empty or root normalized path|resolves to root"):
+            normalize_fixture_path("input/")
+        with pytest.raises(ValueError, match="empty or root normalized path|resolves to root"):
+            normalize_fixture_path("input")
+        with pytest.raises(ValueError, match="empty or root normalized path|resolves to root"):
+            normalize_fixture_path("sandbox/workspace/input/")
 
 
 class TestAutomaticSetup:
@@ -209,3 +256,70 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
         assert res is None
         mock_llm.invoke.assert_not_called()
         assert not (tmp_path / "fixtures").exists()
+
+    def test_generate_custom_fixture_script_instructs_artifact_path(self):
+        spec = TaskSpec(
+            name="CustomFixtureTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            dev_suite=[TestCaseSpec(id="c1", description="desc", turns=[{"q": "val"}])],
+        )
+        custom_fixture = CustomFixtureSpec(
+            name="git_repo",
+            path="repo/",
+            description="Initialize git repo with master branch",
+        )
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(
+            content="""```python
+SETUP_REQUIREMENTS = ["gitpython"]
+
+def setup_environment(workspace_dirs: dict[str, str]) -> None:
+    pass
+```"""
+        )
+
+        setup = AutomaticSetup(llm=mock_llm)
+        code, reqs = setup.generate_custom_fixture_script(spec, custom_fixture)
+
+        assert "gitpython" in reqs
+        invoked_messages = mock_llm.invoke.call_args[0][0]
+        system_msg = invoked_messages[0].content
+        user_msg = invoked_messages[1].content
+
+        assert "repo/" in system_msg
+        assert "workspace_dirs['ADAS_INPUT_DIR']" in system_msg
+        assert "repo/" in user_msg
+        assert 'workspace_dirs["ADAS_INPUT_DIR"]' in user_msg
+
+    def test_generate_preflight_script_normalizes_future_imports(self):
+        spec = TaskSpec(
+            name="FutureImportTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            dev_suite=[TestCaseSpec(id="c1", description="desc", turns=[{"q": "val"}])],
+        )
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(
+            content=textwrap.dedent(
+                """
+                ```python
+                SETUP_REQUIREMENTS = ["pandas"]
+
+                from __future__ import annotations
+
+                def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
+                    return True, "OK"
+                ```
+                """
+            ).strip()
+        )
+        setup = AutomaticSetup(llm=mock_llm)
+        code = setup.generate_preflight_script(spec, ["pandas"])
+
+        compiled = compile(code, "<preflight>", "exec")
+        assert compiled is not None
+        lines = [line.strip() for line in code.splitlines() if line.strip()]
+        assert lines[0] == "from __future__ import annotations"
+        assert lines[1] == 'SETUP_REQUIREMENTS = ["pandas"]'

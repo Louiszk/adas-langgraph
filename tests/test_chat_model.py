@@ -651,7 +651,6 @@ class TestVisionCapabilities:
         assert ModelRegistry.get_capabilities("openai", "gpt-5.6-sol").supports_vision is True
         assert ModelRegistry.get_capabilities("openai", "gpt-5.6-terra").supports_vision is True
         assert ModelRegistry.get_capabilities("openai", "gpt-5.6-luna").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "gpt-5.6").supports_vision is True
 
         # Prefix sorting tests: ensure longer prefixes match before shorter prefixes
         # 1. o1-mini prefix must match o1-mini (False), NOT o1 (True)

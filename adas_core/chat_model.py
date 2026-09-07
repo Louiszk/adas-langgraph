@@ -124,7 +124,6 @@ class ModelRegistry:
             ("openai", "gpt-5.6-sol"): _OPENAI_REASONING_FULL,
             ("openai", "gpt-5.6-terra"): _OPENAI_REASONING_FULL,
             ("openai", "gpt-5.6-luna"): _OPENAI_REASONING_FULL,
-            ("openai", "gpt-5.6"): _OPENAI_REASONING_FULL,
         }
         cls._capabilities = dict(defaults)
 

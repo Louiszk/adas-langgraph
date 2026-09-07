@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import contextlib
 import os
-from pathlib import Path
 import sys
 import time
 import traceback
 import types
-from dataclasses import dataclass, field
-from typing import Any
 import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 from adas_core.chat_model import UsageRecorder, usage_scope
 from adas_core.environment import SANDBOX_FIXTURES_DIR, isolated_case_workspace
 from adas_core.helpers import TruncatingStringIO, sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
-from adas_core.task_spec import TestCaseSpec
+from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 logger = get_logger("adas_core.test_runner")
@@ -111,6 +111,7 @@ def execute_test_suite(
     fixtures_dir: str | Path | None = None,
     capture_debug_flow: bool = True,
     system_role: str = "target",
+    task_spec: TaskSpec | None = None,
 ) -> TestSuiteExecutionResult:
     """Execute a test suite against a VirtualAgenticSystem.
 
@@ -243,6 +244,8 @@ def execute_test_suite(
         for test_case in test_cases:
             test_case_id = test_case.id
             last_case_id = test_case_id
+            # TODO: multi-turn execution (iterating through test_case.turns with state checkpointer/thread_id)
+            # is not implemented yet. Currently only single-turn execution (turns[0]) is supported.
             test_input_state = test_case.turns[0] if test_case.turns else {}
             case_slug = sanitize_test_id(test_case.id)
 
@@ -255,11 +258,16 @@ def execute_test_suite(
             stdout_captured = ""
             stderr_captured = ""
 
+            allowed_files = None
+            if task_spec is not None and test_case.fixture_ids is not None:
+                allowed_files = task_spec.test_fixtures.get_file_paths_for_fixture_ids(test_case.fixture_ids)
+
             with isolated_case_workspace(
                 base_dir=active_workspace_root,
                 run_id=test_run_id,
                 case_id=case_slug,
                 fixtures_dir=active_fixtures_dir,
+                allowed_files=allowed_files,
             ) as workspace_dirs:
                 stdout_buf = TruncatingStringIO()
                 stderr_buf = TruncatingStringIO()
@@ -284,8 +292,7 @@ def execute_test_suite(
                                         execution_flow[step].append(node_name)
                                     case_iterations = step + 1
 
-                            if case_iterations > max_total_iterations:
-                                max_total_iterations = case_iterations
+                            max_total_iterations = max(max_total_iterations, case_iterations)
 
                         execution_flow.append("END")
 

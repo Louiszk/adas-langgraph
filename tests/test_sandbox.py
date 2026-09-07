@@ -228,3 +228,78 @@ class TestSetupSandboxUtilities:
         dest2 = tmp_path / "out2"
         _copy_tree_from_runtime(mock_session, "/sandbox/task", dest2)
         assert mock_session.copy_from_runtime.call_count == 1
+
+    def test_copy_task_setup_to_sandbox(self, tmp_path):
+        from adas_core.environment import SANDBOX_TASK_SETUP_DIR
+        from sandbox.sandbox import copy_task_setup_to_sandbox
+
+        task_dir = tmp_path / "my_task"
+        task_dir.mkdir()
+        (task_dir / "setup.py").write_text("# setup")
+        sub = task_dir / "fixtures"
+        sub.mkdir()
+        (sub / "data.csv").write_text("1,2,3")
+        pycache = task_dir / "__pycache__"
+        pycache.mkdir()
+        (pycache / "cached.pyc").write_text("bytecode")
+        spec_path = tmp_path / "custom.task.json"
+        spec_path.write_text('{"name": "test"}')
+
+        mock_session = MagicMock()
+        ret = copy_task_setup_to_sandbox(mock_session, task_dir, spec_path)
+
+        assert ret == SANDBOX_TASK_SETUP_DIR
+        # mkdir called for runtime_task_dir and subdirectories (excluding pycache)
+        mkdir_commands = [
+            call.args[0] for call in mock_session.execute_command.call_args_list if "mkdir -p" in call.args[0]
+        ]
+        assert any(f"mkdir -p '{SANDBOX_TASK_SETUP_DIR}'" in cmd for cmd in mkdir_commands)
+        assert any(f"mkdir -p '{SANDBOX_TASK_SETUP_DIR}/fixtures'" in cmd for cmd in mkdir_commands)
+        assert not any("__pycache__" in cmd for cmd in mkdir_commands)
+
+        # copy_to_runtime called for regular files and task.json
+        copied_destinations = [call.args[1] for call in mock_session.copy_to_runtime.call_args_list]
+        assert f"{SANDBOX_TASK_SETUP_DIR}/setup.py" in copied_destinations
+        assert f"{SANDBOX_TASK_SETUP_DIR}/fixtures/data.csv" in copied_destinations
+        assert f"{SANDBOX_TASK_SETUP_DIR}/task.json" in copied_destinations
+        assert not any("__pycache__" in dest for dest in copied_destinations)
+
+    def test_run_sandbox_preflight_success(self):
+        from adas_core.environment import SANDBOX_TASK_SETUP_DIR
+        from sandbox.sandbox import run_sandbox_preflight
+
+        mock_session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.exit_code = 0
+        mock_result.stdout = "Preflight verification passed"
+        mock_result.stderr = ""
+        mock_session.execute_command.return_value = mock_result
+
+        assert run_sandbox_preflight(mock_session, SANDBOX_TASK_SETUP_DIR) is True
+        mock_session.execute_command.assert_called_once_with(
+            f"python3 /sandbox/workspace/run_preflight.py --task-dir {SANDBOX_TASK_SETUP_DIR}"
+        )
+
+    def test_run_sandbox_preflight_failure_text(self):
+        from sandbox.sandbox import run_sandbox_preflight
+
+        mock_session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.exit_code = 0
+        mock_result.stdout = "Preflight check failed: missing pkg"
+        mock_result.stderr = ""
+        mock_session.execute_command.return_value = mock_result
+
+        assert run_sandbox_preflight(mock_session) is False
+
+    def test_run_sandbox_preflight_failure_exit_code(self):
+        from sandbox.sandbox import run_sandbox_preflight
+
+        mock_session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.exit_code = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "Error importing dependency"
+        mock_session.execute_command.return_value = mock_result
+
+        assert run_sandbox_preflight(mock_session) is False

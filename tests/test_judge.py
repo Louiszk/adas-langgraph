@@ -259,7 +259,7 @@ class TestLLMJudge:
 
         assert result.is_pass is True
         assert len(captured_scopes) == 1
-        # The judge call MUST have overridden the active scope to meta / judge!
+        # The judge call must have overridden the active scope to meta / judge!
         assert captured_scopes[0] == ("meta", "judge")
 
     @patch("adas_core.judge.ChatModel")

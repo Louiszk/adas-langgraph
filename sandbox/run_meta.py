@@ -117,6 +117,9 @@ def main():
                 metrics["iterations"] += 1
 
                 for out in output.values():
+                    if not isinstance(out, dict):
+                        continue
+
                     if "messages" in out:
                         messages = out["messages"]
                         if messages:

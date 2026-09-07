@@ -146,6 +146,111 @@ class TestDirectoryIsolationAndWorkspace:
         # Should be removed after exiting
         assert not case_dir.exists()
 
+    def test_isolated_case_workspace_filters_allowed_files(self, tmp_path):
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        (fixtures_dir / "clean.csv").write_text("clean data")
+        (fixtures_dir / "dirty.json").write_text("corrupted data")
+
+        with isolated_case_workspace(
+            base_dir=tmp_path / "runs",
+            run_id="run_filter",
+            case_id="case_filtered",
+            fixtures_dir=fixtures_dir,
+            allowed_files=["clean.csv"],
+            clean_up=False,
+        ) as ws:
+            assert (ws["input"] / "clean.csv").exists()
+            assert not (ws["input"] / "dirty.json").exists()
+
+    def test_isolated_case_workspace_filters_allowed_directory_batch_fixtures(self, tmp_path):
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        reports_dir = fixtures_dir / "reports"
+        reports_dir.mkdir()
+        (reports_dir / "q1.csv").write_text("q1 data", encoding="utf-8")
+        (reports_dir / "q2.csv").write_text("q2 data", encoding="utf-8")
+
+        other_dir = fixtures_dir / "unrelated_dir"
+        other_dir.mkdir()
+        (other_dir / "other.csv").write_text("other data", encoding="utf-8")
+
+        with isolated_case_workspace(
+            base_dir=tmp_path / "runs",
+            run_id="run_batch_filter",
+            case_id="case_batch_filtered",
+            fixtures_dir=fixtures_dir,
+            allowed_files=["reports/"],
+            clean_up=False,
+        ) as ws:
+            assert (ws["input"] / "reports").is_dir()
+            assert (ws["input"] / "reports" / "q1.csv").exists()
+            assert (ws["input"] / "reports" / "q1.csv").read_text(encoding="utf-8") == "q1 data"
+            assert (ws["input"] / "reports" / "q2.csv").exists()
+            assert not (ws["input"] / "unrelated_dir").exists()
+
+    def test_isolated_case_workspace_rejects_unsafe_allowed_files(self, tmp_path):
+        import pytest
+
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        (fixtures_dir / "safe.csv").write_text("safe")
+
+        # Rejection of directory traversal
+        with pytest.raises(ValueError, match="path traversal"):
+            with isolated_case_workspace(
+                base_dir=tmp_path / "runs",
+                run_id="run_bad_traversal",
+                case_id="case_1",
+                fixtures_dir=fixtures_dir,
+                allowed_files=["../../outside.txt"],
+            ):
+                pass
+
+        # Rejection of absolute paths
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            with isolated_case_workspace(
+                base_dir=tmp_path / "runs",
+                run_id="run_bad_abs",
+                case_id="case_1",
+                fixtures_dir=fixtures_dir,
+                allowed_files=["/etc/passwd"],
+            ):
+                pass
+
+        # Rejection of Windows drive absolute paths
+        with pytest.raises(ValueError, match="absolute paths are not allowed"):
+            with isolated_case_workspace(
+                base_dir=tmp_path / "runs",
+                run_id="run_bad_drive",
+                case_id="case_1",
+                fixtures_dir=fixtures_dir,
+                allowed_files=["C:/Windows/System32"],
+            ):
+                pass
+
+        # Rejection of empty paths
+        with pytest.raises(ValueError, match="path cannot be empty"):
+            with isolated_case_workspace(
+                base_dir=tmp_path / "runs",
+                run_id="run_bad_empty",
+                case_id="case_1",
+                fixtures_dir=fixtures_dir,
+                allowed_files=[""],
+            ):
+                pass
+
+        # Rejection of root/current directory paths
+        with pytest.raises(ValueError, match="empty or root normalized path"):
+            with isolated_case_workspace(
+                base_dir=tmp_path / "runs",
+                run_id="run_bad_dot",
+                case_id="case_1",
+                fixtures_dir=fixtures_dir,
+                allowed_files=["."],
+            ):
+                pass
+
 
 class TestPreflightExecution:
     def test_run_preflight_check_passes_when_file_missing(self, tmp_path):

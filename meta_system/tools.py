@@ -101,7 +101,7 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
 def set_imports(import_code: str, state: dict[str, Any]) -> str:
     """
     Sets the import statements for the target system. This replaces any existing custom imports.
-    The Python code containing the import statements MUST be placed immediately after this decorator line.
+    The Python code containing the import statements must be placed immediately after this decorator line.
     """
     if not import_code:
         return "ERROR: You must provide the import statements code block below the decorator."
@@ -131,7 +131,7 @@ def set_state(state_code: str, state: dict[str, Any]) -> str:
     """
     Defines the AgentState for the target system. This decorator should be used at the beginning of the design process.
     If called again, it will completely replace the previous AgentState definition.
-    The Python code defining the AgentState class MUST be placed immediately after this decorator line.
+    The Python code defining the AgentState class must be placed immediately after this decorator line.
     """
     if not state_code:
         return "ERROR: You must provide the AgentState class definition below the decorator."
@@ -487,6 +487,7 @@ def test_system(state: dict[str, Any]) -> str:
             fixtures_dir=active_fixtures_dir,
             capture_debug_flow=True,
             system_role="target",
+            task_spec=task_spec,
         )
 
         if exec_result.structural_errors:

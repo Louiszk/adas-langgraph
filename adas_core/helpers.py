@@ -2,6 +2,7 @@ import ast
 import io
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -25,6 +26,22 @@ def sanitize_identifier(name: str, prefix_if_digit: str = "") -> str:
 def sanitize_test_id(test_id: str) -> str:
     """Convert a test-case identifier into a Python identifier component."""
     return sanitize_identifier(test_id, prefix_if_digit="case_")
+
+
+def validate_safe_relative_path(raw_path: str, field_name: str = "path") -> str:
+    """Validate that raw_path is a safe relative path, rejecting empty, traversal, and absolute paths."""
+    if not raw_path or not str(raw_path).strip():
+        raise ValueError(f"Invalid {field_name}: path cannot be empty.")
+    raw = str(raw_path).strip()
+    if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
+        raise ValueError(f"Invalid {field_name} '{raw_path}': absolute paths are not allowed.")
+    clean = raw.replace("\\", "/")
+    parts = [p for p in clean.split("/") if p and p != "."]
+    if not parts or ".." in parts:
+        if ".." in parts:
+            raise ValueError(f"Invalid {field_name} '{raw_path}': path traversal ('..') is not allowed.")
+        raise ValueError(f"Invalid {field_name} '{raw_path}': empty or root normalized path is not allowed.")
+    return raw_path
 
 
 def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str]:
@@ -195,3 +212,79 @@ def remove_old_test_results(start_index, messages):
         msg = messages[i]
         if isinstance(msg, HumanMessage):
             msg.content = test_report_pattern.sub(create_summary, str(msg.content))
+
+
+def normalize_future_imports(code: str) -> str:
+    """Ensure unique 'from __future__ import ...' statements appear at the beginning of the source using AST analysis."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    future_nodes = [node for node in tree.body if isinstance(node, ast.ImportFrom) and node.module == "__future__"]
+    if not future_nodes:
+        return code
+
+    lines = code.splitlines()
+    remove_indices: set[int] = set()
+    seen: set[str] = set()
+    unique_future_lines: list[str] = []
+
+    for node in future_nodes:
+        seg = ast.get_source_segment(code, node)
+        if seg:
+            norm_seg = " ".join(seg.split())
+            if norm_seg not in seen:
+                seen.add(norm_seg)
+                unique_future_lines.append(seg)
+        if node.lineno is not None and node.end_lineno is not None:
+            for idx in range(node.lineno - 1, node.end_lineno):
+                remove_indices.add(idx)
+
+    # Check if tree.body starts with a module docstring
+    has_docstring = (
+        len(tree.body) > 0
+        and isinstance(tree.body[0], ast.Expr)
+        and isinstance(tree.body[0].value, ast.Constant)
+        and isinstance(tree.body[0].value.value, str)
+    )
+
+    insert_idx = 0
+    if has_docstring and tree.body[0].end_lineno is not None:
+        insert_idx = tree.body[0].end_lineno
+    else:
+        # Keep leading shebang, encoding, and header comments at the very top
+        first_non_future_lineno = None
+        for node in tree.body:
+            if not (isinstance(node, ast.ImportFrom) and node.module == "__future__"):
+                first_non_future_lineno = node.lineno
+                break
+
+        limit = (first_non_future_lineno - 1) if first_non_future_lineno is not None else len(lines)
+        for i in range(limit):
+            stripped = lines[i].strip()
+            if stripped.startswith("#") or not stripped:
+                insert_idx = i + 1
+            else:
+                break
+
+    prefix_lines = [lines[i] for i in range(insert_idx) if i not in remove_indices]
+    suffix_lines = [lines[i] for i in range(insert_idx, len(lines)) if i not in remove_indices]
+
+    while prefix_lines and not prefix_lines[-1].strip():
+        prefix_lines.pop()
+
+    while suffix_lines and not suffix_lines[0].strip():
+        suffix_lines.pop(0)
+
+    result_parts: list[str] = []
+    if prefix_lines:
+        result_parts.append("\n".join(prefix_lines))
+    result_parts.append("\n".join(unique_future_lines))
+    if suffix_lines:
+        result_parts.append("\n".join(suffix_lines))
+
+    result = "\n\n".join(result_parts)
+    if code.endswith("\n"):
+        result += "\n"
+    return result

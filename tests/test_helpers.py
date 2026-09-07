@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 
 from adas_core.helpers import (
     clean_messages,
+    normalize_future_imports,
     truncate_state,
     validate_node_conditional_edge_signature,
 )
@@ -68,3 +69,55 @@ class TestStateTruncation:
         assert "small_field" in truncated and truncated["small_field"] == "ok"
         assert "HAS BEEN TRUNCATED" in truncated["large_field"]
         assert len(truncated["large_field"]) < len(huge_text)
+
+
+class TestNormalizeFutureImports:
+    def test_deduplicates_repeated_future_imports(self):
+        code = (
+            "from __future__ import annotations\n"
+            "from __future__ import annotations\n"
+            "x = 1\n"
+            "from __future__ import annotations\n"
+        )
+        normalized = normalize_future_imports(code)
+        assert normalized.count("from __future__ import annotations") == 1
+        assert normalized.startswith("from __future__ import annotations\n\nx = 1")
+
+    def test_leaves_code_without_future_imports_unchanged(self):
+        code = "x = 1\ny = 2\n"
+        assert normalize_future_imports(code) == code
+
+    def test_does_not_corrupt_multiline_string_containing_future_import(self):
+        """Regression test: string literals containing 'from __future__' must not be extracted or corrupted."""
+        code = 'def generate_template():\n    return """\nfrom __future__ import annotations\nimport sys\n"""\n'
+        normalized = normalize_future_imports(code)
+        assert normalized == code
+        # Verify it doesn't hoist a future import to module level
+        assert not normalized.startswith("from __future__")
+
+    def test_hoists_future_import_without_corrupting_internal_strings(self):
+        """Top-level future import is hoisted, but future import text inside a multiline string is untouched."""
+        code = (
+            'SETUP = ["pandas"]\n\n'
+            "from __future__ import annotations\n\n"
+            'template = """\n'
+            "from __future__ import division\n"
+            '"""\n'
+        )
+        normalized = normalize_future_imports(code)
+        assert normalized.startswith("from __future__ import annotations")
+        assert "from __future__ import division" in normalized
+        assert normalized.count("from __future__ import annotations") == 1
+        compile(normalized, "<test>", "exec")
+
+    def test_preserves_module_docstring_and_shebang(self):
+        """Module docstring and shebang stay before the hoisted future import."""
+        code = (
+            "#!/usr/bin/env python3\n"
+            '"""Module docstring."""\n\n'
+            'SETUP = ["pandas"]\n\n'
+            "from __future__ import annotations\n"
+        )
+        normalized = normalize_future_imports(code)
+        assert normalized.startswith('#!/usr/bin/env python3\n"""Module docstring."""')
+        compile(normalized, "<test>", "exec")

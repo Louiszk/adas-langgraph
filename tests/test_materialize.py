@@ -48,7 +48,7 @@ class TestMaterializeSystemSpecification:
 
     def test_materialized_output_is_syntactically_valid_python(self, fully_configured_system: VirtualAgenticSystem):
         """
-        Contract invariant: Any code emitted by materialize_system MUST be syntactically valid Python.
+        Contract invariant: Any code emitted by materialize_system must be syntactically valid Python.
         materialize_system returns the generated Python source string directly and writes to output_dir.
         """
         with tempfile.TemporaryDirectory() as tmpdir:

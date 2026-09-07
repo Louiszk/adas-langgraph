@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adas_core.helpers import sanitize_test_id, validate_safe_relative_path
+
 
 class ToolRequirement(BaseModel):
     """Specification of a tool required by the target system."""
@@ -39,8 +41,12 @@ class ArchitectureContract(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # TODO: 'multi_turn' execution mode is not implemented yet in the test runner/execution harness.
+    # Currently only 'single_turn' is supported; full multi-turn conversational execution with
+    # checkpointer persistence is planned for a future commit.
     execution_mode: Literal["single_turn", "multi_turn"] = Field(
-        default="single_turn", description="Single-turn execution or multi-turn conversational execution"
+        default="single_turn",
+        description="Single-turn execution or multi-turn conversational execution (Note: multi_turn is not implemented yet)",
     )
     state_schema: dict[str, str] = Field(
         ...,
@@ -48,7 +54,8 @@ class ArchitectureContract(BaseModel):
         description="Mapping of state attribute names to type annotations (e.g. {'messages': 'Annotated[list[AnyMessage], add_messages]'})",
     )
     persistence: PersistenceContract | None = Field(
-        default=None, description="Checkpointer configuration for stateful/multi-turn execution"
+        default=None,
+        description="Checkpointer configuration for stateful/multi-turn execution (TODO: not implemented yet)",
     )
     required_tools: list[ToolRequirement] = Field(
         default_factory=list, description="List of tools the target system must provide"
@@ -56,6 +63,7 @@ class ArchitectureContract(BaseModel):
 
     @model_validator(mode="after")
     def validate_multi_turn_persistence(self) -> ArchitectureContract:
+        # TODO: multi-turn checkpointer persistence validation (execution support planned for future commit)
         if self.execution_mode == "multi_turn" and self.persistence is None:
             self.persistence = PersistenceContract(checkpointer="memory", requires_thread_id=True)
         return self
@@ -101,6 +109,10 @@ class FileFixtureSpec(BaseModel):
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
+    id: str = Field(
+        default="",
+        description="Unique fixture identifier (e.g. 'sales_csv', 'customers_json'). Defaults from path if empty.",
+    )
     path: str = Field(
         ..., min_length=1, description="Relative destination path or directory (e.g. 'test.csv' or 'docs/')"
     )
@@ -110,6 +122,18 @@ class FileFixtureSpec(BaseModel):
     description: str = Field(default="", description="Purpose, schema, or content requirements for this file")
     content_type: Literal["text", "csv", "json", "binary"] = Field(default="text", description="File format")
 
+    @field_validator("path")
+    @classmethod
+    def validate_file_path(cls, v: str) -> str:
+        validate_safe_relative_path(v, field_name="path")
+        return v
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> FileFixtureSpec:
+        if not self.id:
+            self.id = Path(self.path).name.replace(".", "_").replace("-", "_")
+        return self
+
 
 class DatabaseFixtureSpec(BaseModel):
     """Specification of a test database or knowledge graph (embedded or network-based)."""
@@ -117,6 +141,7 @@ class DatabaseFixtureSpec(BaseModel):
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
+    id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Database identifier (e.g. 'analytics_db', 'graph_store')")
     db_type: Literal["sqlite", "duckdb", "neo4j", "postgres", "redis", "qdrant", "custom"] = Field(
         ..., description="Database engine type"
@@ -129,10 +154,21 @@ class DatabaseFixtureSpec(BaseModel):
     count: int | None = Field(default=None, ge=1, description="Target number of records, rows, or nodes to seed")
     description: str = Field(default="", description="Schema, entities, tables, or graph structure to populate")
 
+    @field_validator("file_path")
+    @classmethod
+    def validate_db_file_path(cls, v: str | None) -> str | None:
+        if v is not None:
+            validate_safe_relative_path(v, field_name="file_path")
+        return v
+
     @model_validator(mode="after")
     def validate_db_configuration(self) -> DatabaseFixtureSpec:
+        if not self.id:
+            self.id = self.name
         if self.db_type in ("sqlite", "duckdb") and not self.file_path:
             self.file_path = f"data/{self.name}.{self.db_type}"
+        if self.file_path is not None:
+            validate_safe_relative_path(self.file_path, field_name="file_path")
         return self
 
 
@@ -142,10 +178,11 @@ class MCPFixtureSpec(BaseModel):
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
+    id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="MCP server identifier (e.g. 'github_mcp', 'filesystem_mcp')")
-    transport: Literal["stdio", "streamable_http", "sse"] = Field(
+    transport: Literal["stdio", "streamable-http", "sse"] = Field(
         default="stdio",
-        description="MCP transport protocol: 'stdio' for subprocess pipes, 'streamable_http' for modern HTTP, or 'sse' for legacy HTTP",
+        description="MCP transport protocol: 'stdio' for subprocess pipes, 'streamable-http' for modern HTTP, or 'sse' for legacy HTTP",
     )
     command: str | None = Field(
         default=None, description="Executable command for stdio transport (e.g. 'python fixtures/mock_mcp.py')"
@@ -154,7 +191,7 @@ class MCPFixtureSpec(BaseModel):
     env: dict[str, str] = Field(
         default_factory=dict, description="Environment variables passed to the MCP server process"
     )
-    port: int | None = Field(default=None, description="Port number if transport is 'streamable_http' or 'sse'")
+    port: int | None = Field(default=None, description="Port number if transport is 'streamable-http' or 'sse'")
     endpoint_path: str = Field(
         default="/mcp", description="HTTP endpoint path for Streamable HTTP (defaults to '/mcp')"
     )
@@ -165,6 +202,19 @@ class MCPFixtureSpec(BaseModel):
         default="", description="Tools, resources, and simulated behaviors this MCP server provides"
     )
 
+    @field_validator("transport", mode="before")
+    @classmethod
+    def normalize_transport(cls, v: str) -> str:
+        if v == "streamable_http":
+            return "streamable-http"
+        return v
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> MCPFixtureSpec:
+        if not self.id:
+            self.id = self.name
+        return self
+
 
 class MockServiceFixtureSpec(BaseModel):
     """Specification of a mock HTTP service / API for tools to query."""
@@ -172,12 +222,19 @@ class MockServiceFixtureSpec(BaseModel):
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
+    id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Service name (e.g. 'mock_weather_api')")
     port: int = Field(default=8000, description="Local port for the mock server")
     base_url_env: str = Field(
         default="MOCK_API_BASE_URL", description="Env var exposing the mock server URL to the agent"
     )
     description: str = Field(default="", description="Endpoints, routes, and response behavior to mock")
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> MockServiceFixtureSpec:
+        if not self.id:
+            self.id = self.name
+        return self
 
 
 class CustomFixtureSpec(BaseModel):
@@ -186,8 +243,26 @@ class CustomFixtureSpec(BaseModel):
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
+    id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Fixture identifier")
+    path: str | None = Field(
+        default=None,
+        description="Optional relative file or directory path produced by custom setup (e.g. 'repo/' or 'config.yaml')",
+    )
     description: str = Field(..., min_length=1, description="Description of the custom setup requirements")
+
+    @field_validator("path")
+    @classmethod
+    def validate_custom_path(cls, v: str | None) -> str | None:
+        if v is not None:
+            validate_safe_relative_path(v, field_name="path")
+        return v
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> CustomFixtureSpec:
+        if not self.id:
+            self.id = self.name
+        return self
 
 
 class TestFixturesSpec(BaseModel):
@@ -208,6 +283,121 @@ class TestFixturesSpec(BaseModel):
         default_factory=list, description="Custom fixture scripts (git repos, CLI mocks, etc.)"
     )
 
+    @model_validator(mode="after")
+    def validate_unique_fixture_ids(self) -> TestFixturesSpec:
+        """Ensure all declared fixture IDs across all categories are globally unique."""
+        seen: set[str] = set()
+        for category, items in [
+            ("files", self.files),
+            ("databases", self.databases),
+            ("mcps", self.mcps),
+            ("mock_services", self.mock_services),
+            ("custom_fixtures", self.custom_fixtures),
+        ]:
+            for item in items:
+                if item.id in seen:
+                    raise ValueError(f"Duplicate fixture id '{item.id}' in test_fixtures ({category}).")
+                seen.add(item.id)
+        return self
+
+    def all_fixture_ids(self) -> set[str]:
+        """Return the set of all declared fixture IDs across all categories."""
+        ids: set[str] = set()
+        for f in self.files:
+            ids.add(f.id)
+        for d in self.databases:
+            ids.add(d.id)
+        for m in self.mcps:
+            ids.add(m.id)
+        for s in self.mock_services:
+            ids.add(s.id)
+        for c in self.custom_fixtures:
+            ids.add(c.id)
+        return ids
+
+    def get_file_paths_for_fixture_ids(self, fixture_ids: list[str] | None) -> list[str] | None:
+        """Return relative file paths matching the requested fixture IDs, or None if all should be included."""
+        if fixture_ids is None:
+            return None
+        target_ids = set(fixture_ids)
+        paths: list[str] = []
+
+        def _clean_path(raw: str) -> str:
+            if not raw or not str(raw).strip():
+                return ""
+            clean_rel = str(raw).replace("\\", "/").strip().lstrip("/")
+            for prefix in ("sandbox/workspace/data/input/", "sandbox/workspace/input/", "data/input/", "input/"):
+                if clean_rel.startswith(prefix):
+                    clean_rel = clean_rel[len(prefix) :]
+                    break
+            parts = [p for p in clean_rel.split("/") if p and p != "."]
+            if not parts or ".." in parts:
+                return ""
+            return "/".join(parts)
+
+        for f in self.files:
+            if f.id in target_ids or f.path in target_ids:
+                cleaned = _clean_path(f.path)
+                if cleaned:
+                    paths.append(cleaned)
+
+        for db in self.databases:
+            if (db.id in target_ids or db.name in target_ids) and db.file_path:
+                cleaned = _clean_path(db.file_path)
+                if cleaned:
+                    paths.append(cleaned)
+
+        for cf in self.custom_fixtures:
+            if (cf.id in target_ids or cf.name in target_ids) and cf.path:
+                cleaned = _clean_path(cf.path)
+                if cleaned:
+                    paths.append(cleaned)
+
+        return list(dict.fromkeys(paths))
+
+    def get_fixture_by_id(self, fixture_id: str) -> Any | None:
+        """Find and return any fixture matching the given ID."""
+        for f in self.files:
+            if f.id == fixture_id:
+                return f
+        for d in self.databases:
+            if d.id == fixture_id:
+                return d
+        for m in self.mcps:
+            if m.id == fixture_id:
+                return m
+        for s in self.mock_services:
+            if s.id == fixture_id:
+                return s
+        for c in self.custom_fixtures:
+            if c.id == fixture_id:
+                return c
+        return None
+
+    def get_script_filenames_for_fixture(self, fixture_id: str) -> list[str]:
+        """Return the exact deterministic script filenames associated with a fixture ID."""
+        names: list[str] = [fixture_id, f"{fixture_id}.py"]
+        fix = self.get_fixture_by_id(fixture_id)
+        if fix is None:
+            return names
+
+        if isinstance(fix, FileFixtureSpec):
+            clean_rel = fix.path.replace("\\", "/").strip().lstrip("/")
+            for prefix in ("sandbox/workspace/data/input/", "sandbox/workspace/input/", "data/input/", "input/"):
+                if clean_rel.startswith(prefix):
+                    clean_rel = clean_rel[len(prefix) :]
+                    break
+            clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
+            names.extend([f"generate_{fix.id}.py", f"generate_{clean_name}.py"])
+        elif isinstance(fix, DatabaseFixtureSpec):
+            names.extend([f"seed_{fix.id}.py", f"seed_{fix.name}.py"])
+        elif isinstance(fix, (MCPFixtureSpec, MockServiceFixtureSpec)):
+            names.extend([f"mock_{fix.id}.py", f"mock_{fix.name}.py"])
+        elif isinstance(fix, CustomFixtureSpec):
+            names.extend([f"setup_{fix.id}.py", f"setup_{fix.name}.py"])
+
+        return list(dict.fromkeys(names))
+
 
 class TestCaseSpec(BaseModel):
     """Specification for a single test scenario (single-turn or multi-turn)."""
@@ -217,6 +407,10 @@ class TestCaseSpec(BaseModel):
 
     id: str = Field(..., min_length=1, description="Unique test case identifier (e.g. 'case_1_basic_math')")
     description: str = Field(..., min_length=1, description="Description of the test scenario and edge cases")
+    fixture_ids: list[str] | None = Field(
+        default=None,
+        description="Optional list of fixture IDs (files, databases, mock services, MCPs) provisioned for this test case. If None, all fixtures are provisioned.",
+    )
     turns: list[dict[str, Any]] = Field(
         ..., min_length=1, description="Sequence of input state dictionaries (one dict per turn)"
     )
@@ -260,6 +454,8 @@ class TestCaseSpec(BaseModel):
             raise ValueError(f"TestCase '{self.id}' contains duplicate modalities.")
         if "vision" in self.modalities and not self.llm_judge_needed:
             raise ValueError(f"TestCase '{self.id}' requires vision evaluation but llm_judge_needed is False.")
+        if self.fixture_ids is not None and len(set(self.fixture_ids)) != len(self.fixture_ids):
+            raise ValueError(f"TestCase '{self.id}' contains duplicate fixture_ids.")
         return self
 
 
@@ -293,11 +489,19 @@ class TaskSpec(BaseModel):
     @field_validator("dev_suite")
     @classmethod
     def validate_unique_test_case_ids(cls, v: list[TestCaseSpec]) -> list[TestCaseSpec]:
-        seen_ids = set()
+        seen_ids: set[str] = set()
+        seen_sanitized: dict[str, str] = {}
         for tc in v:
             if tc.id in seen_ids:
                 raise ValueError(f"Duplicate test case id '{tc.id}' in dev_suite.")
             seen_ids.add(tc.id)
+            clean = sanitize_test_id(tc.id)
+            if clean in seen_sanitized:
+                raise ValueError(
+                    f"Duplicate sanitized test case id '{clean}' in dev_suite: "
+                    f"'{tc.id}' collides with '{seen_sanitized[clean]}'."
+                )
+            seen_sanitized[clean] = tc.id
         return v
 
     @model_validator(mode="after")
@@ -323,6 +527,20 @@ class TaskSpec(BaseModel):
                     f"TestCase '{test_case.id}' requires vision evaluation but judge_model "
                     f"'{test_case.judge_model}' ({provider}) is not vision-capable."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_test_case_fixture_ids(self) -> TaskSpec:
+        """Ensure all fixture_ids referenced by test cases exist in test_fixtures."""
+        all_ids = self.test_fixtures.all_fixture_ids()
+        for test_case in self.dev_suite:
+            if test_case.fixture_ids is not None:
+                for fid in test_case.fixture_ids:
+                    if fid not in all_ids:
+                        raise ValueError(
+                            f"TestCase '{test_case.id}' references unknown fixture_id '{fid}'. "
+                            f"Available fixture IDs: {sorted(all_ids)}"
+                        )
         return self
 
     def to_dict(self) -> dict[str, Any]:
@@ -386,11 +604,19 @@ class HoldoutSuiteSpec(BaseModel):
     @field_validator("holdout_suite")
     @classmethod
     def validate_unique_holdout_ids(cls, v: list[TestCaseSpec]) -> list[TestCaseSpec]:
-        seen_ids = set()
+        seen_ids: set[str] = set()
+        seen_sanitized: dict[str, str] = {}
         for tc in v:
             if tc.id in seen_ids:
                 raise ValueError(f"Duplicate test case id '{tc.id}' in holdout_suite.")
             seen_ids.add(tc.id)
+            clean = sanitize_test_id(tc.id)
+            if clean in seen_sanitized:
+                raise ValueError(
+                    f"Duplicate sanitized test case id '{clean}' in holdout_suite: "
+                    f"'{tc.id}' collides with '{seen_sanitized[clean]}'."
+                )
+            seen_sanitized[clean] = tc.id
         return v
 
     def to_dict(self) -> dict[str, Any]:

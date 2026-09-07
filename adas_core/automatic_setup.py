@@ -3,13 +3,15 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.markdown_parser import find_code_blocks
+from adas_core.helpers import normalize_future_imports
 from adas_core.logging_config import get_logger
+from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
     DatabaseFixtureSpec,
@@ -60,7 +62,7 @@ def extract_setup_requirements(code: str) -> list[str]:
 BASE_GENERATION_SYSTEM_PROMPT = """You are generating automated setup and fixture code for AI agent evaluation.
 
 MANDATORY PACKAGE DECLARATION RULE:
-If ANY third-party or non-standard library packages are needed by your code (e.g. neo4j, psycopg2-binary, duckdb, fastapi, uvicorn, mcp, langchain-mcp-adapters, faker, pandas, httpx), you MUST declare them at the top of the file:
+If ANY third-party or non-standard library packages are needed by your code (e.g. neo4j, psycopg2-binary, duckdb, fastapi, uvicorn, mcp, langchain-mcp-adapters, faker, pandas, httpx), you must declare them at the top of the file:
 SETUP_REQUIREMENTS = ["package1", "package2"]
 If no third-party packages are needed, declare:
 SETUP_REQUIREMENTS = []
@@ -75,6 +77,55 @@ def _has_declared_fixtures(task_spec: TaskSpec) -> bool:
     """Return True if the TaskSpec declares any test fixtures."""
     tf = task_spec.test_fixtures
     return bool(tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures)
+
+
+def normalize_fixture_path(raw_path: str) -> str:
+    """Normalize fixture path to be relative to the fixtures/input directory, stripping environment prefixes.
+
+    Rejects absolute paths, empty/current-dir paths ('.', './', ''), and directory traversal ('..').
+    """
+    if not raw_path or not str(raw_path).strip():
+        raise ValueError(f"Invalid fixture path '{raw_path}': path cannot be empty.")
+
+    raw = str(raw_path).strip()
+
+    # Reject absolute paths (POSIX root, Windows drive letters, or UNC paths)
+    if raw.startswith(("/", "\\")) or re.match(r"^[a-zA-Z]:", raw) or Path(raw).is_absolute():
+        raise ValueError(f"Invalid fixture path '{raw_path}': absolute paths are not allowed.")
+
+    clean = raw.replace("\\", "/")
+
+    # Reject directory traversal components in raw path
+    raw_parts = [p for p in clean.split("/") if p]
+    if ".." in raw_parts:
+        raise ValueError(f"Invalid fixture path '{raw_path}': path traversal ('..') is not allowed.")
+
+    # Strip environment prefixes
+    for prefix in (
+        "sandbox/workspace/data/input/",
+        "sandbox/workspace/input/",
+        "data/input/",
+        "input/",
+        "sandbox/workspace/data/input",
+        "sandbox/workspace/input",
+        "data/input",
+        "input",
+    ):
+        if clean == prefix:
+            raise ValueError(f"Invalid fixture path '{raw_path}': resolves to root input directory.")
+        prefix_with_slash = prefix.rstrip("/") + "/"
+        if clean.startswith(prefix_with_slash):
+            clean = clean[len(prefix_with_slash) :]
+            break
+
+    clean = clean.strip()
+    clean_parts = [p for p in clean.split("/") if p and p != "."]
+    if not clean_parts or ".." in clean_parts:
+        if ".." in clean_parts:
+            raise ValueError(f"Invalid fixture path '{raw_path}': path traversal ('..') is not allowed.")
+        raise ValueError(f"Invalid fixture path '{raw_path}': empty or root normalized path is not allowed.")
+
+    return "/".join(clean_parts)
 
 
 class AutomaticSetup:
@@ -112,12 +163,14 @@ class AutomaticSetup:
         instructions = (
             "TASK: Procedural File Generation\n"
             "Write a self-contained Python script to procedurally generate the requested test files.\n"
-            "The script MUST define a function:\n"
+            "The script must define a function:\n"
             "`def generate_files(output_path: Path) -> None:`\n"
             "Rules:\n"
             "1. If count == 1: write the single file directly to `output_path`.\n"
             "2. If count > 1: treat `output_path` as a directory, create it if needed, and write the specified number of files inside.\n"
-            "3. Include realistic column headers, data distributions, formatting, and edge cases."
+            "3. Include realistic column headers, data distributions, and formatting.\n"
+            "4. Model edge cases as realistic data-level anomalies (null/empty values, type inconsistencies, date format variations, outliers, or missing optional fields)."
+            " Preserve valid top-level syntax and container structure (e.g. all records in a JSON list must be objects/dicts, not bare strings) so standard library loaders and iterators do not crash on parse unless unparseable syntax is explicitly requested."
         )
         system_prompt = self._build_system_prompt(instructions)
         user_prompt = (
@@ -130,7 +183,7 @@ class AutomaticSetup:
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        code = extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         return code, reqs
 
@@ -139,7 +192,7 @@ class AutomaticSetup:
         instructions = (
             "TASK: Database Seeding\n"
             "Write a self-contained Python script to seed test data into the specified database.\n"
-            "The script MUST define a function:\n"
+            "The script must define a function:\n"
             "`def seed_database(workspace_dirs: dict[str, str]) -> None:`\n"
             "Rules:\n"
             "1. Read connection credentials from environment variables where specified.\n"
@@ -165,7 +218,7 @@ class AutomaticSetup:
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        code = extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         return code, reqs
 
@@ -175,7 +228,7 @@ class AutomaticSetup:
             "TASK: Mock FastMCP Server\n"
             "Write a complete, executable mock MCP server script using the FastMCP framework (`from mcp.server.fastmcp import FastMCP`).\n"
             "Implement realistic mock tools using `@mcp.tool()` based on the fixture requirements.\n"
-            "Include `if __name__ == '__main__': mcp.run(...)` respecting the specified transport ('stdio', 'streamable_http', or 'sse')."
+            "Include `if __name__ == '__main__': mcp.run(...)` respecting the specified transport ('stdio', 'streamable-http', or 'sse', preferring 'streamable-http' over legacy 'sse' for HTTP servers)."
         )
         system_prompt = self._build_system_prompt(instructions)
         transport_info = f"Transport: {fixture.transport}"
@@ -191,7 +244,7 @@ class AutomaticSetup:
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        code = extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         if "mcp" not in reqs:
             reqs.append("mcp")
@@ -218,7 +271,7 @@ class AutomaticSetup:
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        code = extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         if "fastapi" not in reqs:
             reqs.append("fastapi")
@@ -233,16 +286,30 @@ class AutomaticSetup:
             "Write a Python script defining `setup_environment(workspace_dirs: dict[str, str]) -> None`\n"
             "that implements the custom setup requirements (e.g. git repo init, process mock, etc.)."
         )
+        if fixture.path:
+            instructions += (
+                f"\nArtifact Relative Path: {fixture.path}\n"
+                f"The script must create that exact relative path beneath workspace_dirs['ADAS_INPUT_DIR']."
+            )
         system_prompt = self._build_system_prompt(instructions)
+
+        path_info = ""
+        if fixture.path:
+            path_info = (
+                f"Artifact Path: {fixture.path}\n"
+                f'Artifact Location Instruction: Create that exact relative path beneath workspace_dirs["ADAS_INPUT_DIR"].\n'
+            )
+
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"Fixture Name: {fixture.name}\n"
+            f"{path_info}"
             f"Requirements:\n{fixture.description}\n\n"
             "Write the complete setup script:"
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        code = extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         return code, reqs
 
@@ -255,7 +322,7 @@ class AutomaticSetup:
             "`def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:`\n"
             "Rules for check_environment:\n"
             "1. Check that required environment variables / API keys exist (log names only, NEVER secrets).\n"
-            "2. Verify access to declared database resources or file inputs.\n"
+            "2. Verify access to declared database resources or file inputs (search input directories recursively using rglob, as fixtures may have relative subdirectories).\n"
             "3. Return (True, 'Environment verified') on success, or (False, error_description) on failure."
         )
         system_prompt = self._build_system_prompt(instructions)
@@ -270,7 +337,12 @@ class AutomaticSetup:
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        return extract_code_block(str(response.content))
+        code = normalize_future_imports(extract_code_block(str(response.content)))
+        try:
+            compile(code, "<preflight>", "exec")
+        except SyntaxError as exc:
+            logger.warning("Generated preflight script failed syntax validation: %s", exc)
+        return code
 
     def generate_all(
         self,
@@ -291,7 +363,8 @@ class AutomaticSetup:
         # 1. Generate file fixtures procedurally via script
         for file_fix in task_spec.test_fixtures.files:
             code, reqs = self.generate_file_script(task_spec, file_fix)
-            clean_name = file_fix.path.replace("/", "_").replace("\\", "_").replace(".", "_")
+            clean_rel = normalize_fixture_path(file_fix.path)
+            clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
             generator_script_dest = fixtures_dir / f"generate_{clean_name}.py"
             generator_script_dest.write_text(code, encoding="utf-8")
             created_files.append(generator_script_dest)
@@ -373,9 +446,10 @@ class AutomaticSetup:
         fixtures_dir = root / "fixtures"
 
         for file_fix in task_spec.test_fixtures.files:
-            clean_name = file_fix.path.replace("/", "_").replace("\\", "_").replace(".", "_")
+            clean_rel = normalize_fixture_path(file_fix.path)
+            clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
             script = fixtures_dir / f"generate_{clean_name}.py"
-            dest = fixtures_dir / file_fix.path
+            dest = fixtures_dir / clean_rel
             if file_fix.count == 1:
                 dest.parent.mkdir(parents=True, exist_ok=True)
             else:

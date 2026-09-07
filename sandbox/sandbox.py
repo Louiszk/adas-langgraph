@@ -9,6 +9,7 @@ from llm_sandbox import SandboxBackend, create_session
 from adas_core.environment import (
     SANDBOX_GENERATED_SYSTEMS_DIR,
     SANDBOX_TARGET_METRICS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
     SANDBOX_WORKSPACE_DIR,
 )
 from adas_core.logging_config import get_logger
@@ -167,6 +168,9 @@ class StreamingSandboxSession:
         if not self.session:
             raise RuntimeError("Session is not open.")
         try:
+            dest_dir = os.path.dirname(str(dest).replace("\\", "/"))
+            if dest_dir:
+                self.session.execute_command(f"mkdir -p '{dest_dir}'")
             return self.session.copy_to_runtime(src, dest)
         except Exception as e:
             logger.error(f"Exception during copying to runtime: {e!r}")
@@ -177,15 +181,18 @@ class StreamingSandboxSession:
             raise RuntimeError("Session is not open.")
         return self.session.copy_from_runtime(src, dest)
 
-    def execute_command_streaming(self, command, workdir=None):
+    def execute_command_streaming(self, command, workdir=None, environment=None):
         if not self.session or not self.session.container:
             raise RuntimeError("Session is not open or container is not running.")
 
         kwargs = {"stream": True, "tty": True}
         if workdir:
             kwargs["workdir"] = workdir
+        if environment:
+            kwargs["environment"] = environment
 
-        _, output_stream = self.session.container.exec_run(command, **kwargs)
+        cmd_to_run = ["/bin/sh", "-c", command] if isinstance(command, str) else command
+        _, output_stream = self.session.container.exec_run(cmd_to_run, **kwargs)
 
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -293,32 +300,19 @@ def setup_sandbox_environment(session, reinstall=False):
     session.copy_dir_to_runtime(src_dir="meta_system", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/meta_system", pattern="*.py")
 
     # Copy core framework files
-    required_files = [
-        "adas_core/ast_parser.py",
-        "adas_core/automatic_setup.py",
-        "adas_core/automatic_validation.py",
-        "adas_core/judge.py",
-        "adas_core/virtual_agentic_system.py",
-        "adas_core/task_spec.py",
-        "adas_core/decorator_logic.py",
-        "adas_core/chat_model.py",
-        "adas_core/tool_calls.py",
-        "adas_core/materialize.py",
-        "adas_core/environment.py",
-        "adas_core/helpers.py",
-        "adas_core/logging_config.py",
-        "config/settings.py",
-        ".env",
-    ]
+    session.copy_dir_to_runtime(src_dir="adas_core", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/adas_core", pattern="*.py")
 
-    copy_paths = [(path, f"{SANDBOX_WORKSPACE_DIR}/{path}") for path in required_files] + [
+    # Copy individual config, env and runner files
+    additional_files = [
+        ("config/settings.py", f"{SANDBOX_WORKSPACE_DIR}/config/settings.py"),
+        (".env", f"{SANDBOX_WORKSPACE_DIR}/.env"),
         ("sandbox/run_meta.py", f"{SANDBOX_WORKSPACE_DIR}/run_meta.py"),
         ("sandbox/run_target.py", f"{SANDBOX_WORKSPACE_DIR}/run_target.py"),
         ("sandbox/run_setup.py", f"{SANDBOX_WORKSPACE_DIR}/run_setup.py"),
         ("sandbox/run_preflight.py", f"{SANDBOX_WORKSPACE_DIR}/run_preflight.py"),
     ]
 
-    for src_path, dest_path in copy_paths:
+    for src_path, dest_path in additional_files:
         if os.path.exists(src_path):
             session.copy_to_runtime(src_path, dest_path)
         else:
@@ -346,4 +340,59 @@ def setup_sandbox_environment(session, reinstall=False):
         session.execute_command(f"pip install {' '.join(settings.dependencies)}")
 
     logger.info("Sandbox environment set up successfully!")
+    return True
+
+
+def copy_task_setup_to_sandbox(
+    session: StreamingSandboxSession,
+    task_dir: Path | str,
+    task_spec_path: Path | str,
+) -> str:
+    """Copy the visible, frozen setup artifacts into a design sandbox."""
+    task_dir_path = Path(task_dir)
+    spec_path = Path(task_spec_path)
+    runtime_task_dir = SANDBOX_TASK_SETUP_DIR
+    session.execute_command(f"mkdir -p '{runtime_task_dir}'")
+
+    # Pre-create all necessary subdirectories
+    subdirs = {
+        source_path.relative_to(task_dir_path).parent.as_posix()
+        for source_path in task_dir_path.rglob("*")
+        if source_path.is_file()
+        and "__pycache__" not in source_path.parts
+        and source_path.relative_to(task_dir_path).parent != Path(".")
+    }
+    for subdir in sorted(subdirs):
+        session.execute_command(f"mkdir -p '{runtime_task_dir}/{subdir}'")
+
+    for source_path in task_dir_path.rglob("*"):
+        if source_path.is_file() and "__pycache__" not in source_path.parts:
+            relative_path = source_path.relative_to(task_dir_path).as_posix()
+            session.copy_to_runtime(str(source_path), f"{runtime_task_dir}/{relative_path}")
+    # The sandbox entry point always loads the explicit, visible TaskSpec from
+    # this stable path, regardless of the host file's chosen name.
+    session.copy_to_runtime(str(spec_path), f"{runtime_task_dir}/task.json")
+    return runtime_task_dir
+
+
+def run_sandbox_preflight(
+    session: StreamingSandboxSession,
+    runtime_task_dir: str = SANDBOX_TASK_SETUP_DIR,
+) -> bool:
+    """Install frozen setup requirements and validate them inside the sandbox."""
+    result = session.execute_command(f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}")
+    exit_code = getattr(result, "exit_code", None)
+    output_str = str(getattr(result, "stdout", "") or "")
+    stderr_str = str(getattr(result, "stderr", "") or "")
+    combined = (output_str + "\n" + stderr_str).strip()
+
+    if "Preflight check failed" in combined or "Preflight verification passed" not in combined:
+        logger.error("Sandbox preflight verification failed: %s", combined or result)
+        return False
+
+    if exit_code is not None and exit_code != 0:
+        logger.error("Sandbox preflight verification failed with exit code %s: %s", exit_code, combined or result)
+        return False
+
+    logger.info("Sandbox preflight verification passed.")
     return True
