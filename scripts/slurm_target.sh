@@ -22,7 +22,7 @@ if [[ "$*" != *"--container"* ]]; then
 fi
 
 if [ $# -gt 0 ]; then
-    python scripts/orchestrator.py --task target "${CONTAINER_ARGS[@]}" "$@"
+    python -m scripts.orchestrator --task target "${CONTAINER_ARGS[@]}" "$@"
 else
     echo "Error: Target runs require a task specification (--task-spec) and system name (--system-names)." >&2
     echo "Usage: sbatch scripts/slurm_target.sh --task-spec <path/to/task.json> --system-names <name> [options]" >&2

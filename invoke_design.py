@@ -1,3 +1,7 @@
+"""Run the meta-system design optimization loop in an isolated container sandbox."""
+
+from __future__ import annotations
+
 import argparse
 import os
 from pathlib import Path
@@ -19,7 +23,7 @@ from sandbox.sandbox import (
     setup_sandbox_environment,
 )
 
-logger = get_logger("run_design")
+logger = get_logger("invoke_design")
 
 
 def run_meta_system_in_sandbox(
@@ -82,6 +86,11 @@ def main():
     parser.add_argument("--reinstall", action="store_true", help="Reinstall dependencies.")
     parser.add_argument("--task-spec", type=Path, required=True, help="Validated TaskSpec JSON file")
     parser.add_argument(
+        "--system-name",
+        default=None,
+        help="Optional target system name override (defaults to TaskSpec name).",
+    )
+    parser.add_argument(
         "--auto-setup",
         action="store_true",
         help="Generate frozen fixtures and preflight artifacts in a separate sandbox before design.",
@@ -105,7 +114,7 @@ def main():
     args = parser.parse_args()
     task_spec = TaskSpec.from_file(args.task_spec)
     problem_statement = task_spec.system_goal
-    target_name = task_spec.name
+    target_name = args.system_name or task_spec.name
     logger.info(f"Running with arguments: {args}")
 
     if args.auto_setup or not setup_manifest_is_current(args.task_spec):

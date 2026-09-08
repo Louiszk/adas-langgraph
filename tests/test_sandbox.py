@@ -303,3 +303,163 @@ class TestSetupSandboxUtilities:
         mock_session.execute_command.return_value = mock_result
 
         assert run_sandbox_preflight(mock_session) is False
+
+
+class TestInvokeDesignCLI:
+    def test_system_name_override(self, tmp_path, monkeypatch):
+        import invoke_design
+        from adas_core.task_spec import TaskSpec
+
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "OriginalTaskName",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "persistence": {},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [
+                {
+                    "id": "case_1",
+                    "description": "Test case 1",
+                    "turns": [{"messages": [{"role": "user", "content": "hi"}]}],
+                }
+            ],
+        }
+        spec = TaskSpec.model_validate(spec_data)
+        spec.save(spec_file)
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+        mock_session.execute_command_streaming.return_value = ["chunk"]
+
+        with patch("invoke_design.setup_manifest_is_current", return_value=True), \
+             patch("invoke_design.StreamingSandboxSession", return_value=mock_session), \
+             patch("invoke_design.setup_sandbox_environment", return_value=True), \
+             patch("invoke_design.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"), \
+             patch("invoke_design.run_sandbox_preflight", return_value=True), \
+             patch("invoke_design.run_meta_system_in_sandbox") as mock_run_meta:
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_design.py", "--task-spec", str(spec_file), "--system-name", "CustomOverrideSystem"],
+            )
+            exit_code = invoke_design.main()
+            assert exit_code == 0
+            mock_run_meta.assert_called_once_with(mock_session, "Goal", "CustomOverrideSystem", None)
+
+
+class TestInvokeTargetCLI:
+    def test_invoke_target_without_task_spec(self, monkeypatch):
+        import invoke_target
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
+             patch("invoke_target.setup_sandbox_environment", return_value=True), \
+             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--state", '{"messages": ["hello"]}'],
+            )
+            exit_code = invoke_target.main()
+            assert exit_code == 0
+            mock_run_target.assert_called_once()
+            assert mock_run_target.call_args[0][1] == "TestSystem"
+            assert mock_run_target.call_args[0][2] == {"messages": ["hello"]}
+
+    def test_invoke_target_with_task_spec_and_preflight(self, tmp_path, monkeypatch):
+        import invoke_target
+        from adas_core.task_spec import TaskSpec
+
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "TargetTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "persistence": {},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [
+                {
+                    "id": "case_1",
+                    "description": "Test case 1",
+                    "turns": [{"messages": [{"role": "user", "content": "hi"}]}],
+                }
+            ],
+        }
+        spec = TaskSpec.model_validate(spec_data)
+        spec.save(spec_file)
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with patch("invoke_target.setup_manifest_is_current", return_value=True), \
+             patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
+             patch("invoke_target.setup_sandbox_environment", return_value=True), \
+             patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup") as mock_copy, \
+             patch("invoke_target.run_sandbox_preflight", return_value=True) as mock_preflight, \
+             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
+            )
+            exit_code = invoke_target.main()
+            assert exit_code == 0
+            mock_copy.assert_called_once()
+            mock_preflight.assert_called_once_with(mock_session, "/sandbox/task_setup")
+            mock_run_target.assert_called_once()
+
+    def test_invoke_target_aborts_on_preflight_failure(self, tmp_path, monkeypatch):
+        import invoke_target
+        from adas_core.task_spec import TaskSpec
+
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "TargetTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "persistence": {},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [
+                {
+                    "id": "case_1",
+                    "description": "Test case 1",
+                    "turns": [{"messages": [{"role": "user", "content": "hi"}]}],
+                }
+            ],
+        }
+        spec = TaskSpec.model_validate(spec_data)
+        spec.save(spec_file)
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with patch("invoke_target.setup_manifest_is_current", return_value=True), \
+             patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
+             patch("invoke_target.setup_sandbox_environment", return_value=True), \
+             patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"), \
+             patch("invoke_target.run_sandbox_preflight", return_value=False), \
+             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
+            )
+            exit_code = invoke_target.main()
+            assert exit_code == 1
+            mock_run_target.assert_not_called()
+
