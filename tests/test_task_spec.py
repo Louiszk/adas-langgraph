@@ -539,9 +539,7 @@ class TestHoldoutSuiteSpecModel:
         assert tf.get_file_paths_for_fixture_ids(["remote_neo4j", "no_path_custom"]) == []
 
     def test_get_file_paths_fails_loudly_on_invalid_fixture_path(self):
-        tf = TestFixturesSpec(
-            files=[FileFixtureSpec(id="sales_csv", path="sales.csv", description="Sales")]
-        )
+        tf = TestFixturesSpec(files=[FileFixtureSpec(id="sales_csv", path="sales.csv", description="Sales")])
         # Mutating the path post-construction must fail loudly rather than silently omitting it
         object.__setattr__(tf.files[0], "path", "../../outside.txt")
         with pytest.raises(ValueError, match="path traversal"):

@@ -24,5 +24,7 @@ fi
 if [ $# -gt 0 ]; then
     python scripts/orchestrator.py --task target "${CONTAINER_ARGS[@]}" "$@"
 else
-    python scripts/orchestrator.py --task target --container podman --system-names data_analyst_gpt5_v0
+    echo "Error: Target runs require a task specification (--task-spec) and system name (--system-names)." >&2
+    echo "Usage: sbatch scripts/slurm_target.sh --task-spec <path/to/task.json> --system-names <name> [options]" >&2
+    exit 1
 fi

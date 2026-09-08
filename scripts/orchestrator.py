@@ -496,14 +496,22 @@ class Orchestrator:
             return 2
 
         for iter_num in iterations:
+            if getattr(self.args, "benchmark", None):
+                sys_name = f"{approach}_{self.args.benchmark}{iter_num}_gpt"
+            else:
+                base_name = task_spec_path.stem.replace(".task", "")
+                sys_name = f"{approach}_{base_name}{iter_num}_gpt" if approach else f"{base_name}_{iter_num}"
+
             logger.info("=========================================================")
-            logger.info("   Running Design Generation for %s (run %s)", task_spec_path, iter_num)
+            logger.info("   Running Design Generation for %s (system: %s, run %s)", task_spec_path, sys_name, iter_num)
             logger.info("=========================================================")
             cmd = [
                 sys.executable,
-                "run_design.py",
+                "invoke_design.py",
                 "--task-spec",
                 str(task_spec_path.resolve()),
+                "--system-name",
+                sys_name,
                 "--container",
                 self.args.container,
             ]
@@ -525,9 +533,6 @@ class Orchestrator:
         state_json = getattr(self.args, "state", '{"messages": []}')
         data_gen_script = getattr(self.args, "data_gen_script", "")
 
-        Path("data/input").mkdir(parents=True, exist_ok=True)
-        Path("data/output").mkdir(parents=True, exist_ok=True)
-
         if data_gen_script and Path(data_gen_script).is_file():
             logger.info(f"--- Running Data Generation Script: {data_gen_script} ---")
             res_gen = subprocess.run([sys.executable, data_gen_script], check=False)
@@ -535,24 +540,16 @@ class Orchestrator:
                 logger.error("Data generation script failed.")
                 return 1
 
+        task_spec_arg = getattr(self.args, "task_spec", None)
+
         for sys_name in system_names:
             logger.info("-------------------------------------------------")
             logger.info(f" STARTING RUN FOR: {sys_name}")
             logger.info("-------------------------------------------------")
 
-            metrics_file = Path("generated_systems/metrics") / f"{sys_name}.json"
-            packages = DependencyParser.get_installed_packages(metrics_file)
-            image_to_use = None
-            temp_image_name: str | None = None
-
-            if packages:
-                temp_image_name = f"adas-temp-image-{self.unique_id}-{sys_name}"
-                if self.container_manager.create_temp_image(self._cached_sandbox_image(), temp_image_name, packages):
-                    image_to_use = temp_image_name
-
             cmd = [
                 sys.executable,
-                "test_target.py",
+                "invoke_target.py",
                 "--system_name",
                 sys_name,
                 "--state",
@@ -560,15 +557,12 @@ class Orchestrator:
                 "--container",
                 self.args.container,
             ]
-            if image_to_use:
-                cmd.extend(["--base-image", image_to_use])
+            if task_spec_arg:
+                cmd.extend(["--task-spec", str(Path(task_spec_arg).resolve())])
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))
             if res["exit_code"] != 0:
                 overall_exit = 1
-
-            if temp_image_name:
-                self.container_manager.remove_image(temp_image_name, force=True)
 
         return overall_exit
 
@@ -607,7 +601,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--task-spec",
         default=None,
-        help="Established TaskSpec file for design runs.",
+        help="Established TaskSpec file for design or target runs.",
     )
     parser.add_argument(
         "--system-names", nargs="+", default=["data_analyst_gpt5_v0"], help="System names for target execution."

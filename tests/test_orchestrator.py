@@ -95,3 +95,78 @@ def test_parse_args_positional_task():
     assert args.task == "design"
     assert args.benchmark == "gsm"
     assert args.iterations == "1-3"
+
+
+def test_parse_args_task_spec():
+    args = parse_args(
+        [
+            "--task",
+            "design",
+            "--task-spec",
+            "specs/my_task/task.json",
+        ]
+    )
+    assert args.task == "design"
+    assert args.task_spec == "specs/my_task/task.json"
+
+
+def test_orchestrator_run_design_command_construction(tmp_path: Path):
+    dummy_spec = tmp_path / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "design",
+            "--task-spec",
+            str(dummy_spec),
+            "--benchmark",
+            "gsm",
+            "--type",
+            "ablationC",
+            "--iterations",
+            "1",
+        ]
+    )
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        exit_code = orchestrator.run_design()
+        assert exit_code == 0
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1] == "invoke_design.py"
+        assert "--task-spec" in cmd
+        assert str(dummy_spec.resolve()) in cmd
+        assert "--system-name" in cmd
+        assert "ablationC_gsm1_gpt" in cmd
+
+
+def test_orchestrator_run_target_command_construction(tmp_path: Path):
+    dummy_spec = tmp_path / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "target",
+            "--task-spec",
+            str(dummy_spec),
+            "--system-names",
+            "test_sys",
+            "--state",
+            '{"messages": ["hi"]}',
+        ]
+    )
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        exit_code = orchestrator.run_target()
+        assert exit_code == 0
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1] == "invoke_target.py"
+        assert "--system_name" in cmd
+        assert "test_sys" in cmd
+        assert "--task-spec" in cmd
+        assert str(dummy_spec.resolve()) in cmd
