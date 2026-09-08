@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "name": "mmlu_pro",
+  "system_goal": "Design a system to solve multiple-choice questions in computer science. The system should be able to solve any multiple-choice question in computer science with high accuracy. The correct solution is not provided in the input, it must be generated entirely by the system. The system's final state must include the correct 'solution' as a single letter ('A', 'B', ..., 'J'). The system must not include any component that depends on an API key, except for the LargeLanguageModel instances.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "question": "str",
+      "options": "list[str]",
+      "solution": "str"
+    },
+    "persistence": null,
+    "required_tools": []
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": []
+  },
+  "dev_suite": [
+    {
+      "id": "case_0_smoke_binary_digits",
+      "description": "Smoke test: Identify the number of distinct values a single bit can represent.",
+      "turns": [
+        {
+          "question": "How many distinct values can a single binary digit (bit) represent?",
+          "options": [
+            "1",
+            "2",
+            "4",
+            "8",
+            "16",
+            "32",
+            "64",
+            "128",
+            "256",
+            "512"
+          ]
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' must equal 'B'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_1_sha1_digest",
+      "description": "SHA-1 message digest size question.",
+      "turns": [
+        {
+          "question": "SHA-1 has a message digest of",
+          "options": [
+            "628 bits",
+            "780 bits",
+            "160 bits",
+            "256 bits",
+            "2048 bits",
+            "820 bits",
+            "128 bits",
+            "512 bits",
+            "1024 bits",
+            "64 bits"
+          ]
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' must equal 'C'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_2_compiler_code_generation",
+      "description": "Compiler accumulator instruction count minimization question.",
+      "turns": [
+        {
+          "question": "A compiler generates code for the following assignment statement. G := (A + B) * C - (D + E) * F \nThe target machine has a single accumulator and a single-address instruction set consisting of instructions load, store, add, subtract, and multiply. For the arithmetic operations, the left operand is taken from the accumulator and the result appears in the accumulator. The smallest possible number of instructions in the resulting code is",
+          "options": [
+            "7",
+            "5",
+            "12",
+            "4",
+            "11",
+            "6",
+            "8",
+            "10",
+            "9",
+            "3"
+          ]
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' must equal 'I'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    }
+  ]
+}

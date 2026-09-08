@@ -336,13 +336,14 @@ class TestInvokeDesignCLI:
         mock_session.execute_command.return_value = ""
         mock_session.execute_command_streaming.return_value = ["chunk"]
 
-        with patch("invoke_design.setup_manifest_is_current", return_value=True), \
-             patch("invoke_design.StreamingSandboxSession", return_value=mock_session), \
-             patch("invoke_design.setup_sandbox_environment", return_value=True), \
-             patch("invoke_design.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"), \
-             patch("invoke_design.run_sandbox_preflight", return_value=True), \
-             patch("invoke_design.run_meta_system_in_sandbox") as mock_run_meta:
-
+        with (
+            patch("invoke_design.setup_manifest_is_current", return_value=True),
+            patch("invoke_design.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_design.setup_sandbox_environment", return_value=True),
+            patch("invoke_design.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"),
+            patch("invoke_design.run_sandbox_preflight", return_value=True),
+            patch("invoke_design.run_meta_system_in_sandbox") as mock_run_meta,
+        ):
             monkeypatch.setattr(
                 "sys.argv",
                 ["invoke_design.py", "--task-spec", str(spec_file), "--system-name", "CustomOverrideSystem"],
@@ -359,10 +360,11 @@ class TestInvokeTargetCLI:
         mock_session = MagicMock()
         mock_session.execute_command.return_value = ""
 
-        with patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
-             patch("invoke_target.setup_sandbox_environment", return_value=True), \
-             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
-
+        with (
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.run_target_system_in_sandbox") as mock_run_target,
+        ):
             monkeypatch.setattr(
                 "sys.argv",
                 ["invoke_target.py", "--system-name", "TestSystem", "--state", '{"messages": ["hello"]}'],
@@ -402,13 +404,14 @@ class TestInvokeTargetCLI:
         mock_session = MagicMock()
         mock_session.execute_command.return_value = ""
 
-        with patch("invoke_target.setup_manifest_is_current", return_value=True), \
-             patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
-             patch("invoke_target.setup_sandbox_environment", return_value=True), \
-             patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup") as mock_copy, \
-             patch("invoke_target.run_sandbox_preflight", return_value=True) as mock_preflight, \
-             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
-
+        with (
+            patch("invoke_target.setup_manifest_is_current", return_value=True),
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup") as mock_copy,
+            patch("invoke_target.run_sandbox_preflight", return_value=True) as mock_preflight,
+            patch("invoke_target.run_target_system_in_sandbox") as mock_run_target,
+        ):
             monkeypatch.setattr(
                 "sys.argv",
                 ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
@@ -448,13 +451,14 @@ class TestInvokeTargetCLI:
         mock_session = MagicMock()
         mock_session.execute_command.return_value = ""
 
-        with patch("invoke_target.setup_manifest_is_current", return_value=True), \
-             patch("invoke_target.StreamingSandboxSession", return_value=mock_session), \
-             patch("invoke_target.setup_sandbox_environment", return_value=True), \
-             patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"), \
-             patch("invoke_target.run_sandbox_preflight", return_value=False), \
-             patch("invoke_target.run_target_system_in_sandbox") as mock_run_target:
-
+        with (
+            patch("invoke_target.setup_manifest_is_current", return_value=True),
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"),
+            patch("invoke_target.run_sandbox_preflight", return_value=False),
+            patch("invoke_target.run_target_system_in_sandbox") as mock_run_target,
+        ):
             monkeypatch.setattr(
                 "sys.argv",
                 ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
@@ -462,4 +466,3 @@ class TestInvokeTargetCLI:
             exit_code = invoke_target.main()
             assert exit_code == 1
             mock_run_target.assert_not_called()
-

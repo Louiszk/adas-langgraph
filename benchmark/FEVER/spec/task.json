@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "name": "fever",
+  "system_goal": "Design a system to evaluate factual claims. These factual claims require careful verification against Wikipedia to assess their truthfulness. The system should decide for one of these three labels:\n- SUPPORTS: The claim is supported by factual evidence\n- REFUTES: The claim contradicts factual evidence\n- NOT ENOUGH INFO: There is insufficient evidence to determine if the claim is supported or refuted\n\nThe system should be able to evaluate any factual claim on any given domain with high accuracy. The correct prediction is not provided in the input, it must be generated entirely by the system. The system's final state must include the correct 'prediction' as exactly one of: 'SUPPORTS', 'REFUTES', 'NOT ENOUGH INFO'. The system must not include any component that depends on an API key, except for the LargeLanguageModel instances.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "claim": "str",
+      "prediction": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "wiki_search_tool",
+        "description": "Searches Wikipedia for relevant page titles given a query string."
+      },
+      {
+        "name": "wiki_content_tool",
+        "description": "Gets the summary content of a specific Wikipedia page title."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [
+    "wikipedia"
+  ],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": []
+  },
+  "dev_suite": [
+    {
+      "id": "case_0_smoke_earth_orbit",
+      "description": "Smoke test: Verify factual claim that Earth orbits the Sun.",
+      "turns": [
+        {
+          "claim": "The Earth revolves around the Sun."
+        }
+      ],
+      "expected_outputs": [
+        "prediction"
+      ],
+      "deterministic_criteria": "The final state 'prediction' must equal 'SUPPORTS'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_1_robert_richardson",
+      "description": "Evaluate claim: Robert Richardson has lived with Quentin Tarantino.",
+      "turns": [
+        {
+          "claim": "Robert Richardson has lived with Quentin Tarantino."
+        }
+      ],
+      "expected_outputs": [
+        "prediction"
+      ],
+      "deterministic_criteria": "The final state 'prediction' must equal 'NOT ENOUGH INFO'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_2_kingdom_hearts",
+      "description": "Evaluate claim: Kingdom Hearts III is owned by Boyz II Men.",
+      "turns": [
+        {
+          "claim": "Kingdom Hearts III is owned by Boyz II Men."
+        }
+      ],
+      "expected_outputs": [
+        "prediction"
+      ],
+      "deterministic_criteria": "The final state 'prediction' must equal 'REFUTES'.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    }
+  ]
+}

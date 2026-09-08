@@ -600,3 +600,78 @@ class TestHoldoutSuiteSpecModel:
                 task_name="CollisionTest",
                 holdout_suite=cases,
             )
+
+
+class TestExampleSpecs:
+    def test_example_specs_conform_to_schema(self):
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        example_specs_dir = repo_root / "example_specs"
+        assert example_specs_dir.is_dir(), "example_specs directory should exist"
+
+        spec_files = sorted(list(example_specs_dir.glob("*/task.json")))
+        assert len(spec_files) >= 1, f"Expected at least 1 example spec, found {len(spec_files)}"
+
+        expected_dirs = {"data_analyst"}
+        found_dirs = {p.parent.name for p in spec_files}
+        assert expected_dirs.issubset(found_dirs), f"Missing expected example specs: {expected_dirs - found_dirs}"
+
+        for spec_path in spec_files:
+            spec = TaskSpec.from_file(spec_path)
+            assert spec.name, f"Spec at {spec_path} must have a non-empty name"
+            assert spec.system_goal, f"Spec at {spec_path} must have a system_goal"
+            assert spec.architecture_contract.execution_mode in {"single_turn", "multi_turn"}
+            assert len(spec.dev_suite) > 0, f"Spec at {spec_path} must have at least one test case in dev_suite"
+
+
+class TestBenchmarkSpecs:
+    def test_benchmark_specs_conform_to_schema(self):
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        benchmark_dir = repo_root / "benchmark"
+        assert benchmark_dir.is_dir(), "benchmark directory should exist"
+
+        spec_files = sorted(list(benchmark_dir.glob("*/spec/task.json")))
+        assert len(spec_files) == 3, f"Expected 3 benchmark specs, found {len(spec_files)}"
+
+        expected_benchmarks = {"FEVER", "GSMHard", "MMLUPro"}
+        found_benchmarks = {p.parent.parent.name for p in spec_files}
+        assert expected_benchmarks == found_benchmarks, f"Mismatch in benchmark specs: {found_benchmarks}"
+
+        for spec_path in spec_files:
+            spec = TaskSpec.from_file(spec_path)
+            assert spec.name, f"Spec at {spec_path} must have a non-empty name"
+            assert spec.system_goal, f"Spec at {spec_path} must have a system_goal"
+            assert spec.architecture_contract.execution_mode in {"single_turn", "multi_turn"}
+            assert len(spec.dev_suite) >= 3, (
+                f"Spec at {spec_path} must have at least 3 dev test cases including smoke test"
+            )
+            assert spec.dev_suite[0].id.startswith("case_0_smoke"), f"First case in {spec_path} should be smoke test"
+
+    def test_benchmark_setup_manifests_are_current(self):
+        from pathlib import Path
+
+        from create_setup import setup_manifest_is_current
+
+        repo_root = Path(__file__).resolve().parent.parent
+        benchmark_dir = repo_root / "benchmark"
+        spec_files = sorted(list(benchmark_dir.glob("*/spec/task.json")))
+        assert len(spec_files) == 3, f"Expected 3 benchmark specs, found {len(spec_files)}"
+
+        for spec_path in spec_files:
+            spec_dir = spec_path.parent
+            manifest_file = spec_dir / "setup_manifest.json"
+            preflight_file = spec_dir / "preflight.py"
+            validation_files = list(spec_dir.glob("*.validation.py"))
+
+            assert manifest_file.is_file(), f"Missing setup_manifest.json for {spec_path}"
+            assert preflight_file.is_file(), f"Missing preflight.py for {spec_path}"
+            assert len(validation_files) == 1, (
+                f"Expected exactly 1 *.validation.py file in {spec_dir}, found {len(validation_files)}"
+            )
+            assert setup_manifest_is_current(spec_path), (
+                f"Setup manifest at {manifest_file} is not current for {spec_path}. "
+                "Task spec content hash does not match setup_manifest.json."
+            )

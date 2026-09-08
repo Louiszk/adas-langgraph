@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "name": "gsm_hard",
+  "system_goal": "Design a system to solve 'GSM-hard' problems. GSM-hard problems are complex grade-school math word problems that require careful reasoning and multi-step calculations. The system should be able to solve any problem from GSM-hard with high accuracy. The correct solution is not provided in the input, it must be generated entirely by the system. The system's final state must include the correct 'solution' as a float with at least three decimal places. The system must not include any component that depends on an API key, except for the LargeLanguageModel instances.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "problem": "str",
+      "solution": "float"
+    },
+    "persistence": null,
+    "required_tools": []
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": []
+  },
+  "dev_suite": [
+    {
+      "id": "case_0_smoke_simple_addition",
+      "description": "Smoke test: Solve a basic arithmetic word problem.",
+      "turns": [
+        {
+          "problem": "If John has 5 apples and buys 3 more apples, how many apples does John have in total?"
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' parsed as a float must be within 1e-3 of 8.000.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_1_program_downloads",
+      "description": "Calculate total program downloads across three months.",
+      "turns": [
+        {
+          "problem": "A new program had 531811 downloads in the first month. The number of downloads in the second month was three times as many as the downloads in the first month, but then reduced by 30% in the third month. How many downloads did the program have total over the three months?"
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' parsed as a float must be within 1e-3 of 3244047.100.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    },
+    {
+      "id": "case_2_ship_travel",
+      "description": "Calculate return travel time for sailing ship.",
+      "turns": [
+        {
+          "problem": "Tom's ship can travel at 10 miles per hour. He is sailing from 1 to 4 PM. He then travels back at a rate of 6 mph. How long does it take him to get back?"
+        }
+      ],
+      "expected_outputs": [
+        "solution"
+      ],
+      "deterministic_criteria": "The final state 'solution' parsed as a float must be within 1e-3 of 5.000.",
+      "llm_judge_needed": false,
+      "fixture_ids": []
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "files": {
+    "preflight.py": "4281bf10415698db153981ebbf2b5dc6514ab24bb904d1dcfb776c390a50dd28",
+    "task.json": "1dd3246f7dadd46c57885e3a6ce40de26b36b9795dac6b338e949c1f5eaa588e"
+  },
+  "required_packages": [],
+  "schema_version": "1.0",
+  "task_name": "gsm_hard",
+  "task_schema_version": "1.0"
+}

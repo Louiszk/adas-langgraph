@@ -1,0 +1,12 @@
+{
+  "files": {
+    "preflight.py": "93e2e0289d5647623d7b3be1ae3032ccf35512e37640ceed33bf12189ced1658",
+    "task.json": "b9047a811a3e49efec86d37969e728fe84b16d155cb7fc995b21a1256fe080b3"
+  },
+  "required_packages": [
+    "wikipedia"
+  ],
+  "schema_version": "1.0",
+  "task_name": "fever",
+  "task_schema_version": "1.0"
+}

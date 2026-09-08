@@ -9,6 +9,8 @@ exclude = [
     "generated_systems",
     "data",
     "specs",
+    "example_specs",
+    "benchmark/**/spec",
 ]
 
 [tool.pyright]
@@ -24,4 +26,6 @@ exclude = [
     "generated_systems/**",
     "data/**",
     "specs/**",
+    "example_specs/**",
+    "benchmark/**/spec/**",
 ]
