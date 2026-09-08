@@ -22,7 +22,11 @@ def install_packages(packages: list[str]) -> None:
 def write_manifest(task_spec: TaskSpec, task_dir: Path, packages: list[str]) -> Path:
     """Record the frozen setup output used by future design runs."""
     files = {
-        path.relative_to(task_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        path.relative_to(task_dir).as_posix(): hashlib.sha256(
+            path.read_bytes().replace(b"\r\n", b"\n")
+            if path.suffix in {".json", ".py", ".md", ".txt", ".yaml", ".yml"}
+            else path.read_bytes()
+        ).hexdigest()
         for path in sorted(task_dir.rglob("*"))
         if path.is_file() and path.name != "setup_manifest.json"
     }

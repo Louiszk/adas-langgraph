@@ -1,7 +1,7 @@
 {
   "files": {
     "preflight.py": "4281bf10415698db153981ebbf2b5dc6514ab24bb904d1dcfb776c390a50dd28",
-    "task.json": "1dd3246f7dadd46c57885e3a6ce40de26b36b9795dac6b338e949c1f5eaa588e"
+    "task.json": "688da6f1b995cd65b292c8a56cf64bf4974caf346a19cd1eec049775027096ee"
   },
   "required_packages": [],
   "schema_version": "1.0",

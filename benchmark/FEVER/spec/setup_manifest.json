@@ -1,7 +1,7 @@
 {
   "files": {
     "preflight.py": "93e2e0289d5647623d7b3be1ae3032ccf35512e37640ceed33bf12189ced1658",
-    "task.json": "b9047a811a3e49efec86d37969e728fe84b16d155cb7fc995b21a1256fe080b3"
+    "task.json": "069614e7b192b56a6079674793f19f8505f7d53ba59a40d0815ead1c23e8dcb6"
   },
   "required_packages": [
     "wikipedia"

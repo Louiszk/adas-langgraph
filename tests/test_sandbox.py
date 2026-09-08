@@ -180,6 +180,28 @@ class TestSetupSandboxUtilities:
         task_spec.write_text('{"name": "changed"}', encoding="utf-8")
         assert not setup_manifest_is_current(task_spec)
 
+    def test_setup_manifest_currentness_handles_crlf_and_lf(self, tmp_path):
+        import hashlib
+        import json
+
+        from create_setup import setup_manifest_is_current
+
+        task_spec = tmp_path / "task.json"
+        lf_content = b'{\n  "name": "cross_platform"\n}\n'
+        crlf_content = b'{\r\n  "name": "cross_platform"\r\n}\r\n'
+        lf_hash = hashlib.sha256(lf_content).hexdigest()
+
+        manifest_path = tmp_path / "setup_manifest.json"
+        manifest_path.write_text(json.dumps({"files": {"task.json": lf_hash}}), encoding="utf-8")
+
+        # When file on disk has CRLF (typical Windows checkout)
+        task_spec.write_bytes(crlf_content)
+        assert setup_manifest_is_current(task_spec)
+
+        # When file on disk has LF (typical Linux checkout)
+        task_spec.write_bytes(lf_content)
+        assert setup_manifest_is_current(task_spec)
+
     def test_package_pattern_validation(self):
         from adas_core.environment import _PACKAGE_PATTERN
         from sandbox.run_setup import install_packages

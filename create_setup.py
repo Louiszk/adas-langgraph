@@ -22,10 +22,22 @@ def setup_manifest_is_current(task_spec_path: Path) -> bool:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         expected_hash = manifest.get("files", {}).get("task.json")
-        current_hash = hashlib.sha256(task_spec_path.read_bytes()).hexdigest()
+        if not isinstance(expected_hash, str):
+            return False
+        raw_bytes = task_spec_path.read_bytes()
+        current_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if expected_hash == current_hash:
+            return True
+        # Check newline-normalized hashes to remain robust across Windows (CRLF) and Linux (LF)
+        lf_hash = hashlib.sha256(raw_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        if expected_hash == lf_hash:
+            return True
+        crlf_hash = hashlib.sha256(raw_bytes.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")).hexdigest()
+        if expected_hash == crlf_hash:
+            return True
     except (OSError, json.JSONDecodeError):
         return False
-    return isinstance(expected_hash, str) and expected_hash == current_hash
+    return False
 
 
 def _copy_tree_from_runtime(session: StreamingSandboxSession, runtime_dir: str, destination: Path) -> None:
