@@ -13,8 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from adas_core.logging_config import get_logger, setup_logging
-from sandbox.sandbox import ensure_cached_sandbox_image
+# Ensure repository root is on sys.path when invoked directly as a script
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from adas_core.logging_config import get_logger, setup_logging  # noqa: E402
+from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
 
 logger = get_logger("orchestrator")
 
@@ -530,7 +535,8 @@ class Orchestrator:
         if not system_names:
             system_names = ["data_analyst_gpt5_v0"]
 
-        state_json = getattr(self.args, "state", '{"messages": []}')
+        state_json = getattr(self.args, "state", None)
+        state_file_arg = getattr(self.args, "state_file", None)
         data_gen_script = getattr(self.args, "data_gen_script", "")
 
         if data_gen_script and Path(data_gen_script).is_file():
@@ -552,17 +558,27 @@ class Orchestrator:
                 "invoke_target.py",
                 "--system_name",
                 sys_name,
-                "--state",
-                state_json,
                 "--container",
                 self.args.container,
             ]
+            if state_file_arg:
+                cmd.extend(["--state-file", str(Path(state_file_arg).resolve())])
+            elif state_json:
+                cmd.extend(["--state", state_json])
+            else:
+                cmd.extend(["--state", '{"messages": []}'])
+
             if task_spec_arg:
                 cmd.extend(["--task-spec", str(Path(task_spec_arg).resolve())])
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))
             if res["exit_code"] != 0:
                 overall_exit = 1
+                logger.error("Target execution failed for %s with exit code %s", sys_name, res["exit_code"])
+                if res.get("stderr"):
+                    logger.error("STDERR:\n%s", res["stderr"])
+                if res.get("stdout"):
+                    logger.info("STDOUT:\n%s", res["stdout"])
 
         return overall_exit
 
@@ -606,7 +622,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--system-names", nargs="+", default=["data_analyst_gpt5_v0"], help="System names for target execution."
     )
-    parser.add_argument("--state", default='{"messages": []}', help="Initial JSON state string for target execution.")
+    parser.add_argument("--state", default=None, help="Initial JSON state string for target execution.")
+    parser.add_argument(
+        "--state-file",
+        type=Path,
+        default=None,
+        help="Path to initial JSON state file for target execution.",
+    )
     parser.add_argument(
         "--data-gen-script", default="", help="Optional script for generating input data before running target."
     )

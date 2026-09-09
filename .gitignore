@@ -21,11 +21,13 @@ adasvenv2/
 /generated_systems
 /sandbox/workspace
 /benchmark/*/*.json
+/target_metrics
 /specs
 
 # CLI Agents
 AGENTS.md
 GEMINI.md
 CLAUDE.md
+/scratch
 *plan.md
 *log.md

@@ -436,13 +436,95 @@ class TestInvokeTargetCLI:
         ):
             monkeypatch.setattr(
                 "sys.argv",
-                ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
+                [
+                    "invoke_target.py",
+                    "--system_name",
+                    "TargetTask_v0",
+                    "--task-spec",
+                    str(spec_file),
+                    "--state",
+                    '{"messages": [{"role": "user", "content": "hi"}]}',
+                ],
             )
             exit_code = invoke_target.main()
             assert exit_code == 0
             mock_copy.assert_called_once()
             mock_preflight.assert_called_once_with(mock_session, "/sandbox/task_setup")
             mock_run_target.assert_called_once()
+            assert mock_run_target.call_args[0][1] == "TargetTask_v0"
+            assert mock_run_target.call_args[0][2] == {"messages": [{"role": "user", "content": "hi"}]}
+            assert mock_run_target.call_args[1]["task_dir"] == "/sandbox/task_setup"
+
+    def test_invoke_target_with_state_file(self, tmp_path, monkeypatch):
+        import invoke_target
+
+        state_file = tmp_path / "custom_state.json"
+        state_file.write_text('{"analysis_task": "sales"}', encoding="utf-8")
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with (
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.run_target_system_in_sandbox") as mock_run_target,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--state-file", str(state_file)],
+            )
+            exit_code = invoke_target.main()
+            assert exit_code == 0
+            mock_run_target.assert_called_once()
+            assert mock_run_target.call_args[0][2] == {"analysis_task": "sales"}
+            assert mock_run_target.call_args[1]["task_dir"] is None
+
+    def test_invoke_target_with_missing_state_file_fails(self, tmp_path, monkeypatch):
+        import invoke_target
+
+        missing_state_file = tmp_path / "non_existent.json"
+
+        mock_session = MagicMock()
+
+        with (
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.run_target_system_in_sandbox") as mock_run_target,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--state-file", str(missing_state_file)],
+            )
+            exit_code = invoke_target.main()
+            assert exit_code == 1
+            mock_run_target.assert_not_called()
+
+    def test_invoke_target_requires_state(self, monkeypatch):
+        import invoke_target
+
+        monkeypatch.setattr("sys.argv", ["invoke_target.py", "--system-name", "TestSystem"])
+        with pytest.raises(SystemExit, match="2"):
+            invoke_target.main()
+
+    def test_run_target_system_in_sandbox_command_formatting(self):
+        import invoke_target
+
+        mock_session = MagicMock()
+        mock_session.execute_command_streaming.return_value = ["__ADAS_TARGET_EXIT__0\n"]
+
+        assert invoke_target.run_target_system_in_sandbox(
+            session=mock_session,
+            system_name="MySystem",
+            state={"query": "test"},
+            run_id="run_123",
+            task_dir="/sandbox/workspace/task_setup",
+        )
+
+        mock_session.execute_command_streaming.assert_called_once()
+        cmd = mock_session.execute_command_streaming.call_args[0][0]
+        assert "--system_name=MySystem" in cmd
+        assert "--run-id=run_123" in cmd
+        assert "--task-dir=/sandbox/workspace/task_setup" in cmd
+        assert "--state='{" + '"query": "test"' + "}'" in cmd
 
     def test_invoke_target_aborts_on_preflight_failure(self, tmp_path, monkeypatch):
         import invoke_target
@@ -483,7 +565,7 @@ class TestInvokeTargetCLI:
         ):
             monkeypatch.setattr(
                 "sys.argv",
-                ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file)],
+                ["invoke_target.py", "--system_name", "TargetTask_v0", "--task-spec", str(spec_file), "--state", "{}"],
             )
             exit_code = invoke_target.main()
             assert exit_code == 1

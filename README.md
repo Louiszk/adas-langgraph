@@ -114,14 +114,16 @@ python invoke_design.py --task-spec example_specs/data_analyst/task.json --syste
 * `--optimize-system`: Specify existing target system name to optimize/refine.
 * `--reinstall`: Force re-installation of dependencies.
 
-### 5. Execute & Verify Target System (`invoke_target.py`)
-Execute a materialized target system in the sandbox against the task fixtures and test suite, or with custom state:
+### 5. Execute Target System (`invoke_target.py`)
+Execute a materialized target system in the sandbox with custom state and task fixtures:
 ```bash
-# Verify against task suite and fixtures:
-python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst/task.json
+# Invoke with custom state and task fixtures:
+python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst/task.json --state '{"analysis_task": "Analyze sales.csv"}'
 
-# Or invoke with direct JSON input state:
-python invoke_target.py --system-name data_analyst_iter1_gpt --state '{"analysis_task": "Analyze sales.csv"}'
+# Or invoke using a JSON state file:
+python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst/task.json --state-file path/to/state.json
+
+# --state and --state-file are mutually exclusive; one is required.
 ```
 
 ---
@@ -133,7 +135,7 @@ The repository includes a central Python engine (`scripts/orchestrator.py`) and 
 #### 1. Python Orchestrator (`scripts/orchestrator.py`)
 The orchestrator manages base and temporary container builds via the Docker Python SDK, dependency parsing from JSON metrics files, execution timeout enforcement, and CSV/text result aggregation.
 
-Run via standard module invocation (`python -m scripts.orchestrator`):
+Run via standard module invocation (`python -m scripts.orchestrator`) or direct script execution (`python scripts/orchestrator.py`):
 
 * **Run Benchmarks:**
   ```bash
@@ -146,8 +148,8 @@ Run via standard module invocation (`python -m scripts.orchestrator`):
 * **Run Target Systems:**
   ```bash
   python -m scripts.orchestrator --task target --system-names data_analyst_gpt5_v0 --state '{"messages": []}'
-  # Or with a task specification:
-  python -m scripts.orchestrator --task target --task-spec example_specs/data_analyst/task.json --system-names data_analyst_iter1_gpt
+  # Or with a task specification and state file:
+  python -m scripts.orchestrator --task target --task-spec example_specs/data_analyst/task.json --system-names data_analyst_iter1_gpt --state-file path/to/state.json
   ```
 
 #### 2. HPC / SLURM Wrappers
