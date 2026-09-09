@@ -14,6 +14,7 @@ from adas_core.environment import (
     SANDBOX_TARGET_METRICS_DIR,
     SANDBOX_WORKSPACE_DIR,
 )
+from adas_core.helpers import validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
 from create_setup import run_setup_for_task, setup_manifest_is_current
 from sandbox.sandbox import (
@@ -119,6 +120,12 @@ def main() -> int:
     )
 
     args: argparse.Namespace = parser.parse_args()
+
+    try:
+        validate_identifier(args.system_name, field_name="target system name")
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 

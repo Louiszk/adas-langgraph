@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 from pathlib import Path
 
 from adas_core.environment import (
     SANDBOX_FIXTURES_DIR,
     SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TASK_SPEC_PATH,
     SANDBOX_WORKSPACE_DIR,
 )
-from adas_core.helpers import escape_system_name
+from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from config import settings
@@ -28,58 +30,80 @@ logger = get_logger("invoke_design")
 
 def run_meta_system_in_sandbox(
     session: StreamingSandboxSession,
-    problem_statement,
-    target_name,
-    optimize_system=None,
-):
-    quoted_problem = problem_statement.replace('"', '\\"')
-    command = (
-        f"ADAS_FIXTURES_DIR={SANDBOX_FIXTURES_DIR} "
-        "ADAS_WORKSPACE_ROOT=/tmp/adas-runs "
-        f'python3 {SANDBOX_WORKSPACE_DIR}/run_meta.py "{quoted_problem}" "{target_name}" "{settings.max_iterations}" '
-    )
-    command += f'"{optimize_system}"' if optimize_system else ""
+    target_name: str,
+    optimize_system: str | None = None,
+) -> bool:
+    escaped_target_name = escape_system_name(target_name)
+    target_file_name = escaped_target_name + ".py"
+    target_pickle_name = escaped_target_name + ".pkl"
+    metrics_file = f"{escaped_target_name}.json"
 
+    cmd_parts = [
+        f"ADAS_FIXTURES_DIR={shlex.quote(SANDBOX_FIXTURES_DIR)}",
+        f"ADAS_WORKSPACE_ROOT={shlex.quote('/tmp/adas-runs')}",
+        "python3",
+        f"{SANDBOX_WORKSPACE_DIR}/run_meta.py",
+        f"--task-spec={shlex.quote(SANDBOX_TASK_SPEC_PATH)}",
+        f"--system-name={shlex.quote(target_name)}",
+        f"--max-iterations={shlex.quote(str(settings.max_iterations))}",
+    ]
+    if optimize_system:
+        cmd_parts.append(f"--optimize-system={shlex.quote(optimize_system)}")
+
+    command = (
+        " ".join(cmd_parts) + '; meta_exit=$?; printf \'\\n__ADAS_META_EXIT__%s\\n\' "$meta_exit"; exit "$meta_exit"'
+    )
+
+    logger.info(f"Executing Meta-System Design Optimization for: {target_name}")
+
+    output_chunks: list[str] = []
     for chunk in session.execute_command_streaming(command):
+        output_chunks.append(chunk)
         print(chunk, end="", flush=True)
 
-    logger.info("Meta system execution completed!")
+    meta_succeeded = "__ADAS_META_EXIT__0" in "".join(output_chunks)
+    if not meta_succeeded:
+        logger.error("Meta system execution failed inside container")
+        return False
 
-    if "generated_systems" in str(session.execute_command(f"ls -la {SANDBOX_WORKSPACE_DIR}")):
-        logger.info("Copying generated systems and metrics back to host...")
-        os.makedirs("generated_systems", exist_ok=True)
-        escaped_target_name = escape_system_name(target_name)
-        target_file_name = escaped_target_name + ".py"
-        target_pickle_name = escaped_target_name + ".pkl"
+    logger.info("Meta system execution completed in sandbox. Copying generated systems and metrics back to host...")
+    os.makedirs("generated_systems", exist_ok=True)
 
-        as_dir = str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}"))
-        if target_file_name in as_dir:
-            session.copy_from_runtime(
-                f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_file_name}",
-                f"generated_systems/{target_file_name}",
-            )
-        if target_pickle_name in as_dir:
-            session.copy_from_runtime(
-                f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_pickle_name}",
-                f"generated_systems/{target_pickle_name}",
-            )
-        logger.info(f"Copied {target_file_name} and .pkl back to host")
+    # Verify and copy target code
+    as_dir = str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}"))
+    if target_file_name not in as_dir or target_pickle_name not in as_dir:
+        logger.error(
+            f"Expected artifacts {target_file_name} and/or {target_pickle_name} not found in {SANDBOX_GENERATED_SYSTEMS_DIR}"
+        )
+        return False
 
-        if "metrics" in str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}")):
-            metrics_file = f"{escaped_target_name}.json"
+    session.copy_from_runtime(
+        f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_file_name}",
+        f"generated_systems/{target_file_name}",
+    )
+    session.copy_from_runtime(
+        f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{target_pickle_name}",
+        f"generated_systems/{target_pickle_name}",
+    )
+    logger.info(f"Copied {target_file_name} and {target_pickle_name} back to host")
 
-            if metrics_file in str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}/metrics")):
-                os.makedirs("generated_systems/metrics", exist_ok=True)
-                session.copy_from_runtime(
-                    f"{SANDBOX_GENERATED_SYSTEMS_DIR}/metrics/{metrics_file}",
-                    f"generated_systems/metrics/{metrics_file}",
-                )
-                logger.info(f"Copied metrics file {metrics_file} back to host")
+    # Verify and copy metrics artifact
+    metrics_listing = str(session.execute_command(f"ls -la {SANDBOX_GENERATED_SYSTEMS_DIR}/metrics"))
+    if metrics_file not in metrics_listing:
+        logger.error(f"Expected metrics artifact {metrics_file} not found in {SANDBOX_GENERATED_SYSTEMS_DIR}/metrics")
+        return False
+
+    os.makedirs("generated_systems/metrics", exist_ok=True)
+    session.copy_from_runtime(
+        f"{SANDBOX_GENERATED_SYSTEMS_DIR}/metrics/{metrics_file}",
+        f"generated_systems/metrics/{metrics_file}",
+    )
+    logger.info(f"Copied metrics file {metrics_file} back to host")
 
     return True
 
 
-def main():
+def main() -> int:
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run agentic systems in a sandboxed environment")
@@ -113,9 +137,38 @@ def main():
     )
     args = parser.parse_args()
     task_spec = TaskSpec.from_file(args.task_spec)
-    problem_statement = task_spec.system_goal
     target_name = args.system_name or task_spec.name
     logger.info(f"Running with arguments: {args}")
+
+    # Validate identifiers strictly before any container or file operations
+    try:
+        validate_identifier(target_name, field_name="target system name")
+        if args.optimize_system:
+            validate_identifier(args.optimize_system, field_name="optimize system name")
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
+
+    task_dir = args.task_spec.resolve().parent
+
+    # Host-side check: ensure frozen validation module exists BEFORE setup or opening sandbox
+    safe_spec_name = sanitize_identifier(task_spec.name)
+    validation_candidates = [
+        task_dir / f"{safe_spec_name}.validation.py",
+        task_dir / f"{task_spec.name}.validation.py",
+        task_dir / "validation.py",
+    ]
+    validation_file = next((p for p in validation_candidates if p.exists()), None)
+    if validation_file is None:
+        logger.error(
+            "Frozen validation module not found for TaskSpec '%s' in %s. "
+            "Please generate it before running design optimization: "
+            "python create_validation.py --task-spec %s",
+            task_spec.name,
+            task_dir,
+            args.task_spec,
+        )
+        return 1
 
     if args.auto_setup or not setup_manifest_is_current(args.task_spec):
         logger.info(
@@ -130,8 +183,6 @@ def main():
             base_image=args.base_image,
         )
 
-    task_dir = args.task_spec.resolve().parent
-
     session = StreamingSandboxSession(
         image=args.base_image,
         verbose=True,
@@ -143,8 +194,17 @@ def main():
         if setup_sandbox_environment(session, args.reinstall):
             runtime_task_dir = copy_task_setup_to_sandbox(session, task_dir, args.task_spec.resolve())
             if run_sandbox_preflight(session, runtime_task_dir):
-                run_meta_system_in_sandbox(session, problem_statement, target_name, args.optimize_system)
-                logger.info("Finished successfully!")
+                success = run_meta_system_in_sandbox(
+                    session=session,
+                    target_name=target_name,
+                    optimize_system=args.optimize_system,
+                )
+                if success:
+                    logger.info("Finished successfully!")
+                    return 0
+                else:
+                    logger.error("Meta system execution failed.")
+                    return 1
             else:
                 return 1
         else:
@@ -156,7 +216,6 @@ def main():
     finally:
         logger.info("Session closed.")
         session.close()
-    return 0
 
 
 if __name__ == "__main__":

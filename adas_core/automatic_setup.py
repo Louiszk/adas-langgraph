@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.helpers import normalize_fixture_path, normalize_future_imports
+from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
 from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
@@ -319,7 +319,7 @@ class AutomaticSetup:
             clean_rel = normalize_fixture_path(file_fix.path)
             clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
             generator_script_dest = fixtures_dir / f"generate_{clean_name}.py"
-            generator_script_dest.write_text(code, encoding="utf-8")
+            safe_write_text(generator_script_dest, code, root_dir=fixtures_dir)
             created_files.append(generator_script_dest)
             discovered_packages.update(reqs)
 
@@ -327,7 +327,7 @@ class AutomaticSetup:
         for db_fix in task_spec.test_fixtures.databases:
             db_script_dest = fixtures_dir / f"seed_{db_fix.name}.py"
             code, reqs = self.generate_database_seed_script(task_spec, db_fix)
-            db_script_dest.write_text(code, encoding="utf-8")
+            safe_write_text(db_script_dest, code, root_dir=fixtures_dir)
             created_files.append(db_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated database seed script: {db_script_dest}")
@@ -336,7 +336,7 @@ class AutomaticSetup:
         for mcp_fix in task_spec.test_fixtures.mcps:
             mcp_script_dest = fixtures_dir / f"mock_{mcp_fix.name}.py"
             code, reqs = self.generate_mcp_server_script(task_spec, mcp_fix)
-            mcp_script_dest.write_text(code, encoding="utf-8")
+            safe_write_text(mcp_script_dest, code, root_dir=fixtures_dir)
             created_files.append(mcp_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated MCP server script: {mcp_script_dest}")
@@ -345,7 +345,7 @@ class AutomaticSetup:
         for mock_fix in task_spec.test_fixtures.mock_services:
             mock_dest = fixtures_dir / f"mock_{mock_fix.name}.py"
             code, reqs = self.generate_mock_service_script(task_spec, mock_fix)
-            mock_dest.write_text(code, encoding="utf-8")
+            safe_write_text(mock_dest, code, root_dir=fixtures_dir)
             created_files.append(mock_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated mock service script: {mock_dest}")
@@ -354,7 +354,7 @@ class AutomaticSetup:
         for custom_fix in task_spec.test_fixtures.custom_fixtures:
             cust_dest = fixtures_dir / f"setup_{custom_fix.name}.py"
             code, reqs = self.generate_custom_fixture_script(task_spec, custom_fix)
-            cust_dest.write_text(code, encoding="utf-8")
+            safe_write_text(cust_dest, code, root_dir=fixtures_dir)
             created_files.append(cust_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated custom fixture script: {cust_dest}")
@@ -363,7 +363,7 @@ class AutomaticSetup:
         all_packages = sorted(list(discovered_packages))
         preflight_code = self.generate_preflight_script(task_spec, all_packages)
         preflight_path = root / "preflight.py"
-        preflight_path.write_text(preflight_code, encoding="utf-8")
+        safe_write_text(preflight_path, preflight_code, root_dir=root)
         created_files.append(preflight_path)
         logger.info(f"Generated preflight verification module: {preflight_path}")
 

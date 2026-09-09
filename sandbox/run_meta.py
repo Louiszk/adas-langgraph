@@ -1,7 +1,9 @@
+import argparse
 import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, cast
 
 import dill as pickle
@@ -12,7 +14,7 @@ from adas_core.environment import (
     SANDBOX_TASK_SPEC_PATH,
     SANDBOX_WORKSPACE_DIR,
 )
-from adas_core.helpers import escape_system_name
+from adas_core.helpers import escape_system_name, validate_identifier
 
 sys.path.append(SANDBOX_WORKSPACE_DIR)
 from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
@@ -25,9 +27,9 @@ logger = get_logger("run_meta")
 _TASK_SPEC_PATH = SANDBOX_TASK_SPEC_PATH
 
 
-def load_visible_task_spec() -> TaskSpec:
+def load_visible_task_spec(spec_path: Path | str = _TASK_SPEC_PATH) -> TaskSpec:
     """Load the visible TaskSpec and configure the target-model allow list."""
-    task_spec = TaskSpec.from_file(_TASK_SPEC_PATH)
+    task_spec = TaskSpec.from_file(Path(spec_path))
     ChatModel.allowed_target_models = [m.model_dump() for m in task_spec.available_models]
     return task_spec
 
@@ -43,12 +45,43 @@ def load_visible_task_context(task_spec: TaskSpec) -> str:
     )
 
 
-def main():
+def main() -> int:
     setup_logging()
     start_time = time.time()
+
+    parser = argparse.ArgumentParser(description="Run meta-system design optimization in sandbox.")
+    parser.add_argument(
+        "--task-spec",
+        type=Path,
+        default=Path(_TASK_SPEC_PATH),
+        help="Path to TaskSpec JSON file (defaults to SANDBOX_TASK_SPEC_PATH)",
+    )
+    parser.add_argument(
+        "--system-name",
+        required=True,
+        help="Target system name",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=30,
+        help="Maximum design loop iterations",
+    )
+    parser.add_argument(
+        "--optimize-system",
+        default=None,
+        help="Name of existing system to optimize from",
+    )
+    args = parser.parse_args()
+
+    system_name = args.system_name
+    max_iterations = args.max_iterations
+    optimize_from_file = args.optimize_system
+    task_spec_path = args.task_spec
+
     metrics = {
-        "system_name": "",
-        "duration_seconds": 0,
+        "system_name": system_name,
+        "duration_seconds": 0.0,
         "iterations": 0,
         "usage_metrics": {},
         "status": "started",
@@ -56,36 +89,25 @@ def main():
         "stream_content": "",
         "installed_packages": "",
     }
-
-    if len(sys.argv) < 3:
-        raise ValueError(
-            "run_meta.py requires at least 2 arguments: <problem_statement> <system_name> [max_iterations] [optimize_from_file]"
-        )
-
-    problem_statement = sys.argv[1]
-    system_name = sys.argv[2]
-
-    max_iterations = 30
-    if len(sys.argv) >= 4:
-        max_iterations = int(sys.argv[3])
-
-    optimize_from_file = None
-    if len(sys.argv) >= 5:
-        optimize_from_file = sys.argv[4]
+    if optimize_from_file:
         metrics["optimize_from_file"] = optimize_from_file
 
-    metrics["system_name"] = system_name
-    try:
-        task_spec = load_visible_task_spec()
-        problem_statement += load_visible_task_context(task_spec)
-    except Exception as exc:
-        raise RuntimeError(f"Could not load visible TaskSpec context: {exc}") from exc
-    metrics["problem_statement"] = problem_statement
-    logger.info(f"Running meta system for '{system_name}'...")
-
     target_agentic_system: VirtualAgenticSystem | None = None
+    design_completed = False
+    success = False
+    task_spec: TaskSpec | None = None
+    problem_statement = ""
 
     try:
+        validate_identifier(system_name, field_name="system-name")
+        if optimize_from_file:
+            validate_identifier(optimize_from_file, field_name="optimize-system")
+
+        task_spec = load_visible_task_spec(task_spec_path)
+        problem_statement = task_spec.system_goal + load_visible_task_context(task_spec)
+        metrics["problem_statement"] = problem_statement
+        logger.info(f"Running meta system for '{system_name}'...")
+
         if optimize_from_file:
             path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/" + escape_system_name(optimize_from_file)
             try:
@@ -99,6 +121,8 @@ def main():
         else:
             target_agentic_system = VirtualAgenticSystem(system_name)
 
+        task_dir_path = str(task_spec_path.parent) if task_spec_path.parent.name else SANDBOX_TASK_SETUP_DIR
+
         inputs = {
             "messages": [],
             "initial_task": problem_statement,
@@ -106,7 +130,7 @@ def main():
             "optimize": bool(optimize_from_file),
             "max_iterations": max_iterations,
             "task_spec": task_spec,
-            "task_dir": SANDBOX_TASK_SETUP_DIR,
+            "task_dir": task_dir_path,
         }
 
         processed_msg_count = 0
@@ -135,9 +159,23 @@ def main():
 
                     if out.get("design_completed"):
                         logger.info("Design completed.")
-                        metrics["status"] = "completed"
+                        design_completed = True
 
-        metrics["status"] = "completed"
+        escaped_name = escape_system_name(system_name)
+        final_system_path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{escaped_name}.pkl"
+        final_code_path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{escaped_name}.py"
+        if design_completed and os.path.exists(final_system_path) and os.path.exists(final_code_path):
+            metrics["status"] = "completed"
+            success = True
+        else:
+            metrics["status"] = "error"
+            if not design_completed:
+                reason = "Design loop ended without design_completed flag."
+            else:
+                reason = f"Expected artifacts not found: {final_system_path} and/or {final_code_path}"
+            logger.error(f"Design did not complete successfully: {reason}")
+            metrics["error"] = {"message": reason}
+            success = False
 
     except Exception as e:
         import traceback
@@ -147,6 +185,7 @@ def main():
 
         metrics["status"] = "error"
         metrics["error"] = {"message": repr(e), "traceback": error_traceback}
+        success = False
 
     finally:
         # Finalize metrics
@@ -176,6 +215,11 @@ def main():
 
         logger.info(f"Metrics saved to {metrics_file}")
 
+    if not success:
+        logger.error("Meta system execution failed or did not produce completed artifact.")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

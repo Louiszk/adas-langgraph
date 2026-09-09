@@ -354,6 +354,9 @@ class TestInvokeDesignCLI:
         spec = TaskSpec.model_validate(spec_data)
         spec.save(spec_file)
 
+        # Seed the validation file so host-side check passes
+        (tmp_path / "OriginalTaskName.validation.py").touch()
+
         mock_session = MagicMock()
         mock_session.execute_command.return_value = ""
         mock_session.execute_command_streaming.return_value = ["chunk"]
@@ -364,7 +367,7 @@ class TestInvokeDesignCLI:
             patch("invoke_design.setup_sandbox_environment", return_value=True),
             patch("invoke_design.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"),
             patch("invoke_design.run_sandbox_preflight", return_value=True),
-            patch("invoke_design.run_meta_system_in_sandbox") as mock_run_meta,
+            patch("invoke_design.run_meta_system_in_sandbox", return_value=True) as mock_run_meta,
         ):
             monkeypatch.setattr(
                 "sys.argv",
@@ -372,10 +375,66 @@ class TestInvokeDesignCLI:
             )
             exit_code = invoke_design.main()
             assert exit_code == 0
-            mock_run_meta.assert_called_once_with(mock_session, "Goal", "CustomOverrideSystem", None)
+            mock_run_meta.assert_called_once_with(
+                session=mock_session,
+                target_name="CustomOverrideSystem",
+                optimize_system=None,
+            )
+
+    def test_fails_early_when_validation_missing_on_host(self, tmp_path, monkeypatch):
+        import invoke_design
+        from adas_core.task_spec import TaskSpec
+
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "MissingValidationTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "persistence": {},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [
+                {
+                    "id": "case_1",
+                    "description": "Test case 1",
+                    "turns": [{"messages": [{"role": "user", "content": "hi"}]}],
+                }
+            ],
+        }
+        spec = TaskSpec.model_validate(spec_data)
+        spec.save(spec_file)
+
+        with (
+            patch("invoke_design.run_setup_for_task") as mock_run_setup,
+            patch("invoke_design.setup_manifest_is_current", return_value=False),
+            patch("invoke_design.StreamingSandboxSession") as mock_session_cls,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_design.py", "--task-spec", str(spec_file), "--auto-setup"],
+            )
+            exit_code = invoke_design.main()
+            assert exit_code == 1
+            # Must fail before running auto-setup or opening a sandbox session
+            mock_run_setup.assert_not_called()
+            mock_session_cls.assert_not_called()
 
 
 class TestInvokeTargetCLI:
+    def test_invoke_target_rejects_invalid_system_name(self, monkeypatch):
+        import invoke_target
+
+        with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "Bad/System", "--state", "{}"],
+            )
+            assert invoke_target.main() == 1
+        mock_session_cls.assert_not_called()
+
     def test_invoke_target_without_task_spec(self, monkeypatch):
         import invoke_target
 

@@ -1,10 +1,12 @@
 import concurrent.futures
 import json
 import os
+import shlex
 from collections.abc import Callable
 from typing import Any
 
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
+from adas_core.helpers import validate_identifier
 from adas_core.logging_config import get_logger
 
 logger = get_logger("benchmark_base")
@@ -166,6 +168,12 @@ def run_benchmark_in_sandbox(
     required_packages: list[str] | None = None,
 ) -> bool:
     """Shared implementation for executing benchmarks inside an isolated sandbox session."""
+    try:
+        validate_identifier(system_name, field_name="benchmark system name")
+    except ValueError as exc:
+        logger.error(str(exc))
+        return False
+
     logger.info(f"Running {benchmark_name} benchmark for system: {system_name}")
 
     base_path = f"benchmark/{benchmark_name}"
@@ -195,11 +203,21 @@ def run_benchmark_in_sandbox(
                 session.execute_command(f"pip install {pkg}")
 
     # Run the benchmark
-    command = f'python3 {SANDBOX_WORKSPACE_DIR}/{runner_script} --system="{system_name}"'
+    command = (
+        f"python3 {SANDBOX_WORKSPACE_DIR}/{runner_script} --system={shlex.quote(system_name)}"
+        + '; bench_exit=$?; printf \'\\n__ADAS_BENCH_EXIT__%s\\n\' "$bench_exit"; exit "$bench_exit"'
+    )
     logger.info(f"Executing command: {command}")
 
+    output_chunks: list[str] = []
     for chunk in session.execute_command_streaming(command):
+        output_chunks.append(chunk)
         print(chunk, end="", flush=True)
+
+    bench_succeeded = "__ADAS_BENCH_EXIT__0" in "".join(output_chunks)
+    if not bench_succeeded:
+        logger.error("Benchmark execution failed in container")
+        return False
 
     logger.info("Benchmark execution completed!")
 
@@ -212,14 +230,16 @@ def run_benchmark_in_sandbox(
             f"{base_path}/results/{results_file}",
         )
         logger.info(f"Copied benchmark results back to host as {results_file}")
+        return True
 
-    return True
+    logger.error(f"Expected benchmark results file {results_file} was not found")
+    return False
 
 
 def benchmark_cli_main(
     benchmark_name: str,
     run_in_sandbox_fn: Callable[[Any, str], bool],
-) -> None:
+) -> int:
     """Unified CLI entry point for benchmark sandbox runners."""
     import argparse
 
@@ -249,6 +269,12 @@ def benchmark_cli_main(
 
     args = parser.parse_args()
 
+    try:
+        validate_identifier(args.system, field_name="benchmark system name")
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
+
     session = StreamingSandboxSession(
         image=args.base_image,
         verbose=True,
@@ -260,13 +286,20 @@ def benchmark_cli_main(
         logger.info("Sandbox session opened")
 
         if setup_sandbox_environment(session, args.reinstall):
-            run_in_sandbox_fn(session, args.system)
-            logger.info("Benchmark finished successfully!")
+            success = run_in_sandbox_fn(session, args.system)
+            if success:
+                logger.info("Benchmark finished successfully!")
+                return 0
+            else:
+                logger.error("Benchmark execution failed in sandbox")
+                return 1
         else:
             logger.error("Failed to set up sandbox environment")
+            return 1
 
     except Exception as e:
         logger.exception(f"Error during benchmark execution: {e!s}")
+        return 1
     finally:
         logger.info("Closing session...")
         session.close()

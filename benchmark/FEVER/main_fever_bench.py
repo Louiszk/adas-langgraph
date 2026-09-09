@@ -15,12 +15,12 @@ def run_fever_benchmark_in_sandbox(session, system_name: str, dataset_name: str 
     )
 
 
-def main() -> None:
-    benchmark_cli_main(
+def main() -> int:
+    return benchmark_cli_main(
         benchmark_name="FEVER",
         run_in_sandbox_fn=run_fever_benchmark_in_sandbox,
     )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

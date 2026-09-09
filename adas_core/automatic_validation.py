@@ -14,7 +14,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.helpers import normalize_future_imports, sanitize_test_id
+from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import TaskSpec, TestCaseSpec
@@ -377,7 +377,8 @@ class AutomaticValidation:
 
         cases = test_cases if test_cases is not None else task_spec.dev_suite
         code, requirements = self.generate_validation_module(task_spec, cases, fixture_generators=resolved_generators)
-        validation_file.write_text(code, encoding="utf-8")
+        root_dir = destination if (destination.is_dir() or not destination.suffix) else destination.parent
+        safe_write_text(validation_file, code, root_dir=root_dir)
         return ValidationGenerationResult(
             validation_file_path=validation_file,
             required_packages=requirements,

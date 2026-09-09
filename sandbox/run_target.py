@@ -16,6 +16,7 @@ from adas_core.environment import (
     SANDBOX_WORKSPACE_DIR,
     isolated_case_workspace,
 )
+from adas_core.helpers import escape_system_name, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("run_target")
@@ -73,6 +74,7 @@ def main() -> int:
     exit_code = 0
 
     try:
+        validate_identifier(args.system_name, field_name="target system name")
         try:
             raw_state: Any = json.loads(args.state)
         except json.JSONDecodeError as e:
@@ -164,7 +166,7 @@ def main() -> int:
         metrics["usage_metrics"] = ChatModel.usage_metrics.get("target_usage", {})
         metrics["scoped_metrics"] = UsageRecorder.get_aggregate(system="target", run_id=run_id)
 
-        metrics_filename = f"{args.system_name}_{run_id}.json"
+        metrics_filename = f"{escape_system_name(args.system_name)}_{run_id}.json"
         metrics_filepath = os.path.join(metrics_dir, metrics_filename)
 
         try:

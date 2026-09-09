@@ -164,3 +164,17 @@ def test_run_target_returns_nonzero_when_workflow_fails(tmp_path: Path, monkeypa
     metrics = json.loads((metrics_dir / "FailingTargetSystem_failed.json").read_text(encoding="utf-8"))
     assert metrics["status"] == "error"
     sys.modules.pop("generated_systems.FailingTargetSystem", None)
+
+
+def test_run_target_rejects_invalid_system_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    monkeypatch.setattr("sandbox.run_target.SANDBOX_TARGET_METRICS_DIR", str(metrics_dir))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["run_target.py", "--system_name", "Bad/System", "--state", "{}", "--run-id", "invalid"],
+    )
+
+    assert run_target.main() == 1
+    metrics = json.loads((metrics_dir / "BadSystem_invalid.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "error"

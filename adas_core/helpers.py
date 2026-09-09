@@ -8,9 +8,39 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 
+SAFE_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def validate_identifier(name: str, field_name: str = "identifier") -> str:
+    """Validate that an identifier contains only safe alphanumeric, underscore, and hyphen characters."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"Invalid {field_name}: cannot be empty.")
+    stripped = name.strip()
+    if not SAFE_IDENTIFIER_PATTERN.fullmatch(stripped):
+        raise ValueError(
+            f"Invalid {field_name} '{name}': must match pattern '^[a-zA-Z0-9_-]+$' with no traversal or special characters."
+        )
+    return stripped
+
+
 def escape_system_name(system_name: str) -> str:
-    """Sanitize a system name by removing path and filesystem separator characters."""
-    return system_name.replace("/", "").replace("\\", "").replace(":", "")
+    """Sanitize a system name by removing path, filesystem separator, and dangerous shell characters."""
+    cleaned = re.sub(r'[/\\:\x00-\x1f`$"\'|&;<>\s]', "", system_name)
+    cleaned = cleaned.lstrip(".")
+    return cleaned or "default_system"
+
+
+def safe_write_text(dest_path: Path, content: str, root_dir: Path) -> Path:
+    """Write text to dest_path only if it resides within root_dir, preventing directory traversal."""
+    resolved_dest = dest_path.resolve()
+    resolved_root = root_dir.resolve()
+    if not resolved_dest.is_relative_to(resolved_root):
+        raise ValueError(
+            f"Path traversal detected: destination '{dest_path}' resolves outside allowed root '{root_dir}'."
+        )
+    resolved_dest.parent.mkdir(parents=True, exist_ok=True)
+    resolved_dest.write_text(content, encoding="utf-8")
+    return resolved_dest
 
 
 def sanitize_identifier(name: str, prefix_if_digit: str = "") -> str:

@@ -7,9 +7,12 @@ from langchain_core.messages import AIMessage
 
 from adas_core.helpers import (
     clean_messages,
+    escape_system_name,
     normalize_fixture_path,
     normalize_future_imports,
+    safe_write_text,
     truncate_state,
+    validate_identifier,
     validate_node_conditional_edge_signature,
     validate_safe_relative_path,
 )
@@ -183,3 +186,56 @@ class TestNormalizeFixturePath:
             validate_safe_relative_path("/abs/path.csv")
         with pytest.raises(ValueError, match="path traversal"):
             validate_safe_relative_path("../outside.csv")
+
+
+class TestValidateIdentifier:
+    def test_valid_identifiers(self):
+        assert validate_identifier("valid_name") == "valid_name"
+        assert validate_identifier("case-1_test") == "case-1_test"
+        assert validate_identifier("System123") == "System123"
+        assert validate_identifier("a") == "a"
+
+    def test_rejects_empty_or_whitespace(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            validate_identifier("")
+        with pytest.raises(ValueError, match="cannot be empty"):
+            validate_identifier("   ")
+
+    def test_rejects_special_and_traversal_characters(self):
+        with pytest.raises(ValueError, match="must match pattern"):
+            validate_identifier("../traversal")
+        with pytest.raises(ValueError, match="must match pattern"):
+            validate_identifier("name with spaces")
+        with pytest.raises(ValueError, match="must match pattern"):
+            validate_identifier("name$evil")
+        with pytest.raises(ValueError, match="must match pattern"):
+            validate_identifier("name;rm")
+        with pytest.raises(ValueError, match="must match pattern"):
+            validate_identifier("name/slash")
+
+
+class TestSafeWriteText:
+    def test_writes_within_root(self, tmp_path):
+        root = tmp_path / "allowed_root"
+        root.mkdir()
+        target = root / "subdir" / "file.txt"
+        safe_write_text(target, "hello content", root_dir=root)
+        assert target.is_file()
+        assert target.read_text(encoding="utf-8") == "hello content"
+
+    def test_rejects_path_traversal(self, tmp_path):
+        root = tmp_path / "allowed_root"
+        root.mkdir()
+        target = root / ".." / "escaped.txt"
+        with pytest.raises(ValueError, match="Path traversal detected"):
+            safe_write_text(target, "evil content", root_dir=root)
+
+
+class TestEscapeSystemName:
+    def test_strips_path_separators_and_dangerous_chars(self):
+        assert escape_system_name("Folder/Subfolder\\MySystem:v1") == "FolderSubfolderMySystemv1"
+        assert escape_system_name("../../evil;name$") == "evilname"
+        assert escape_system_name("simple_system") == "simple_system"
+
+    def test_defaults_when_empty_after_cleaning(self):
+        assert escape_system_name("///\\\\:::") == "default_system"

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from adas_core.helpers import normalize_fixture_path, sanitize_test_id
+from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
 
 
 class ToolRequirement(BaseModel):
@@ -131,6 +131,7 @@ class FileFixtureSpec(BaseModel):
     def set_default_id(self) -> FileFixtureSpec:
         if not self.id:
             self.id = Path(self.path).name.replace(".", "_").replace("-", "_")
+        validate_identifier(self.id, field_name="file fixture id")
         return self
 
 
@@ -153,6 +154,11 @@ class DatabaseFixtureSpec(BaseModel):
     count: int | None = Field(default=None, ge=1, description="Target number of records, rows, or nodes to seed")
     description: str = Field(default="", description="Schema, entities, tables, or graph structure to populate")
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="database fixture name")
+
     @field_validator("file_path")
     @classmethod
     def validate_db_file_path(cls, v: str | None) -> str | None:
@@ -164,6 +170,7 @@ class DatabaseFixtureSpec(BaseModel):
     def validate_db_configuration(self) -> DatabaseFixtureSpec:
         if not self.id:
             self.id = self.name
+        validate_identifier(self.id, field_name="database fixture id")
         if self.db_type in ("sqlite", "duckdb") and not self.file_path:
             self.file_path = f"data/{self.name}.{self.db_type}"
         if self.file_path is not None:
@@ -201,6 +208,11 @@ class MCPFixtureSpec(BaseModel):
         default="", description="Tools, resources, and simulated behaviors this MCP server provides"
     )
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="mcp fixture name")
+
     @field_validator("transport", mode="before")
     @classmethod
     def normalize_transport(cls, v: str) -> str:
@@ -212,6 +224,7 @@ class MCPFixtureSpec(BaseModel):
     def set_default_id(self) -> MCPFixtureSpec:
         if not self.id:
             self.id = self.name
+        validate_identifier(self.id, field_name="mcp fixture id")
         return self
 
 
@@ -229,10 +242,16 @@ class MockServiceFixtureSpec(BaseModel):
     )
     description: str = Field(default="", description="Endpoints, routes, and response behavior to mock")
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="mock service fixture name")
+
     @model_validator(mode="after")
     def set_default_id(self) -> MockServiceFixtureSpec:
         if not self.id:
             self.id = self.name
+        validate_identifier(self.id, field_name="mock service fixture id")
         return self
 
 
@@ -250,6 +269,11 @@ class CustomFixtureSpec(BaseModel):
     )
     description: str = Field(..., min_length=1, description="Description of the custom setup requirements")
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="custom fixture name")
+
     @field_validator("path")
     @classmethod
     def validate_custom_path(cls, v: str | None) -> str | None:
@@ -261,6 +285,7 @@ class CustomFixtureSpec(BaseModel):
     def set_default_id(self) -> CustomFixtureSpec:
         if not self.id:
             self.id = self.name
+        validate_identifier(self.id, field_name="custom fixture id")
         return self
 
 
@@ -419,6 +444,11 @@ class TestCaseSpec(BaseModel):
         description="Expected output modalities for evaluation, e.g. ['text', 'vision']",
     )
 
+    @field_validator("id")
+    @classmethod
+    def validate_test_case_id(cls, v: str) -> str:
+        return validate_identifier(v, field_name="test case id")
+
     @field_validator("turns")
     @classmethod
     def validate_turns_non_empty(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -451,6 +481,12 @@ class TaskSpec(BaseModel):
     schema_version: str = Field(default="1.0", description="Specification schema version")
     name: str = Field(..., min_length=1, description="Name of the target system to design")
     system_goal: str = Field(..., min_length=1, description="Primary goal and problem statement for the Meta-Agent")
+
+    @field_validator("name")
+    @classmethod
+    def validate_task_spec_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="TaskSpec name")
+
     architecture_contract: ArchitectureContract = Field(..., description="Execution mode, schema, and persistence")
     available_models: list[ModelSpec] = Field(
         default_factory=lambda: [ModelSpec(provider="openai", model_name="gpt-5.6-luna")],
