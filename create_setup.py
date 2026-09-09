@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from typing import Any, Mapping
 
 from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR
 from adas_core.logging_config import get_logger, setup_logging
@@ -14,30 +15,45 @@ from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
 logger = get_logger("create_setup")
 _RUNTIME_TASK_DIR = SANDBOX_TASK_SETUP_DIR
+_TEXT_HASH_SUFFIXES = {".json", ".py", ".md", ".txt", ".yaml", ".yml"}
+
+
+def _file_hash(path: Path) -> str:
+    """Return the manifest hash for a setup artifact, normalizing text newlines."""
+    contents = path.read_bytes()
+    if path.suffix.lower() in _TEXT_HASH_SUFFIXES:
+        contents = contents.replace(b"\r\n", b"\n")
+    return hashlib.sha256(contents).hexdigest()
 
 
 def setup_manifest_is_current(task_spec_path: Path) -> bool:
-    """Return whether the frozen setup manifest was built from this TaskSpec."""
-    manifest_path = task_spec_path.resolve().parent / "setup_manifest.json"
+    """Return whether every declared frozen setup artifact still matches its manifest."""
+    task_spec_path = task_spec_path.resolve()
+    task_dir = task_spec_path.parent
+    manifest_path = task_dir / "setup_manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        expected_hash = manifest.get("files", {}).get("task.json")
-        if not isinstance(expected_hash, str):
+        files = manifest.get("files")
+        if not isinstance(files, dict) or not files:
             return False
-        raw_bytes = task_spec_path.read_bytes()
-        current_hash = hashlib.sha256(raw_bytes).hexdigest()
-        if expected_hash == current_hash:
-            return True
-        # Check newline-normalized hashes to remain robust across Windows (CRLF) and Linux (LF)
-        lf_hash = hashlib.sha256(raw_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        if expected_hash == lf_hash:
-            return True
-        crlf_hash = hashlib.sha256(raw_bytes.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")).hexdigest()
-        if expected_hash == crlf_hash:
-            return True
-    except (OSError, json.JSONDecodeError):
+
+        # The runtime always materializes the supplied specification as task.json.
+        expected_task_hash = files.get("task.json")
+        if not isinstance(expected_task_hash, str) or _file_hash(task_spec_path) != expected_task_hash:
+            return False
+
+        resolved_root = task_dir.resolve()
+        for relative_name, expected_hash in files.items():
+            if not isinstance(relative_name, str) or not isinstance(expected_hash, str):
+                return False
+            artifact = (task_dir / relative_name).resolve()
+            if not artifact.is_relative_to(resolved_root) or not artifact.is_file():
+                return False
+            if _file_hash(artifact) != expected_hash:
+                return False
+    except (OSError, ValueError, json.JSONDecodeError):
         return False
-    return False
+    return True
 
 
 def _copy_tree_from_runtime(session: StreamingSandboxSession, runtime_dir: str, destination: Path) -> None:
@@ -50,6 +66,31 @@ def _copy_tree_from_runtime(session: StreamingSandboxSession, runtime_dir: str, 
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         session.copy_from_runtime(runtime_path, str(target))
+
+
+def _existing_validation_section(task_dir: Path) -> dict[str, Any] | None:
+    """Read validation metadata before setup regeneration replaces the shared manifest."""
+    try:
+        manifest = json.loads((task_dir / "setup_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    validation = manifest.get("validation") if isinstance(manifest, dict) else None
+    return validation if isinstance(validation, dict) else None
+
+
+def _restore_validation_section(task_dir: Path, validation: Mapping[str, Any] | None) -> None:
+    """Preserve validation metadata while allowing its hashes to report staleness after setup changes."""
+    if validation is None:
+        return
+    manifest_path = task_dir / "setup_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Generated setup manifest is invalid: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"Generated setup manifest must contain an object: {manifest_path}")
+    manifest["validation"] = validation
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def run_setup_for_task(
@@ -67,6 +108,7 @@ def run_setup_for_task(
     if setup_manifest_is_current(task_spec_path) and not force:
         logger.info("Frozen task setup is current; use --force to regenerate it.")
         return task_dir
+    previous_validation = _existing_validation_section(task_dir)
     session = StreamingSandboxSession(image=base_image, verbose=True, container_type=container)
     try:
         session.open()
@@ -83,6 +125,7 @@ def run_setup_for_task(
             output = getattr(result, "stdout", "") or getattr(result, "stderr", "")
             raise RuntimeError(f"Sandbox task setup failed: {output}")
         _copy_tree_from_runtime(session, _RUNTIME_TASK_DIR, task_dir)
+        _restore_validation_section(task_dir, previous_validation)
     finally:
         session.close()
     logger.info("Frozen task setup written to %s", task_dir)

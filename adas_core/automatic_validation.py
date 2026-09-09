@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -21,6 +23,90 @@ from adas_core.task_spec import TaskSpec, TestCaseSpec
 from meta_system.config import validation_model, validation_wrapper
 
 logger = get_logger("adas_core.automatic_validation")
+
+VALIDATION_GENERATOR_VERSION = "1"
+_SETUP_MANIFEST_FILENAME = "setup_manifest.json"
+
+
+def _normalized_sha256(path: Path) -> str:
+    """Hash a text artifact independent of the checkout's newline convention."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _task_spec_sha256(task_spec: TaskSpec) -> str:
+    """Hash the semantic TaskSpec content used to generate a validation module."""
+    payload = json.dumps(task_spec.to_dict(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _fixture_generator_hashes(root: Path) -> dict[str, str]:
+    """Return hashes for every fixture generator that influences validation generation."""
+    fixtures_dir = root / "fixtures"
+    if not fixtures_dir.is_dir():
+        return {}
+    return {
+        path.relative_to(root).as_posix(): _normalized_sha256(path)
+        for path in sorted(fixtures_dir.glob("*.py"))
+        if path.name.startswith(("generate_", "seed_", "mock_", "setup_"))
+    }
+
+
+def write_validation_manifest(task_spec: TaskSpec, root: Path, validation_file: Path) -> Path:
+    """Update the validation section of the task's shared setup manifest."""
+    root = root.resolve()
+    validation_file = validation_file.resolve()
+    if not validation_file.is_relative_to(root):
+        raise ValueError(f"Validation file {validation_file} is outside task directory {root}.")
+    validation = {
+        "schema_version": "1.0",
+        "task_name": task_spec.name,
+        "task_spec_hash": _task_spec_sha256(task_spec),
+        "fixture_generator_hashes": _fixture_generator_hashes(root),
+        "generator_version": VALIDATION_GENERATOR_VERSION,
+        "generator_prompt_hash": hashlib.sha256(CASE_VALIDATION_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+        "validator_file": validation_file.relative_to(root).as_posix(),
+        "validator_hash": _normalized_sha256(validation_file),
+    }
+    manifest_path = root / _SETUP_MANIFEST_FILENAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = {}
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Setup manifest {manifest_path} must contain a JSON object.")
+    manifest["validation"] = validation
+    safe_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n", root_dir=root)
+    return manifest_path
+
+
+def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) -> bool:
+    """Return whether the frozen validator and all its generation inputs still match."""
+    root = Path(task_dir).resolve()
+    manifest_path = root / _SETUP_MANIFEST_FILENAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validation = manifest.get("validation")
+        if not isinstance(validation, dict):
+            return False
+        validator_name = validation.get("validator_file")
+        validator_hash = validation.get("validator_hash")
+        if not isinstance(validator_name, str) or not isinstance(validator_hash, str):
+            return False
+        validator_file = (root / validator_name).resolve()
+        if not validator_file.is_relative_to(root) or not validator_file.is_file():
+            return False
+        return (
+            validation.get("schema_version") == "1.0"
+            and validation.get("task_name") == task_spec.name
+            and validation.get("task_spec_hash") == _task_spec_sha256(task_spec)
+            and validation.get("fixture_generator_hashes") == _fixture_generator_hashes(root)
+            and validation.get("generator_version") == VALIDATION_GENERATOR_VERSION
+            and validation.get("generator_prompt_hash")
+            == hashlib.sha256(CASE_VALIDATION_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+            and validator_hash == _normalized_sha256(validator_file)
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
 
 
 @dataclass
@@ -379,6 +465,7 @@ class AutomaticValidation:
         code, requirements = self.generate_validation_module(task_spec, cases, fixture_generators=resolved_generators)
         root_dir = destination if (destination.is_dir() or not destination.suffix) else destination.parent
         safe_write_text(validation_file, code, root_dir=root_dir)
+        write_validation_manifest(task_spec, root_dir, validation_file)
         return ValidationGenerationResult(
             validation_file_path=validation_file,
             required_packages=requirements,
@@ -424,7 +511,7 @@ def ensure_automatic_validation(
         root / "validation.py",
     ]
     existing_file = next((path for path in expected_files if path.exists()), None)
-    if existing_file is not None and not force:
+    if existing_file is not None and not force and is_validation_manifest_current(task_spec, root):
         logger.info("Task validation module already exists at %s. Skipping generation.", existing_file)
         return None
     resolved_generators = fixture_generators or discover_fixture_generators(root)
@@ -442,6 +529,8 @@ __all__ = [
     "ensure_automatic_validation",
     "extract_validation_requirements",
     "filter_fixture_generators_for_case",
+    "is_validation_manifest_current",
     "load_validation_module",
     "sanitize_test_id",
+    "write_validation_manifest",
 ]

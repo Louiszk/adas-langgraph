@@ -9,6 +9,8 @@ from pathlib import Path
 
 from adas_core.automatic_validation import extract_validation_requirements
 from adas_core.environment import ensure_packages_installed, isolated_case_workspace, run_preflight_check
+from adas_core.task_spec import TaskSpec
+from adas_core.automatic_validation import is_validation_manifest_current
 
 
 def validation_requirements(task_dir: Path) -> list[str]:
@@ -28,6 +30,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run a task setup's preflight check inside the sandbox.")
     parser.add_argument("--task-dir", required=True, type=Path)
     args = parser.parse_args()
+
+    try:
+        task_spec = TaskSpec.from_file(args.task_dir / "task.json")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Invalid TaskSpec {args.task_dir / 'task.json'}: {exc}", file=sys.stderr)
+        return 1
+    if not is_validation_manifest_current(task_spec, args.task_dir):
+        print("Frozen validation manifest is missing or stale.", file=sys.stderr)
+        return 1
 
     manifest_path = args.task_dir / "setup_manifest.json"
     try:

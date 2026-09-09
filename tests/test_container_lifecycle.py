@@ -20,6 +20,8 @@ import pytest
 
 import invoke_design
 import invoke_target
+from adas_core.automatic_validation import write_validation_manifest
+from adas_core.task_spec import TaskSpec
 from sandbox.sandbox import (
     StreamingSandboxSession,
     check_docker_running,
@@ -85,6 +87,7 @@ def _write_smoke_task(task_dir: Path, name: str) -> Path:
         encoding="utf-8",
     )
     (task_dir / "setup_manifest.json").write_text(json.dumps({"required_packages": []}), encoding="utf-8")
+    write_validation_manifest(TaskSpec.from_file(spec_path), task_dir, task_dir / f"{name}.validation.py")
     return spec_path
 
 

@@ -10,6 +10,8 @@ from adas_core.automatic_validation import (
     assemble_validation_module,
     discover_fixture_generators,
     extract_validation_requirements,
+    ensure_automatic_validation,
+    is_validation_manifest_current,
     load_validation_module,
     sanitize_test_id,
 )
@@ -60,6 +62,7 @@ class TestAutomaticValidation:
         result = AutomaticValidation(llm=llm).generate_all(sample_task_spec, tmp_path)
 
         assert result.required_packages == ["pydantic"]
+        assert is_validation_manifest_current(sample_task_spec, tmp_path)
         module = load_validation_module(result.validation_file_path)
         assert module.validate("case_1", {"status": "success"}, {}) == (True, "status must be success")
 
@@ -70,6 +73,32 @@ class TestAutomaticValidation:
         with pytest.raises(RuntimeError, match="provider unavailable"):
             AutomaticValidation(llm=llm).generate_all(sample_task_spec, tmp_path)
         assert not list(tmp_path.glob("*.validation.py"))
+
+    def test_validation_manifest_detects_changed_fixture_generator(self, sample_task_spec, tmp_path):
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        generator = fixtures_dir / "generate_input.py"
+        generator.write_text("print('original')\n", encoding="utf-8")
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(content=generated_code())
+
+        AutomaticValidation(llm=llm).generate_all(sample_task_spec, tmp_path)
+        assert is_validation_manifest_current(sample_task_spec, tmp_path)
+
+        generator.write_text("print('changed')\n", encoding="utf-8")
+        assert not is_validation_manifest_current(sample_task_spec, tmp_path)
+
+    def test_existing_validator_without_current_manifest_is_regenerated(self, sample_task_spec, tmp_path):
+        existing = tmp_path / "DataReportAgent.validation.py"
+        existing.write_text("# stale\n", encoding="utf-8")
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(content=generated_code())
+
+        result = ensure_automatic_validation(sample_task_spec, tmp_path, llm=llm)
+
+        assert result is not None
+        assert llm.invoke.call_count == 1
+        assert is_validation_manifest_current(sample_task_spec, tmp_path)
 
     def test_missing_required_validator_fails_loudly(self, sample_task_spec):
         llm = MagicMock()

@@ -202,6 +202,43 @@ class TestSetupSandboxUtilities:
         task_spec.write_bytes(lf_content)
         assert setup_manifest_is_current(task_spec)
 
+    def test_setup_manifest_currentness_checks_every_declared_artifact(self, tmp_path):
+        import hashlib
+        import json
+
+        from create_setup import setup_manifest_is_current
+
+        task_spec = tmp_path / "task.json"
+        task_spec.write_text('{"name": "complete"}\n', encoding="utf-8")
+        fixture = tmp_path / "fixtures" / "input.csv"
+        fixture.parent.mkdir()
+        fixture.write_text("value\n1\n", encoding="utf-8")
+        hashes = {
+            "task.json": hashlib.sha256(task_spec.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
+            "fixtures/input.csv": hashlib.sha256(fixture.read_bytes()).hexdigest(),
+        }
+        (tmp_path / "setup_manifest.json").write_text(json.dumps({"files": hashes}), encoding="utf-8")
+        assert setup_manifest_is_current(task_spec)
+
+        fixture.unlink()
+        assert not setup_manifest_is_current(task_spec)
+
+        fixture.write_text("value\n2\n", encoding="utf-8")
+        assert not setup_manifest_is_current(task_spec)
+
+    def test_setup_regeneration_preserves_validation_section(self, tmp_path):
+        import json
+
+        from create_setup import _restore_validation_section
+
+        manifest_path = tmp_path / "setup_manifest.json"
+        manifest_path.write_text(json.dumps({"files": {"task.json": "new"}}), encoding="utf-8")
+        validation = {"validator_hash": "old", "task_spec_hash": "old"}
+
+        _restore_validation_section(tmp_path, validation)
+
+        assert json.loads(manifest_path.read_text(encoding="utf-8"))["validation"] == validation
+
     def test_package_pattern_validation(self):
         from adas_core.environment import _PACKAGE_PATTERN
         from sandbox.run_setup import install_packages
@@ -363,6 +400,7 @@ class TestInvokeDesignCLI:
 
         with (
             patch("invoke_design.setup_manifest_is_current", return_value=True),
+            patch("invoke_design.is_validation_manifest_current", return_value=True),
             patch("invoke_design.StreamingSandboxSession", return_value=mock_session),
             patch("invoke_design.setup_sandbox_environment", return_value=True),
             patch("invoke_design.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"),

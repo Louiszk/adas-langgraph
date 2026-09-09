@@ -6,5 +6,15 @@
   "required_packages": [],
   "schema_version": "1.0",
   "task_name": "mmlu_pro",
-  "task_schema_version": "1.0"
+  "task_schema_version": "1.0",
+  "validation": {
+    "fixture_generator_hashes": {},
+    "generator_prompt_hash": "6ffeea4d84178b93ed70fd04770f564e0ddc62aa2c0b42c9a6350362fe93eecf",
+    "generator_version": "1",
+    "schema_version": "1.0",
+    "task_name": "mmlu_pro",
+    "task_spec_hash": "6cf0762b25075533aa99f00698e44506d4e61d2245dc14ea9ba00fbb6d896475",
+    "validator_file": "mmlu_pro.validation.py",
+    "validator_hash": "85252a7851bfb8d93734f90fbf6e13a90c0cc7f02af509a6ce52c2e0112c978f"
+  }
 }

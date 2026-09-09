@@ -6,5 +6,15 @@
   "required_packages": [],
   "schema_version": "1.0",
   "task_name": "gsm_hard",
-  "task_schema_version": "1.0"
+  "task_schema_version": "1.0",
+  "validation": {
+    "fixture_generator_hashes": {},
+    "generator_prompt_hash": "6ffeea4d84178b93ed70fd04770f564e0ddc62aa2c0b42c9a6350362fe93eecf",
+    "generator_version": "1",
+    "schema_version": "1.0",
+    "task_name": "gsm_hard",
+    "task_spec_hash": "f7489118e5cb6aa0d4cf629085eed4b57e331863d09eca45f91074b9e1704875",
+    "validator_file": "gsm_hard.validation.py",
+    "validator_hash": "0ad9a3d1f1314c17ddd02e0d8ef43c34c780f0634d1d0b4db6cc445679a62384"
+  }
 }

@@ -15,6 +15,7 @@ from adas_core.environment import (
 )
 from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
+from adas_core.automatic_validation import is_validation_manifest_current
 from adas_core.task_spec import TaskSpec
 from config import settings
 from create_setup import run_setup_for_task, setup_manifest_is_current
@@ -166,6 +167,14 @@ def main() -> int:
             "python create_validation.py --task-spec %s",
             task_spec.name,
             task_dir,
+            args.task_spec,
+        )
+        return 1
+    if not is_validation_manifest_current(task_spec, task_dir):
+        logger.error(
+            "Frozen validation module is missing or stale for TaskSpec '%s'. "
+            "Regenerate it before design optimization: python create_validation.py --task-spec %s --force",
+            task_spec.name,
             args.task_spec,
         )
         return 1

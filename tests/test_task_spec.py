@@ -654,6 +654,7 @@ class TestBenchmarkSpecs:
         from pathlib import Path
 
         from create_setup import setup_manifest_is_current
+        from adas_core.automatic_validation import is_validation_manifest_current
 
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
@@ -674,4 +675,7 @@ class TestBenchmarkSpecs:
             assert setup_manifest_is_current(spec_path), (
                 f"Setup manifest at {manifest_file} is not current for {spec_path}. "
                 "Task spec content hash does not match setup_manifest.json."
+            )
+            assert is_validation_manifest_current(TaskSpec.from_file(spec_path), spec_dir), (
+                f"Validation section in {manifest_file} is missing or stale for {spec_path}."
             )
