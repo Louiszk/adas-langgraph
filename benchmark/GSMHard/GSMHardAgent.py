@@ -43,7 +43,7 @@ def python_interpreter(code: str) -> str:
 
 
 def agent_node(state):
-    llm = ChatModel(temperature=0).bind_tools([python_interpreter], parallel_tool_calls=False)
+    llm = ChatModel().bind_tools([python_interpreter], parallel_tool_calls=False)
 
     system_prompt = """
     You are an expert mathematician and python programmer.

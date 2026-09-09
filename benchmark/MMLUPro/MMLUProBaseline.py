@@ -18,7 +18,7 @@ graph = StateGraph(AgentState)
 
 
 def agent_node(state):
-    llm = ChatModel(temperature=0)
+    llm = ChatModel()
     system_prompt = """
         You will solve multiple-choice questions in computer science.
         

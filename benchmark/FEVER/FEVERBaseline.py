@@ -16,7 +16,7 @@ graph = StateGraph(AgentState)
 
 
 def base_node(state):
-    llm = ChatModel(temperature=0)
+    llm = ChatModel()
     system_prompt = """
         You will evaluate factual claims.
         

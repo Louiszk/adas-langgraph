@@ -66,7 +66,7 @@ def agent_node(state):
     evidence = state.get("evidence")
     available_pages = state.get("available_pages")
 
-    llm = ChatModel(temperature=0)
+    llm = ChatModel()
     if iteration <= 3:
         if not available_pages:
             llm = llm.bind_tools([wiki_search_tool])
