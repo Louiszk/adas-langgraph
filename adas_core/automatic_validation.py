@@ -128,11 +128,20 @@ def extract_validation_requirements(code: str) -> list[str]:
     """Read a literal VALIDATION_REQUIREMENTS declaration from validator source."""
     try:
         for node in ast.parse(code).body:
-            if not isinstance(node, ast.Assign):
-                continue
-            if any(isinstance(target, ast.Name) and target.id == "VALIDATION_REQUIREMENTS" for target in node.targets):
-                value = ast.literal_eval(node.value)
-                return [str(item) for item in value] if isinstance(value, list) else []
+            if isinstance(node, ast.Assign):
+                if any(
+                    isinstance(target, ast.Name) and target.id == "VALIDATION_REQUIREMENTS" for target in node.targets
+                ):
+                    value = ast.literal_eval(node.value)
+                    return [str(item) for item in value] if isinstance(value, list) else []
+            elif isinstance(node, ast.AnnAssign):
+                if (
+                    isinstance(node.target, ast.Name)
+                    and node.target.id == "VALIDATION_REQUIREMENTS"
+                    and node.value is not None
+                ):
+                    value = ast.literal_eval(node.value)
+                    return [str(item) for item in value] if isinstance(value, list) else []
     except (SyntaxError, ValueError, TypeError) as exc:
         logger.debug("Could not parse VALIDATION_REQUIREMENTS: %r", exc)
     return []
@@ -184,6 +193,7 @@ MANDATORY RULES:
 6. CODE FORMAT:
    - Output valid, complete, runnable Python code only inside a single ```python code block.
    - Do not use conversational filler or explanations outside the code block.
+   - Do not use wildcard imports (e.g. `from module import *`). Always import specific names explicitly (e.g. `from math import sqrt`).
 """
 
 
@@ -219,6 +229,91 @@ def filter_fixture_generators_for_case(
     return relevant_scripts
 
 
+def _extract_target_names(target: ast.AST) -> list[str]:
+    """Recursively extract variable names from an assignment target."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for elt in target.elts:
+            names.extend(_extract_target_names(elt))
+        return names
+    if isinstance(target, ast.Starred):
+        return _extract_target_names(target.value)
+    return []
+
+
+class _SnippetNamespaceTransformer(ast.NodeTransformer):
+    """Namespace top-level helper functions, classes, variables, and imports to prevent cross-case collisions."""
+
+    def __init__(self, names_to_rename: set[str], prefix: str) -> None:
+        self.names = names_to_rename
+        self.prefix = prefix
+
+    def visit_Name(self, node: ast.Name) -> ast.Name:
+        if node.id in self.names:
+            node.id = f"{self.prefix}_{node.id}"
+        return node
+
+    def visit_arg(self, node: ast.arg) -> ast.arg:
+        if node.arg in self.names:
+            node.arg = f"{self.prefix}_{node.arg}"
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        if node.name in self.names:
+            node.name = f"{self.prefix}_{node.name}"
+        self.generic_visit(node)
+        return node
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+        if node.name in self.names:
+            node.name = f"{self.prefix}_{node.name}"
+        self.generic_visit(node)
+        return node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+        if node.name in self.names:
+            node.name = f"{self.prefix}_{node.name}"
+        self.generic_visit(node)
+        return node
+
+    def visit_Import(self, node: ast.Import) -> ast.AST | list[ast.AST]:
+        extra_assigns: list[ast.AST] = []
+        for alias in node.names:
+            bound_name = alias.asname or alias.name.split(".")[0]
+            if bound_name in self.names:
+                if alias.asname is not None or "." not in alias.name:
+                    alias.asname = f"{self.prefix}_{bound_name}"
+                else:
+                    top_name = alias.name.split(".")[0]
+                    assign = ast.Assign(
+                        targets=[ast.Name(id=f"{self.prefix}_{top_name}", ctx=ast.Store())],
+                        value=ast.Call(
+                            func=ast.Name(id="__import__", ctx=ast.Load()),
+                            args=[ast.Constant(value=top_name)],
+                            keywords=[],
+                        ),
+                    )
+                    ast.copy_location(assign, node)
+                    ast.fix_missing_locations(assign)
+                    extra_assigns.append(assign)
+        if extra_assigns:
+            return [node, *extra_assigns]
+        return node
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.ImportFrom:
+        if node.module == "__future__":
+            return node
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            bound_name = alias.asname or alias.name
+            if bound_name in self.names:
+                alias.asname = f"{self.prefix}_{bound_name}"
+        return node
+
+
 def assemble_validation_module(
     task_spec: TaskSpec,
     case_snippets: list[tuple[TestCaseSpec, str]],
@@ -248,7 +343,8 @@ def assemble_validation_module(
                 f"'{case.id}' collides with '{seen_sanitized[clean_id]}'."
             )
         seen_sanitized[clean_id] = case.id
-        validators_map_entries.append(f'    "{case.id}": validate_{clean_id},')
+        target_func_name = f"validate_{clean_id}"
+        validators_map_entries.append(f'    "{case.id}": {target_func_name},')
 
         try:
             parsed = ast.parse(code)
@@ -256,23 +352,79 @@ def assemble_validation_module(
             body_blocks.append(code)
             continue
 
-        kept_segments: list[str] = []
+        excluded_names = {"VALIDATION_REQUIREMENTS", "VALIDATORS", "validate", target_func_name}
+
+        def _is_excluded(name: str) -> bool:
+            if name in excluded_names:
+                return True
+            if name.startswith("__") and name.endswith("__"):
+                return True
+            return False
+
+        names_to_rename: set[str] = set()
+        for node in parsed.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if not _is_excluded(node.name):
+                    names_to_rename.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    for name in _extract_target_names(target):
+                        if not _is_excluded(name):
+                            names_to_rename.add(name)
+            elif isinstance(node, ast.AnnAssign):
+                for name in _extract_target_names(node.target):
+                    if not _is_excluded(name):
+                        names_to_rename.add(name)
+            elif isinstance(node, ast.AugAssign):
+                for name in _extract_target_names(node.target):
+                    if not _is_excluded(name):
+                        names_to_rename.add(name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound_name = alias.asname or alias.name.split(".")[0]
+                    if not _is_excluded(bound_name):
+                        names_to_rename.add(bound_name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "__future__":
+                    continue
+                for alias in node.names:
+                    if alias.name == "*":
+                        mod_name = f"{'.' * node.level}{node.module or ''}"
+                        raise ValueError(
+                            f"Wildcard import 'from {mod_name} import *' is not permitted in test case "
+                            f"snippet '{case.id}'. Explicitly import needed names."
+                        )
+                    bound_name = alias.asname or alias.name
+                    if not _is_excluded(bound_name):
+                        names_to_rename.add(bound_name)
+
+        kept_nodes: list[ast.stmt] = []
         for node in parsed.body:
             if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                 continue
             if isinstance(node, ast.Assign):
                 if any(
-                    isinstance(target, ast.Name) and target.id in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
+                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
                     for target in node.targets
+                    for name in _extract_target_names(target)
+                ):
+                    continue
+            if isinstance(node, ast.AnnAssign):
+                if any(
+                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS") for name in _extract_target_names(node.target)
                 ):
                     continue
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "validate":
                 continue
-            seg = ast.get_source_segment(code, node)
-            if seg:
-                kept_segments.append(seg)
+            kept_nodes.append(node)
 
-        body_blocks.append("\n\n".join(kept_segments))
+        parsed.body = kept_nodes
+        if names_to_rename:
+            transformer = _SnippetNamespaceTransformer(names_to_rename, prefix=f"_{clean_id}")
+            parsed = transformer.visit(parsed)
+            ast.fix_missing_locations(parsed)
+
+        body_blocks.append(ast.unparse(parsed))
 
     dispatcher = [
         "VALIDATORS = {",

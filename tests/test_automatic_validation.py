@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -134,6 +135,128 @@ class TestAutomaticValidation:
         ]
         with pytest.raises(ValueError, match="Duplicate sanitized test case id 'case_a'"):
             assemble_validation_module(sample_task_spec, snippets, [])
+
+    def test_extract_validation_requirements_handles_type_annotations(self):
+        code = "VALIDATION_REQUIREMENTS: list[str] = ['pytest', 'pandas']"
+        assert extract_validation_requirements(code) == ["pytest", "pandas"]
+
+    def test_assemble_validation_module_strips_annotated_requirements(self, sample_task_spec):
+        case = TestCaseSpec(id="case_1", description="case 1", turns=[{"q": "1"}])
+        snippet = "VALIDATION_REQUIREMENTS: list[str] = ['numpy']\ndef validate_case_1(state, ws): return True, 'ok'\n"
+        assembled = assemble_validation_module(sample_task_spec, [(case, snippet)], ["numpy"])
+        # Only the header's unannotated VALIDATION_REQUIREMENTS = ['numpy'] should exist
+        assert "VALIDATION_REQUIREMENTS: list[str]" not in assembled
+        assert "VALIDATION_REQUIREMENTS = ['numpy']" in assembled
+
+    def test_assemble_validation_module_isolates_top_level_helpers(self, sample_task_spec):
+        case_a = TestCaseSpec(id="case_a", description="case a", turns=[{"q": "1"}])
+        case_b = TestCaseSpec(id="case_b", description="case b", turns=[{"q": "2"}])
+        snippet_a = (
+            "EXPECTED_NUM = 100\n"
+            "def compute(x):\n"
+            "    return x * 2\n"
+            "def validate_case_a(state, ws):\n"
+            "    return compute(state['val']) == EXPECTED_NUM, 'msg_a'\n"
+        )
+        snippet_b = (
+            "EXPECTED_NUM = 300\n"
+            "def compute(x):\n"
+            "    return x * 3\n"
+            "def validate_case_b(state, ws):\n"
+            "    return compute(state['val']) == EXPECTED_NUM, 'msg_b'\n"
+        )
+        assembled = assemble_validation_module(sample_task_spec, [(case_a, snippet_a), (case_b, snippet_b)], [])
+        namespace = {}
+        exec(assembled, namespace)
+        validate_fn = namespace["validate"]
+
+        # Case A: compute(50) is 50*2 == 100, passes
+        assert validate_fn("case_a", {"val": 50}, {}) == (True, "msg_a")
+        # Case B: compute(100) is 100*3 == 300, passes
+        assert validate_fn("case_b", {"val": 100}, {}) == (True, "msg_b")
+        # If Case B had overwritten compute with x*3 for Case A, 50*3 == 150 != 100, which would fail:
+        assert validate_fn("case_a", {"val": 50}, {})[0] is True
+
+    def test_assemble_validation_module_isolates_import_bindings(self, sample_task_spec):
+        case_a = TestCaseSpec(id="case_a", description="import math", turns=[{"q": "1"}])
+        snippet_a = "import math\ndef validate_case_a(state, ws):\n    return math.__name__ == 'math', 'module_math'\n"
+
+        case_b = TestCaseSpec(id="case_b", description="import cmath as math", turns=[{"q": "2"}])
+        snippet_b = (
+            "import cmath as math\n"
+            "def validate_case_b(state, ws):\n"
+            "    return math.__name__ == 'cmath', 'module_cmath'\n"
+        )
+
+        case_c = TestCaseSpec(id="case_c", description="from math import isfinite", turns=[{"q": "3"}])
+        snippet_c = (
+            "from math import isfinite\n"
+            "def validate_case_c(state, ws):\n"
+            "    return isfinite(state['val']) is True, 'is_finite'\n"
+        )
+
+        case_d = TestCaseSpec(id="case_d", description="custom isfinite helper", turns=[{"q": "4"}])
+        snippet_d = (
+            "def isfinite(x):\n"
+            "    return False\n"
+            "def validate_case_d(state, ws):\n"
+            "    return isfinite(state['val']) is False, 'custom_isfinite'\n"
+        )
+
+        case_e = TestCaseSpec(id="case_e", description="dotted import os.path", turns=[{"q": "5"}])
+        snippet_e = (
+            "import os.path\ndef validate_case_e(state, ws):\n    return os.path.isabs(state['path']), 'is_abs'\n"
+        )
+
+        cases = [
+            (case_a, snippet_a),
+            (case_b, snippet_b),
+            (case_c, snippet_c),
+            (case_d, snippet_d),
+            (case_e, snippet_e),
+        ]
+        assembled = assemble_validation_module(sample_task_spec, cases, [])
+        namespace: dict[str, Any] = {}
+        exec(assembled, namespace)
+        validate_fn = namespace["validate"]
+
+        assert validate_fn("case_a", {}, {}) == (True, "module_math")
+        assert validate_fn("case_b", {}, {}) == (True, "module_cmath")
+        assert validate_fn("case_c", {"val": 42}, {}) == (True, "is_finite")
+        assert validate_fn("case_d", {"val": 42}, {}) == (True, "custom_isfinite")
+        assert validate_fn("case_e", {"path": "/absolute/path"}, {}) == (True, "is_abs")
+
+    def test_assemble_validation_module_isolates_unpacking_and_augmented_assignments(self, sample_task_spec):
+        case_a = TestCaseSpec(id="case_a", description="unpacking and augassign", turns=[{"q": "1"}])
+        snippet_a = (
+            "a, (b, *c) = 1, (2, 3, 4)\n"
+            "a += 10\n"
+            "def validate_case_a(state, ws):\n"
+            "    return (a == 11 and b == 2 and c == [3, 4]), 'case_a_ok'\n"
+        )
+
+        case_b = TestCaseSpec(id="case_b", description="override targets", turns=[{"q": "2"}])
+        snippet_b = (
+            "a = 999\n"
+            "b = 888\n"
+            "c = []\n"
+            "def validate_case_b(state, ws):\n"
+            "    return (a == 999 and b == 888 and c == []), 'case_b_ok'\n"
+        )
+
+        assembled = assemble_validation_module(sample_task_spec, [(case_a, snippet_a), (case_b, snippet_b)], [])
+        namespace: dict[str, Any] = {}
+        exec(assembled, namespace)
+        validate_fn = namespace["validate"]
+
+        assert validate_fn("case_a", {}, {}) == (True, "case_a_ok")
+        assert validate_fn("case_b", {}, {}) == (True, "case_b_ok")
+
+    def test_assemble_validation_module_rejects_wildcard_imports(self, sample_task_spec):
+        case = TestCaseSpec(id="case_wildcard", description="wildcard", turns=[{"q": "1"}])
+        snippet = "from math import *\ndef validate_case_wildcard(state, ws):\n    return True, 'ok'\n"
+        with pytest.raises(ValueError, match=r"Wildcard import 'from math import \*' is not permitted"):
+            assemble_validation_module(sample_task_spec, [(case, snippet)], [])
 
     def test_generates_per_case_with_scoped_fixtures(self, tmp_path):
         from adas_core.task_spec import FileFixtureSpec, TestFixturesSpec

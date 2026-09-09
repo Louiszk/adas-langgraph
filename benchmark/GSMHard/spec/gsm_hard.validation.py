@@ -54,8 +54,6 @@ from pathlib import Path
 
 from typing import Any
 
-VALIDATION_REQUIREMENTS: list[str] = []
-
 def validate_case_1_program_downloads(
     final_state: dict[str, Any],
     workspace_dirs: dict[str, str],

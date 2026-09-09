@@ -672,10 +672,34 @@ class TestBenchmarkSpecs:
             assert len(validation_files) == 1, (
                 f"Expected exactly 1 *.validation.py file in {spec_dir}, found {len(validation_files)}"
             )
+            validation_file = validation_files[0]
             assert setup_manifest_is_current(spec_path), (
                 f"Setup manifest at {manifest_file} is not current for {spec_path}. "
                 "Task spec content hash does not match setup_manifest.json."
             )
-            assert is_validation_manifest_current(TaskSpec.from_file(spec_path), spec_dir), (
+            task_spec = TaskSpec.from_file(spec_path)
+            assert is_validation_manifest_current(task_spec, spec_dir), (
                 f"Validation section in {manifest_file} is missing or stale for {spec_path}."
             )
+
+            # Compile preflight and validator scripts to ensure valid Python syntax
+            import py_compile
+            from adas_core.automatic_validation import load_validation_module
+
+            py_compile.compile(str(preflight_file), doraise=True)
+            py_compile.compile(str(validation_file), doraise=True)
+
+            module = load_validation_module(validation_file)
+            assert hasattr(module, "VALIDATORS") and isinstance(module.VALIDATORS, dict), (
+                f"{validation_file} must export a VALIDATORS dictionary"
+            )
+            assert hasattr(module, "validate") and callable(module.validate), (
+                f"{validation_file} must export a callable validate() function"
+            )
+            for test_case in task_spec.dev_suite:
+                assert test_case.id in module.VALIDATORS, (
+                    f"Test case '{test_case.id}' in {spec_path} is missing from VALIDATORS in {validation_file}"
+                )
+                assert callable(module.VALIDATORS[test_case.id]), (
+                    f"Validator for '{test_case.id}' in {validation_file} must be callable"
+                )
