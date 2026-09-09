@@ -13,6 +13,11 @@ exclude = [
     "benchmark/**/spec",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "container: requires a running Docker or Podman engine",
+]
+
 [tool.pyright]
 typeCheckingMode = "standard"
 reportUnreachable = true
