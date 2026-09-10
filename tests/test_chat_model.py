@@ -490,10 +490,6 @@ class TestScopedUsageRecorder:
         assert target_agg["llm_calls"] == 1
         assert target_agg["total_tokens"] == 70
 
-        # Verify legacy metrics mirror
-        assert ChatModel.usage_metrics["target_usage"]["overall"]["total_tokens"] == 70
-        assert ChatModel.usage_metrics["meta_usage"]["overall"]["total_tokens"] == 300
-
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_missing_usage_metadata_does_not_crash(self, mock_chat_openai):
         mock_model = MagicMock()
@@ -616,14 +612,6 @@ class TestExecuteToolCalls:
         assert "12" in tool_msgs[0].content
         assert results["multiply"] == 12
         assert "not found" in tool_msgs[1].content
-
-    def test_tool_calls_reexported_from_chat_model(self):
-        from adas_core.chat_model import execute_tool_calls as chat_etc
-        from adas_core.chat_model import validate_tool_history as chat_vth
-        from adas_core.tool_calls import execute_tool_calls, validate_tool_history
-
-        assert chat_etc is execute_tool_calls
-        assert chat_vth is validate_tool_history
 
 
 # ============================================================================

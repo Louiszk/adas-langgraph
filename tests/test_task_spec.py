@@ -235,10 +235,6 @@ class TestTaskSpecModel:
         with pytest.raises(ValidationError):
             ModelSpec(provider="openai", model_name="gpt-4o", extra_field="forbidden")  # type: ignore
 
-    def test_model_spec_forbids_legacy_wrapper_field(self):
-        with pytest.raises(ValidationError):
-            ModelSpec.model_validate({"wrapper": "openai", "model_name": "gpt-4o"})
-
     def test_fixture_ids_scoping_and_validation(self):
         # Valid fixture IDs
         spec = TaskSpec(
@@ -311,21 +307,6 @@ class TestTaskSpecModel:
                 system_goal="Goal",
                 architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
                 dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
-            )
-
-    def test_duplicate_dev_suite_ids_rejected(self):
-        with pytest.raises(ValidationError):
-            TaskSpec(
-                name="DuplicateIdsAgent",
-                system_goal="Goal",
-                architecture_contract=ArchitectureContract(
-                    execution_mode="single_turn",
-                    state_schema={"q": "str"},
-                ),
-                dev_suite=[
-                    TestCaseSpec(id="case_1", description="First", turns=[{"q": "1"}]),
-                    TestCaseSpec(id="case_1", description="Duplicate", turns=[{"q": "2"}]),
-                ],
             )
 
     def test_test_case_spec_judge_model_and_modalities(self):

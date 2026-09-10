@@ -6,14 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from langchain_core.messages import AIMessage
 
 from adas_core.automatic_taskspec import (
     AutomaticTaskSpec,
     build_model_catalog_context,
-    extract_json_block,
-    extract_json_block_optional,
     find_existing_task_spec_file,
     format_assistant_message_for_display,
     run_interactive_wizard,
@@ -46,39 +43,19 @@ SAMPLE_VALID_TASKSPEC_DICT = {
 }
 
 
-class TestJSONExtraction:
-    def test_extract_json_block_markdown(self):
-        content = f"Here is the specification:\n```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```\nHope it helps!"
-        extracted = extract_json_block(content)
-        assert extracted["name"] == "MathSolver"
+def test_format_assistant_message_for_display():
+    content = (
+        "I've drafted the schema for you!\n"
+        f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```\n"
+        "Please review the state schema and let me know if you want changes."
+    )
+    saved_path = Path("specs/mathsolver/mathsolver.task.json")
+    formatted = format_assistant_message_for_display(content, saved_path=saved_path)
 
-    def test_extract_json_block_raw_text(self):
-        content = f"Prefix text {json.dumps(SAMPLE_VALID_TASKSPEC_DICT)} suffix text"
-        extracted = extract_json_block(content)
-        assert extracted["name"] == "MathSolver"
-
-    def test_extract_json_block_invalid(self):
-        with pytest.raises(ValueError, match="Could not extract valid JSON object"):
-            extract_json_block("No json content anywhere here.")
-
-    def test_extract_json_block_optional(self):
-        assert extract_json_block_optional("Just text with no json") is None
-        content = f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```"
-        assert extract_json_block_optional(content) is not None
-
-    def test_format_assistant_message_for_display(self):
-        content = (
-            "I've drafted the schema for you!\n"
-            f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```\n"
-            "Please review the state schema and let me know if you want changes."
-        )
-        saved_path = Path("specs/mathsolver/mathsolver.task.json")
-        formatted = format_assistant_message_for_display(content, saved_path=saved_path)
-
-        assert "I've drafted the schema for you!" in formatted
-        assert "Please review the state schema" in formatted
-        assert "[Draft TaskSpec persisted to: specs/mathsolver/mathsolver.task.json]" in formatted
-        assert '"schema_version"' not in formatted  # Huge json is cleanly replaced
+    assert "I've drafted the schema for you!" in formatted
+    assert "Please review the state schema" in formatted
+    assert "[Draft TaskSpec persisted to: specs/mathsolver/mathsolver.task.json]" in formatted
+    assert '"schema_version"' not in formatted  # Huge json is cleanly replaced
 
 
 class TestModelCatalogContext:

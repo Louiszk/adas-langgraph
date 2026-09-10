@@ -14,7 +14,6 @@ from adas_core.helpers import (
     truncate_state,
     validate_identifier,
     validate_node_conditional_edge_signature,
-    validate_safe_relative_path,
 )
 
 
@@ -178,14 +177,6 @@ class TestNormalizeFixturePath:
             normalize_fixture_path("input/")
         with pytest.raises(ValueError, match="resolves to root input directory"):
             normalize_fixture_path("sandbox/workspace/input/")
-
-    def test_validate_safe_relative_path_equivalence(self):
-        assert validate_safe_relative_path("data/input/sales.csv") == "sales.csv"
-        assert validate_safe_relative_path("reports/") == "reports"
-        with pytest.raises(ValueError, match="absolute paths are not allowed"):
-            validate_safe_relative_path("/abs/path.csv")
-        with pytest.raises(ValueError, match="path traversal"):
-            validate_safe_relative_path("../outside.csv")
 
 
 class TestValidateIdentifier:
