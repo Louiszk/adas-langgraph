@@ -12,6 +12,7 @@ from typing import (
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END, START
+from adas_core.exceptions import DecoratorParseError
 
 
 def extract_parenthesized_content(
@@ -90,15 +91,15 @@ def parse_arguments(args_str: str | None) -> tuple[tuple[Any, ...], dict[str, An
                 f"Invalid argument: a name '{ne.name}' was used in the tool arguments "
                 f"'{args_str}' but it is not defined. Do not use '{ne.name}'."
             )
-            raise ValueError(error_msg) from ne
+            raise DecoratorParseError(error_msg) from ne
         except SyntaxError as se:
             error_msg = (
                 f"Syntax error in tool arguments: '{args_str}'. Please ensure the "
                 f"arguments are correctly formatted. Details: {se}"
             )
-            raise ValueError(error_msg) from se
+            raise DecoratorParseError(error_msg) from se
         except Exception as e:
-            raise ValueError(f"Failed to parse tool arguments '{args_str}': {e}") from e
+            raise DecoratorParseError(f"Failed to parse tool arguments '{args_str}': {e}") from e
 
     return pos_args, kw_args
 

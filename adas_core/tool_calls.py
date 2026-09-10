@@ -14,6 +14,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from adas_core.exceptions import ToolProtocolError
 
 
 def validate_tool_history(messages: list[BaseMessage]) -> None:
@@ -29,7 +30,7 @@ def validate_tool_history(messages: list[BaseMessage]) -> None:
         if isinstance(msg, AIMessage):
             if active_pending_calls:
                 missing = sorted(active_pending_calls.keys())
-                raise ValueError(
+                raise ToolProtocolError(
                     f"AIMessage at index {idx} encountered while prior tool calls {missing} remain unanswered."
                 )
 
@@ -45,13 +46,13 @@ def validate_tool_history(messages: list[BaseMessage]) -> None:
         elif isinstance(msg, ToolMessage):
             cid = getattr(msg, "tool_call_id", None)
             if not cid:
-                raise ValueError(f"Malformed ToolMessage at index {idx}: missing or empty 'tool_call_id'.")
+                raise ToolProtocolError(f"Malformed ToolMessage at index {idx}: missing or empty 'tool_call_id'.")
             if cid not in seen_call_ids:
-                raise ValueError(
+                raise ToolProtocolError(
                     f"Orphaned ToolMessage at index {idx} with tool_call_id='{cid}' has no matching prior AIMessage tool call."
                 )
             if cid in answered_call_ids:
-                raise ValueError(f"Duplicate ToolMessage at index {idx} for tool_call_id='{cid}'.")
+                raise ToolProtocolError(f"Duplicate ToolMessage at index {idx} for tool_call_id='{cid}'.")
 
             answered_call_ids.add(cid)
             active_pending_calls.pop(cid, None)
@@ -59,13 +60,15 @@ def validate_tool_history(messages: list[BaseMessage]) -> None:
         else:
             if active_pending_calls:
                 missing = sorted(active_pending_calls.keys())
-                raise ValueError(
+                raise ToolProtocolError(
                     f"Message {type(msg).__name__} at index {idx} encountered while tool calls {missing} remain unanswered."
                 )
 
     if active_pending_calls:
         missing = sorted(active_pending_calls.keys())
-        raise ValueError(f"Cannot invoke model: AIMessage tool calls {missing} have no corresponding ToolMessages.")
+        raise ToolProtocolError(
+            f"Cannot invoke model: AIMessage tool calls {missing} have no corresponding ToolMessages."
+        )
 
 
 def execute_tool_calls(

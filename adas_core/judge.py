@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from adas_core.chat_model import ChatModel, ModelRegistry, usage_scope
 from adas_core.logging_config import get_logger
+from adas_core.exceptions import JudgeMaxRetriesExceededError, JudgePayloadError
 from meta_system.config import validation_model, validation_wrapper
 
 logger = get_logger("judge")
@@ -37,7 +38,7 @@ def format_image_payload(image_input: str | Path) -> dict[str, Any]:
     """Format a local file path, remote URL, or base64 data URL for ChatModel vision input."""
     img_str = str(image_input).strip()
     if not img_str:
-        raise ValueError("Image input path or URL cannot be empty.")
+        raise JudgePayloadError("Image input path or URL cannot be empty.")
 
     # Remote web URL or data URL
     if img_str.startswith(("http://", "https://", "data:")):
@@ -50,14 +51,14 @@ def format_image_payload(image_input: str | Path) -> dict[str, Any]:
 
     suffix = file_path.suffix.lower()
     if suffix not in SUPPORTED_IMAGE_EXTENSIONS:
-        raise ValueError(
+        raise JudgePayloadError(
             f"Unsupported image format '{suffix}' for file '{file_path}'. "
             f"Supported formats are: {sorted(SUPPORTED_IMAGE_EXTENSIONS)}"
         )
 
     file_size = file_path.stat().st_size
     if file_size > MAX_IMAGE_SIZE_BYTES:
-        raise ValueError(f"Image file '{file_path}' exceeds the 20 MB size limit ({file_size} bytes).")
+        raise JudgePayloadError(f"Image file '{file_path}' exceeds the 20 MB size limit ({file_size} bytes).")
 
     mime_type, _ = mimetypes.guess_type(str(file_path))
     if not mime_type or not mime_type.startswith("image/"):
@@ -197,7 +198,9 @@ class LLMJudge:
                     last_error = e
                     logger.warning(f"LLMJudge structured invocation attempt {attempt} failed: {e!r}")
 
-            raise RuntimeError(f"LLMJudge failed after {self.max_retries} attempts: {last_error!r}") from last_error
+            raise JudgeMaxRetriesExceededError(
+                f"LLMJudge failed after {self.max_retries} attempts: {last_error!r}"
+            ) from last_error
 
 
 __all__ = [

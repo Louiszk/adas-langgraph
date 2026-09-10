@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
 from adas_core.logging_config import get_logger
+from adas_core.exceptions import FixtureExecutionError
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
@@ -421,7 +422,7 @@ class AutomaticSetup:
                     created_files.append(dest)
                 logger.info(f"Materialized file fixture via generator script: {dest} (count: {file_fix.count})")
             except Exception as exc:
-                raise RuntimeError(f"Error executing file generator for {file_fix.path}: {exc}") from exc
+                raise FixtureExecutionError(f"Error executing file generator for {file_fix.path}: {exc}") from exc
 
         for db_fix in task_spec.test_fixtures.databases:
             if db_fix.db_type not in ("sqlite", "duckdb"):
@@ -434,10 +435,14 @@ class AutomaticSetup:
                 exec(script.read_text(encoding="utf-8"), ns)
                 seed_database = ns.get("seed_database")
                 if not callable(seed_database):
-                    raise ValueError("missing seed_database(workspace_dirs) function")
+                    raise FixtureExecutionError(
+                        f"Error seeding embedded database {db_fix.name}: missing seed_database(workspace_dirs) function"
+                    )
                 seed_database({"ADAS_INPUT_DIR": str(fixtures_dir)})
+            except FixtureExecutionError:
+                raise
             except Exception as exc:
-                raise RuntimeError(f"Error seeding embedded database {db_fix.name}: {exc}") from exc
+                raise FixtureExecutionError(f"Error seeding embedded database {db_fix.name}: {exc}") from exc
 
         for custom_fix in task_spec.test_fixtures.custom_fixtures:
             script = setup_scripts_dir / f"setup_{custom_fix.name}.py"
@@ -448,10 +453,14 @@ class AutomaticSetup:
                 exec(script.read_text(encoding="utf-8"), ns)
                 setup_environment = ns.get("setup_environment")
                 if not callable(setup_environment):
-                    raise ValueError("missing setup_environment(workspace_dirs) function")
+                    raise FixtureExecutionError(
+                        f"Error executing custom fixture {custom_fix.name}: missing setup_environment(workspace_dirs) function"
+                    )
                 setup_environment({"ADAS_INPUT_DIR": str(fixtures_dir), "ADAS_WORKSPACE_DIR": str(root)})
+            except FixtureExecutionError:
+                raise
             except Exception as exc:
-                raise RuntimeError(f"Error executing custom fixture {custom_fix.name}: {exc}") from exc
+                raise FixtureExecutionError(f"Error executing custom fixture {custom_fix.name}: {exc}") from exc
 
 
 def ensure_automatic_setup(

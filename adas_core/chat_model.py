@@ -27,6 +27,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from adas_core.environment import SANDBOX_TASK_SPEC_PATH
+from adas_core.exceptions import ModelConfigurationError, StructuredOutputError
 from adas_core.logging_config import get_logger
 from adas_core.tool_calls import execute_tool_calls, validate_tool_history
 
@@ -436,10 +437,10 @@ def _resolve_target_model(
     if model is not None and provider is None:
         matches = [m for m in allowed if m.get("model_name") == model]
         if not matches:
-            raise ValueError(f"Model '{model}' is not available. Allowed Models: {allowed}")
+            raise ModelConfigurationError(f"Model '{model}' is not available. Allowed Models: {allowed}")
         if len(matches) > 1:
             providers = [m.get("provider", "openai") for m in matches]
-            raise ValueError(
+            raise ModelConfigurationError(
                 f"Model '{model}' is ambiguous across multiple providers {providers}. Please specify provider explicitly."
             )
         p = matches[0].get("provider", "openai")
@@ -448,15 +449,17 @@ def _resolve_target_model(
     if model is not None and provider is not None:
         matches = [m for m in allowed if m.get("provider", "openai") == provider and m.get("model_name") == model]
         if not matches:
-            raise ValueError(f"Model '{model}' with provider '{provider}' is not available. Allowed Models: {allowed}")
+            raise ModelConfigurationError(
+                f"Model '{model}' with provider '{provider}' is not available. Allowed Models: {allowed}"
+            )
         return provider, model
 
     # provider is given but model is None
     if provider is None:
-        raise ValueError("Provider cannot be None when resolving target model.")
+        raise ModelConfigurationError("Provider cannot be None when resolving target model.")
     provider_models = [m for m in allowed if m.get("provider", "openai") == provider]
     if not provider_models:
-        raise ValueError(f"No allowed models found for provider '{provider}'. Allowed Models: {allowed}")
+        raise ModelConfigurationError(f"No allowed models found for provider '{provider}'. Allowed Models: {allowed}")
     first = provider_models[0]
     return provider, first["model_name"]
 
@@ -470,24 +473,28 @@ def _create_provider_runnable(
 ) -> Any:
     """Validate capabilities and construct the underlying LangChain chat runnable."""
     if provider.lower() != "openai":
-        raise ValueError(f"Unsupported provider: '{provider}'. Supported providers: 'openai'")
+        raise ModelConfigurationError(f"Unsupported provider: '{provider}'. Supported providers: 'openai'")
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError(f"Missing environment variable: OPENAI_API_KEY required for provider '{provider}'")
+        raise ModelConfigurationError(
+            f"Missing environment variable: OPENAI_API_KEY required for provider '{provider}'"
+        )
 
     if temperature is not None:
         if not capabilities.supports_temperature:
-            raise ValueError(f"Model '{model}' ({provider}) does not support 'temperature'.")
+            raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support 'temperature'.")
         min_temp, max_temp = capabilities.temperature_range
         if not (min_temp <= temperature <= max_temp):
-            raise ValueError(f"Temperature {temperature} is out of range ({min_temp}, {max_temp}) for model '{model}'.")
+            raise ModelConfigurationError(
+                f"Temperature {temperature} is out of range ({min_temp}, {max_temp}) for model '{model}'."
+            )
 
     if reasoning_effort is not None:
         if not capabilities.supports_reasoning_effort:
-            raise ValueError(f"Model '{model}' ({provider}) does not support 'reasoning_effort'.")
+            raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support 'reasoning_effort'.")
         if reasoning_effort not in capabilities.supported_reasoning_efforts:
-            raise ValueError(
+            raise ModelConfigurationError(
                 f"Invalid reasoning_effort '{reasoning_effort}' for model '{model}'. Supported: {sorted(capabilities.supported_reasoning_efforts)}"
             )
 
@@ -654,21 +661,23 @@ class ChatModel:
     def with_structured_output(self, schema: Any, **kwargs: Any) -> ChatModel:
         """Return a NEW ChatModel instance bound to produce structured output."""
         if not self.capabilities.supports_structured_output:
-            raise ValueError(f"Model '{self.model}' ({self.provider}) does not support structured output.")
+            raise ModelConfigurationError(f"Model '{self.model}' ({self.provider}) does not support structured output.")
 
         if "include_raw" in kwargs:
-            raise ValueError("ChatModel manages include_raw internally to preserve usage telemetry.")
+            raise ModelConfigurationError("ChatModel manages include_raw internally to preserve usage telemetry.")
 
         structured = self._runnable.with_structured_output(schema, include_raw=True, **kwargs)
 
         def extract_parsed_output(response: Any) -> Any:
             if not isinstance(response, dict) or "raw" not in response:
-                raise RuntimeError("Structured-output runnable did not return the expected raw response envelope.")
+                raise StructuredOutputError(
+                    "Structured-output runnable did not return the expected raw response envelope."
+                )
             parsing_error = response.get("parsing_error")
             if parsing_error:
                 if isinstance(parsing_error, BaseException):
                     raise parsing_error
-                raise RuntimeError(f"Could not parse structured model output: {parsing_error}")
+                raise StructuredOutputError(f"Could not parse structured model output: {parsing_error}")
             return response.get("parsed")
 
         return ChatModel._from_runnable(
@@ -754,7 +763,9 @@ class ChatModel:
     def _validate_input_capabilities(self, messages: Sequence[BaseMessage]) -> None:
         """Validate that input modalities match declared model capabilities."""
         if not self.capabilities.supports_vision and has_image_content(messages):
-            raise ValueError(f"Model '{self.model}' ({self.provider}) does not support vision/image inputs.")
+            raise ModelConfigurationError(
+                f"Model '{self.model}' ({self.provider}) does not support vision/image inputs."
+            )
 
     def invoke(
         self,

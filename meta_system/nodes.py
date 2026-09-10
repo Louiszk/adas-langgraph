@@ -30,6 +30,7 @@ from meta_system.prompts import (
 )
 from meta_system.state import MetaState
 from meta_system.tools import code_related_tools, function_signatures, tools
+from adas_core.exceptions import MetaStateError
 
 logger = get_logger("meta_system.nodes")
 
@@ -59,7 +60,7 @@ def initial_test_runner_function(state: MetaState) -> dict[str, Any]:
 
     test_system_tool = tools.get("TestSystem")
     if not test_system_tool:
-        raise ValueError("TestSystem tool not found.")
+        raise MetaStateError("TestSystem tool not found.")
 
     logger.info("--- Running baseline evaluation for initial target system ---")
     test_result_str = test_system_tool.invoke({"state": state})  # type: ignore
@@ -113,7 +114,7 @@ def meta_agent_function(state: MetaState) -> dict[str, Any]:
         messages = state.get("messages", [])
         target_agentic_system = state.get("target_agentic_system")
         if target_agentic_system is None:
-            raise ValueError("target_agentic_system is required in MetaState.")
+            raise MetaStateError("target_agentic_system is required in MetaState.")
 
         iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
         current_messages = messages[1:]

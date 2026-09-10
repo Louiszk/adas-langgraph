@@ -20,6 +20,11 @@ from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from adas_core.exceptions import (
+    MissingWorkflowError,
+    ValidatorContractError,
+    ValidatorDispatchError,
+)
 
 logger = get_logger("adas_core.test_runner")
 
@@ -87,7 +92,7 @@ def _dispatch_validator(
         validator_fn = _dispatch_validate
 
     if not validator_fn:
-        raise ValueError(f"No validator function '{fn_name}' found in validation module.")
+        raise ValidatorDispatchError(f"No validator function '{fn_name}' found in validation module.")
 
     workspace_dirs_str = {
         "workspace": str(workspace_dirs.get("workspace", "")),
@@ -97,7 +102,9 @@ def _dispatch_validator(
 
     is_pass, message = validator_fn(final_state, workspace_dirs_str)
     if not isinstance(is_pass, bool):
-        raise TypeError(f"Validator for {test_case.id} must return tuple[bool, str], got {type(is_pass).__name__}")
+        raise ValidatorContractError(
+            f"Validator for {test_case.id} must return tuple[bool, str], got {type(is_pass).__name__}"
+        )
     return is_pass, str(message)
 
 
@@ -185,7 +192,7 @@ def execute_test_suite(
         source_code = materialize_system(system, output_dir=None)
         exec(source_code, main_namespace)
         if "workflow" not in main_namespace:
-            raise RuntimeError("Compiled system code did not expose a 'workflow' object.")
+            raise MissingWorkflowError("Compiled system code did not expose a 'workflow' object.")
         target_workflow = main_namespace["workflow"]
     except Exception as exc:
         sys.modules.pop(mod_name, None)

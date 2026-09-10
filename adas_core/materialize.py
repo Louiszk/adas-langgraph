@@ -4,12 +4,13 @@ import re
 from langgraph.graph import END, START
 
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from adas_core.exceptions import MaterializationError
 
 
 def get_function_name(func_source: str) -> str:
     match = re.search(r"def\s+([^\s(]+)", func_source)
     if not match:
-        raise ValueError("Could not find function definition in source.")
+        raise MaterializationError("Could not find function definition in source.")
 
     return match.group(1)
 

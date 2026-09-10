@@ -13,6 +13,11 @@ from adas_core.environment import (
     SANDBOX_WORKSPACE_DIR,
 )
 from adas_core.logging_config import get_logger
+from adas_core.exceptions import (
+    SandboxConfigurationError,
+    SandboxRuntimeUnavailableError,
+    SandboxSessionError,
+)
 from config import settings
 
 logger = get_logger("sandbox")
@@ -103,11 +108,11 @@ class StreamingSandboxSession:
         backend = None
         if container_type == "docker":
             if not check_docker_running():
-                raise RuntimeError("Docker is selected but not running or available.")
+                raise SandboxRuntimeUnavailableError("Docker is selected but not running or available.")
             backend = SandboxBackend.DOCKER
         elif container_type == "podman":
             if not check_podman_running():
-                raise RuntimeError("Podman is selected but not running or available.")
+                raise SandboxRuntimeUnavailableError("Podman is selected but not running or available.")
             backend = SandboxBackend.PODMAN
         elif container_type == "auto":
             if check_docker_running():
@@ -115,9 +120,11 @@ class StreamingSandboxSession:
             elif check_podman_running():
                 backend = SandboxBackend.PODMAN
             else:
-                raise RuntimeError("Neither Docker nor Podman are running or available. Please install and start one.")
+                raise SandboxRuntimeUnavailableError(
+                    "Neither Docker nor Podman are running or available. Please install and start one."
+                )
         else:
-            raise ValueError(f"Unknown container type: {container_type}")
+            raise SandboxConfigurationError(f"Unknown container type: {container_type}")
 
         if self.verbose:
             logger.info(f"Using {backend.value} as container runtime")
@@ -148,7 +155,7 @@ class StreamingSandboxSession:
 
     def open(self):
         if not self.session:
-            raise RuntimeError("Session was not initialized correctly.")
+            raise SandboxSessionError("Session was not initialized correctly.")
         if self._uses_cached_image:
             # Each run receives a fresh container, while this image (including
             # Python packages) persists in the container engine's local image cache.
@@ -161,12 +168,12 @@ class StreamingSandboxSession:
 
     def execute_command(self, command, workdir=None):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         return self.session.execute_command(command, workdir)
 
     def copy_to_runtime(self, src, dest):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         try:
             dest_dir = os.path.dirname(str(dest).replace("\\", "/"))
             if dest_dir:
@@ -178,12 +185,12 @@ class StreamingSandboxSession:
 
     def copy_from_runtime(self, src, dest):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         return self.session.copy_from_runtime(src, dest)
 
     def execute_command_streaming(self, command, workdir=None, environment=None):
         if not self.session or not self.session.container:
-            raise RuntimeError("Session is not open or container is not running.")
+            raise SandboxSessionError("Session is not open or container is not running.")
 
         kwargs = {"stream": True, "tty": True}
         if workdir:

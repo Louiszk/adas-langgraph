@@ -7,10 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
-
-
-class FeatureNotImplementedError(NotImplementedError, ValueError):
-    """Raised when a TaskSpec requests a capability unavailable in the runtime."""
+from adas_core.exceptions import FeatureNotImplementedError
 
 
 class ToolRequirement(BaseModel):

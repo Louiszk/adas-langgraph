@@ -8,6 +8,8 @@ import re
 import tokenize
 from typing import Any
 
+from adas_core.exceptions import MetaResponseParseError
+
 
 def find_markdown_fences(markdown: str) -> list[dict[str, Any]]:
     """Extract code block contents and line bounds from markdown without Python-specific tokenization.
@@ -130,7 +132,7 @@ def extract_json_block(content: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    raise ValueError(f"Could not extract valid JSON object from model response: {content[:300]}...")
+    raise MetaResponseParseError(f"Could not extract valid JSON object from model response: {content[:300]}...")
 
 
 def extract_json_block_optional(content: str) -> dict[str, Any] | None:
