@@ -8,10 +8,10 @@ import json
 from pathlib import Path
 
 from adas_core.automatic_setup import AutomaticSetup
-from adas_core.environment import _PACKAGE_PATTERN, ensure_packages_installed
+from adas_core.environment import _PACKAGE_PATTERN, ensure_packages_installed, validate_package_requirement
 from adas_core.task_spec import TaskSpec
 
-__all__ = ["_PACKAGE_PATTERN", "install_packages", "write_manifest"]
+__all__ = ["_PACKAGE_PATTERN", "install_packages", "validate_package_requirement", "write_manifest"]
 
 
 def install_packages(packages: list[str]) -> None:

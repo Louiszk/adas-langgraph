@@ -9,10 +9,12 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
 from adas_core.logging_config import get_logger
@@ -52,11 +54,33 @@ _PACKAGE_PATTERN = re.compile(
 )
 
 
+def validate_package_requirement(requirement: str, *, raise_on_error: bool = False) -> bool:
+    """Validate that a package requirement string has a valid format and contains no unsafe characters."""
+    if not requirement or not isinstance(requirement, str) or not _PACKAGE_PATTERN.fullmatch(requirement.strip()):
+        if raise_on_error:
+            raise ValueError(f"Invalid package requirement: '{requirement}'")
+        return False
+    return True
+
+
 def normalize_package_name(package_spec: str) -> str:
-    """Extract canonical distribution name from requirement specifier."""
+    """Extract canonical distribution name from requirement specifier using PEP 503 rules."""
     # Strip extras, versions, and markers: e.g. "uvicorn[standard]>=0.20.0" -> "uvicorn"
     name = re.split(r"[><=~!\[;,]", package_spec.strip())[0].strip()
-    return name.lower().replace("_", "-")
+    return canonicalize_name(name)
+
+
+def is_package_excluded(
+    package_spec: str,
+    excluded_packages: Sequence[str] | None = None,
+) -> bool:
+    """Return True if the package matches any excluded distribution using exact canonical name comparison."""
+    if not package_spec:
+        return False
+    canonical = normalize_package_name(package_spec)
+    excluded = excluded_packages if excluded_packages is not None else DEFAULT_EXCLUDED_PACKAGES
+    excluded_canonical = {normalize_package_name(p) for p in excluded}
+    return canonical in excluded_canonical
 
 
 def is_package_installed(package_name: str) -> bool:
@@ -95,7 +119,7 @@ def ensure_packages_installed(
         return []
 
     # Validate all requirements before running any commands
-    invalid = [pkg for pkg in packages if not _PACKAGE_PATTERN.fullmatch(pkg.strip())]
+    invalid = [pkg for pkg in packages if not validate_package_requirement(pkg)]
     if invalid:
         raise ValueError(f"Invalid package requirement(s): {invalid}")
 
@@ -123,7 +147,21 @@ def ensure_packages_installed(
         raise RuntimeError(err_msg) from e
 
 
-def copy_directory_contents(src: Path, dest: Path) -> int:
+PROVISIONING_SCRIPT_PREFIXES = ("generate_", "seed_", "mock_", "setup_")
+
+
+def is_provisioning_script(path: Path | str) -> bool:
+    """Return True if path is a Python fixture provisioning or setup script."""
+    p = Path(path)
+    return p.suffix == ".py" and p.name.startswith(PROVISIONING_SCRIPT_PREFIXES)
+
+
+def copy_directory_contents(
+    src: Path,
+    dest: Path,
+    *,
+    exclude_provisioning_scripts: bool = True,
+) -> int:
     """Copy all files and subdirectories from src to dest preserving structure."""
     if not src.exists() or not src.is_dir():
         return 0
@@ -134,6 +172,8 @@ def copy_directory_contents(src: Path, dest: Path) -> int:
         if item.is_file():
             # Skip python bytecode and cache dirs
             if "__pycache__" in item.parts or item.suffix in (".pyc", ".pyo"):
+                continue
+            if exclude_provisioning_scripts and is_provisioning_script(item):
                 continue
             relative = item.relative_to(src)
             target = dest / relative
@@ -210,9 +250,11 @@ def isolated_case_workspace(
                         shutil.copy2(src, target)
                         copied_count += 1
                     elif src.is_dir():
-                        copied_count += copy_directory_contents(src, target)
+                        # The TaskSpec explicitly declared this artifact. It may
+                        # legitimately contain Python source such as setup.py.
+                        copied_count += copy_directory_contents(src, target, exclude_provisioning_scripts=False)
             else:
-                copied_count = copy_directory_contents(fixtures_path, input_dir)
+                copied_count = copy_directory_contents(fixtures_path, input_dir, exclude_provisioning_scripts=True)
             logger.debug(f"Seeded {copied_count} fixture file(s) into {input_dir}")
 
     # Preserve previous environment variables

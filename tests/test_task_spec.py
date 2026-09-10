@@ -50,29 +50,12 @@ class TestTaskSpecModel:
         assert "case_1_addition" not in context
         assert '"holdout_suite"' not in context
 
-    def test_multi_turn_auto_configures_persistence(self):
-        spec = TaskSpec(
-            name="ConversationalMathAgent",
-            system_goal="Multi-turn math tutor.",
-            architecture_contract=ArchitectureContract(
+    def test_multi_turn_is_rejected_until_execution_is_implemented(self):
+        with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: Execution mode 'multi_turn'"):
+            ArchitectureContract(
                 execution_mode="multi_turn",
                 state_schema={"messages": "Annotated[list[AnyMessage], add_messages]"},
-            ),
-            dev_suite=[
-                TestCaseSpec(
-                    id="case_1_two_turn",
-                    description="Follow-up question",
-                    turns=[
-                        {"messages": [("human", "Let x = 5.")]},
-                        {"messages": [("human", "What is x * 2?")]},
-                    ],
-                )
-            ],
-        )
-
-        assert spec.architecture_contract.persistence is not None
-        assert spec.architecture_contract.persistence.checkpointer == "memory"
-        assert spec.architecture_contract.persistence.requires_thread_id is True
+            )
 
     def test_full_fixtures_and_required_packages_serialization(self, tmp_path):
         spec = TaskSpec(
@@ -125,34 +108,10 @@ class TestTaskSpecModel:
                         description="SQLite cache table",
                     ),
                 ],
-                mcps=[
-                    MCPFixtureSpec(
-                        name="github_mcp",
-                        transport="stdio",
-                        command="python",
-                        args=["fixtures/mock_github_mcp.py"],
-                        description="Simulated GitHub issues and PR tools",
-                    ),
-                    MCPFixtureSpec(
-                        name="remote_docs_mcp",
-                        transport="streamable-http",
-                        port=8090,
-                        endpoint_path="/mcp",
-                        url_env="DOCS_MCP_URL",
-                        description="Streamable HTTP MCP server for documentation lookups",
-                    ),
-                ],
-                mock_services=[
-                    MockServiceFixtureSpec(
-                        name="weather_mock",
-                        port=8080,
-                        base_url_env="MOCK_WEATHER_URL",
-                        description="Serves /v1/current and /v1/forecast mock JSONs",
-                    )
-                ],
                 custom_fixtures=[
                     CustomFixtureSpec(
                         name="git_repo",
+                        path="repo/",
                         description="Initialize git repo with 2 branches and a conflicting commit",
                     )
                 ],
@@ -182,11 +141,6 @@ class TestTaskSpecModel:
         assert restored.test_fixtures.databases[0].db_type == "neo4j"
         assert restored.test_fixtures.databases[0].count == 500
         assert restored.test_fixtures.databases[0].connection_env["uri"] == "NEO4J_URI"
-        assert len(restored.test_fixtures.mcps) == 2
-        assert restored.test_fixtures.mcps[0].transport == "stdio"
-        assert restored.test_fixtures.mcps[1].transport == "streamable-http"
-        assert restored.test_fixtures.mcps[1].endpoint_path == "/mcp"
-        assert restored.test_fixtures.mock_services[0].port == 8080
         assert restored.test_fixtures.custom_fixtures[0].name == "git_repo"
 
         # File save/load roundtrip
@@ -197,6 +151,13 @@ class TestTaskSpecModel:
         from_file_spec = TaskSpec.from_file(file_path)
         assert from_file_spec.name == spec.name
         assert from_file_spec.test_fixtures.files[0].path == "input.csv"
+
+    def test_process_fixtures_are_rejected_until_lifecycle_exists(self):
+        with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: MCP and mock HTTP service fixtures"):
+            TestFixturesSpec(mcps=[MCPFixtureSpec(name="docs_mcp", port=8090)])
+
+        with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: MCP and mock HTTP service fixtures"):
+            TestFixturesSpec(mock_services=[MockServiceFixtureSpec(name="weather_mock", port=8080)])
 
     def test_forbid_extra_fields(self):
         with pytest.raises(ValidationError):
@@ -292,7 +253,11 @@ class TestTaskSpecModel:
                     FileFixtureSpec(id="clean_csv", path="clean.csv"),
                     FileFixtureSpec(id="dirty_json", path="dirty.json"),
                 ],
-                mock_services=[MockServiceFixtureSpec(id="api_mock", name="api_mock", port=8080)],
+                custom_fixtures=[
+                    CustomFixtureSpec(
+                        id="api_mock", name="api_mock", path="api_mock/", description="Placeholder fixture"
+                    )
+                ],
             ),
             dev_suite=[
                 TestCaseSpec(id="case_1", description="Clean only", fixture_ids=["clean_csv"], turns=[{"q": "1"}]),
@@ -302,6 +267,7 @@ class TestTaskSpecModel:
         assert spec.test_fixtures.all_fixture_ids() == {"clean_csv", "dirty_json", "api_mock"}
         assert spec.test_fixtures.get_file_paths_for_fixture_ids(["clean_csv"]) == ["clean.csv"]
         assert spec.test_fixtures.get_file_paths_for_fixture_ids(None) is None
+        assert spec.test_fixtures.get_all_file_paths() == ["clean.csv", "dirty.json", "api_mock"]
 
         # Unknown fixture_id raises ValidationError
         with pytest.raises(ValidationError, match="references unknown fixture_id 'nonexistent'"):
@@ -316,6 +282,35 @@ class TestTaskSpecModel:
                     files=[FileFixtureSpec(id="clean_csv", path="clean.csv")],
                 ),
                 dev_suite=[TestCaseSpec(id="c1", description="d", fixture_ids=["nonexistent"], turns=[{"q": "1"}])],
+            )
+
+    def test_task_spec_validates_required_packages(self):
+        spec = TaskSpec(
+            name="ValidPkgAgent",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            required_packages=["neo4j>=5.0", "fastapi", "psycopg2-binary"],
+            dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
+        )
+        assert spec.required_packages == ["neo4j>=5.0", "fastapi", "psycopg2-binary"]
+
+        with pytest.raises(ValidationError, match="Invalid package requirement"):
+            TaskSpec(
+                name="BadPkgAgent",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+                required_packages=["bad; rm -rf /"],
+                dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
+            )
+
+    def test_task_spec_rejects_unsupported_schema_version(self):
+        with pytest.raises(ValidationError, match="Unsupported schema_version '2.0'"):
+            TaskSpec(
+                schema_version="2.0",
+                name="FutureTask",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+                dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
             )
 
     def test_duplicate_dev_suite_ids_rejected(self):
@@ -521,7 +516,9 @@ class TestHoldoutSuiteSpecModel:
             ],
             custom_fixtures=[
                 CustomFixtureSpec(id="sample_repo", name="sample_repo", path="repo/", description="Git repo"),
-                CustomFixtureSpec(id="no_path_custom", name="no_path_custom", description="No path custom"),
+                CustomFixtureSpec(
+                    id="custom_config", name="custom_config", path="config/custom.yaml", description="Config"
+                ),
             ],
         )
 
@@ -535,8 +532,13 @@ class TestHoldoutSuiteSpecModel:
             "data/cache.db",
             "repo",
         ]
-        # Remote db and custom without path yield no file paths
-        assert tf.get_file_paths_for_fixture_ids(["remote_neo4j", "no_path_custom"]) == []
+        # Remote databases have no file artifact; custom fixtures always declare one.
+        assert tf.get_file_paths_for_fixture_ids(["remote_neo4j"]) == []
+        assert tf.get_file_paths_for_fixture_ids(["custom_config"]) == ["config/custom.yaml"]
+
+    def test_custom_fixture_requires_artifact_path(self):
+        with pytest.raises(ValidationError, match="path"):
+            CustomFixtureSpec.model_validate({"name": "missing_artifact", "description": "No artifact path"})
 
     def test_get_file_paths_fails_loudly_on_invalid_fixture_path(self):
         tf = TestFixturesSpec(files=[FileFixtureSpec(id="sales_csv", path="sales.csv", description="Sales")])
@@ -599,6 +601,16 @@ class TestHoldoutSuiteSpecModel:
             HoldoutSuiteSpec(
                 task_name="CollisionTest",
                 holdout_suite=cases,
+            )
+
+    def test_holdout_suite_rejects_unsupported_schema_version(self):
+        from adas_core.task_spec import HoldoutSuiteSpec
+
+        with pytest.raises(ValidationError, match="Unsupported schema_version '0.9'"):
+            HoldoutSuiteSpec(
+                schema_version="0.9",
+                task_name="OldTask",
+                holdout_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
             )
 
 

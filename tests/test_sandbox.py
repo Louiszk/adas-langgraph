@@ -240,7 +240,7 @@ class TestSetupSandboxUtilities:
         assert json.loads(manifest_path.read_text(encoding="utf-8"))["validation"] == validation
 
     def test_package_pattern_validation(self):
-        from adas_core.environment import _PACKAGE_PATTERN
+        from adas_core.environment import _PACKAGE_PATTERN, validate_package_requirement
         from sandbox.run_setup import install_packages
 
         valid_packages = [
@@ -255,6 +255,7 @@ class TestSetupSandboxUtilities:
         ]
         for pkg in valid_packages:
             assert _PACKAGE_PATTERN.fullmatch(pkg), f"Expected valid: {pkg}"
+            assert validate_package_requirement(pkg), f"Expected valid: {pkg}"
 
         invalid_packages = [
             "sh -c rm -rf /",
@@ -264,6 +265,7 @@ class TestSetupSandboxUtilities:
         ]
         for pkg in invalid_packages:
             assert not _PACKAGE_PATTERN.fullmatch(pkg), f"Expected invalid: {pkg}"
+            assert not validate_package_requirement(pkg), f"Expected invalid: {pkg}"
 
         with pytest.raises(ValueError, match="Invalid package requirement"):
             install_packages(["safe-pkg", "bad; rm -rf"])

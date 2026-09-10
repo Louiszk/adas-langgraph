@@ -259,8 +259,11 @@ def execute_test_suite(
             stderr_captured = ""
 
             allowed_files = None
-            if task_spec is not None and test_case.fixture_ids is not None:
-                allowed_files = task_spec.test_fixtures.get_file_paths_for_fixture_ids(test_case.fixture_ids)
+            if task_spec is not None:
+                if test_case.fixture_ids is not None:
+                    allowed_files = task_spec.test_fixtures.get_file_paths_for_fixture_ids(test_case.fixture_ids)
+                else:
+                    allowed_files = task_spec.test_fixtures.get_all_file_paths()
 
             with isolated_case_workspace(
                 base_dir=active_workspace_root,

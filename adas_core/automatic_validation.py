@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
+from adas_core.environment import is_provisioning_script
 from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
@@ -41,14 +42,15 @@ def _task_spec_sha256(task_spec: TaskSpec) -> str:
 
 def _fixture_generator_hashes(root: Path) -> dict[str, str]:
     """Return hashes for every fixture generator that influences validation generation."""
-    fixtures_dir = root / "fixtures"
-    if not fixtures_dir.is_dir():
-        return {}
-    return {
-        path.relative_to(root).as_posix(): _normalized_sha256(path)
-        for path in sorted(fixtures_dir.glob("*.py"))
-        if path.name.startswith(("generate_", "seed_", "mock_", "setup_"))
-    }
+    hashes: dict[str, str] = {}
+    candidate_paths: list[Path] = []
+    for candidate_dir in (root / "setup_scripts", root / "fixtures"):
+        if candidate_dir.is_dir():
+            candidate_paths.extend(candidate_dir.glob("*.py"))
+    for path in sorted(candidate_paths):
+        if is_provisioning_script(path):
+            hashes[path.relative_to(root).as_posix()] = _normalized_sha256(path)
+    return hashes
 
 
 def write_validation_manifest(task_spec: TaskSpec, root: Path, validation_file: Path) -> Path:
@@ -63,7 +65,6 @@ def write_validation_manifest(task_spec: TaskSpec, root: Path, validation_file: 
         "task_spec_hash": _task_spec_sha256(task_spec),
         "fixture_generator_hashes": _fixture_generator_hashes(root),
         "generator_version": VALIDATION_GENERATOR_VERSION,
-        "generator_prompt_hash": hashlib.sha256(CASE_VALIDATION_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
         "validator_file": validation_file.relative_to(root).as_posix(),
         "validator_hash": _normalized_sha256(validation_file),
     }
@@ -101,8 +102,6 @@ def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) ->
             and validation.get("task_spec_hash") == _task_spec_sha256(task_spec)
             and validation.get("fixture_generator_hashes") == _fixture_generator_hashes(root)
             and validation.get("generator_version") == VALIDATION_GENERATOR_VERSION
-            and validation.get("generator_prompt_hash")
-            == hashlib.sha256(CASE_VALIDATION_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
             and validator_hash == _normalized_sha256(validator_file)
         )
     except (OSError, ValueError, json.JSONDecodeError):
@@ -447,29 +446,30 @@ def assemble_validation_module(
 
 
 def discover_fixture_generators(base_path: Path | str | None) -> dict[str, str]:
-    """Search candidate fixture directories for fixture generator/seed scripts and return their code."""
+    """Search candidate fixture and setup directories for fixture generator/seed scripts and return their code."""
     if not base_path:
         return {}
     target = Path(base_path)
-    candidate_dirs = [
-        target / "fixtures",
-        target.parent / "fixtures",
-        target if target.is_dir() and target.name == "fixtures" else None,
-        Path("task_setup/fixtures"),
-        Path("fixtures"),
+    candidate_groups = [
+        [target / "setup_scripts", target / "fixtures"],
+        [target.parent / "setup_scripts", target.parent / "fixtures"],
+        [target] if target.is_dir() and target.name in ("setup_scripts", "fixtures") else [],
+        [Path("task_setup/setup_scripts"), Path("task_setup/fixtures")],
+        [Path("setup_scripts"), Path("fixtures")],
     ]
     generators: dict[str, str] = {}
-    for cdir in candidate_dirs:
-        if cdir and cdir.exists() and cdir.is_dir():
-            for script in sorted(cdir.glob("*.py")):
-                if script.name.startswith(("generate_", "seed_", "mock_", "setup_")):
-                    try:
-                        code = script.read_text(encoding="utf-8")
-                        generators[script.name] = code if len(code) <= 8000 else code[:8000] + "\n# ... (truncated)"
-                    except OSError as exc:
-                        logger.debug("Could not read fixture generator %s: %r", script, exc)
-            if generators:
-                break
+    for group in candidate_groups:
+        for cdir in group:
+            if cdir and cdir.exists() and cdir.is_dir():
+                for script in sorted(cdir.glob("*.py")):
+                    if is_provisioning_script(script) and script.name not in generators:
+                        try:
+                            code = script.read_text(encoding="utf-8")
+                            generators[script.name] = code if len(code) <= 8000 else code[:8000] + "\n# ... (truncated)"
+                        except OSError as exc:
+                            logger.debug("Could not read fixture generator %s: %r", script, exc)
+        if generators:
+            break
     return generators
 
 

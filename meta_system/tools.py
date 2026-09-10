@@ -1,6 +1,5 @@
 import ast
 import os
-import re
 import subprocess
 import sys
 import time
@@ -14,12 +13,14 @@ from langchain_core.tools import tool
 from adas_core.candidate_selection import record_candidate_evaluation
 from adas_core.decorator_logic import build_decorator_signatures
 from adas_core.environment import (
-    _PACKAGE_PATTERN,
     DEFAULT_EXCLUDED_PACKAGES,
     SANDBOX_FIXTURES_DIR,
     SANDBOX_GENERATED_SYSTEMS_DIR,
     SANDBOX_TASK_SETUP_DIR,
     SANDBOX_TASK_SPEC_PATH,
+    is_package_excluded,
+    normalize_package_name,
+    validate_package_requirement,
 )
 from adas_core.helpers import (
     get_filtered_packages,
@@ -45,16 +46,15 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
     """
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
     # Validate package name to prevent command injection
-    if not _PACKAGE_PATTERN.fullmatch(package_name.strip()):
+    if not validate_package_requirement(package_name):
         return f"ERROR: Invalid package name format. Package name '{package_name}' contains invalid characters."
-    if any(ep in package_name for ep in DEFAULT_EXCLUDED_PACKAGES + ["langgraph", "langchain-core"]):
+    if is_package_excluded(package_name, excluded_packages=DEFAULT_EXCLUDED_PACKAGES + ["langgraph", "langchain-core"]):
         return f"{package_name} is already installed."
 
     # Parse package name to get the canonical name for `pip show`
-    name_only_match = re.match(r"^[a-zA-Z0-9._-]+", package_name.strip())
-    if not name_only_match:
+    name_only = normalize_package_name(package_name)
+    if not name_only:
         return f"ERROR: Could not parse package name from '{package_name}'."
-    name_only = name_only_match.group(0).lower()
 
     try:
         process = subprocess.run(

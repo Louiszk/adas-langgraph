@@ -4,6 +4,7 @@ charset-normalizer==3.4.4
 docker==7.1.0
 idna==3.18
 llm-sandbox==0.3.39
+packaging==25.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 requests==2.34.2

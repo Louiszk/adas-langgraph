@@ -128,6 +128,9 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
 
         exclude_packages = DEFAULT_EXCLUDED_PACKAGES
 
+    from adas_core.environment import normalize_package_name
+
+    excluded_canonical = {normalize_package_name(p) for p in exclude_packages}
     result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True)
 
     packages = []
@@ -138,7 +141,7 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
                 package_name = parts[0]
                 version = parts[1]
 
-                if package_name not in exclude_packages:
+                if normalize_package_name(package_name) not in excluded_canonical:
                     packages.append(f"{package_name} {version}")
     return packages
 

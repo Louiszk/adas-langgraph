@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from adas_core.task_spec import TestCaseSpec
+from adas_core.task_spec import ArchitectureContract, FileFixtureSpec, TaskSpec, TestCaseSpec, TestFixturesSpec
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
@@ -56,6 +57,51 @@ class TestExecuteTestSuite:
         assert result.case_results[0].passed is True
         assert result.case_results[1].passed is True
         assert "All 2 test cases passed successfully." in result.summary_lines
+
+    def test_execute_test_suite_isolates_fixtures_and_excludes_provisioning_scripts(self, tmp_path):
+        system = _create_dummy_system("IsolationSystem")
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        (fixtures_dir / "data.csv").write_text("id,val\n1,10", encoding="utf-8")
+        (fixtures_dir / "generate_data.py").write_text("# script", encoding="utf-8")
+        (fixtures_dir / "unrelated.txt").write_text("unrelated", encoding="utf-8")
+
+        spec = TaskSpec(
+            name="IsoTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str", "result": "str"},
+            ),
+            test_fixtures=TestFixturesSpec(
+                files=[FileFixtureSpec(id="data_csv", path="data.csv")],
+            ),
+            dev_suite=[
+                TestCaseSpec(id="case_1", description="test", turns=[{"query": "run"}]),
+            ],
+        )
+
+        class MockValidation:
+            @staticmethod
+            def validate_case_1(final_state: dict[str, Any], workspace_dirs: dict[str, str]):
+                in_dir = Path(workspace_dirs["input"])
+                assert (in_dir / "data.csv").exists()
+                assert not (in_dir / "generate_data.py").exists()
+                assert not (in_dir / "unrelated.txt").exists()
+                return True, "verified isolation"
+
+        result = execute_test_suite(
+            system=system,
+            test_cases=spec.dev_suite,
+            validation_module=MockValidation(),
+            workspace_root=tmp_path / "workspace",
+            fixtures_dir=fixtures_dir,
+            task_spec=spec,
+        )
+
+        assert result.all_passed is True
+        assert result.passed_count == 1
+        assert result.case_results[0].message == "verified isolation"
 
     def test_structural_errors(self):
         system = _create_dummy_system("BrokenSystem")

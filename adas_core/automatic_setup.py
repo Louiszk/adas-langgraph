@@ -181,7 +181,7 @@ class AutomaticSetup:
             "TASK: Mock FastMCP Server\n"
             "Write a complete, executable mock MCP server script using the FastMCP framework (`from mcp.server.fastmcp import FastMCP`).\n"
             "Implement realistic mock tools using `@mcp.tool()` based on the fixture requirements.\n"
-            "Include `if __name__ == '__main__': mcp.run(...)` respecting the specified transport ('stdio', 'streamable-http', or 'sse', preferring 'streamable-http' over legacy 'sse' for HTTP servers)."
+            "Include `if __name__ == '__main__': mcp.run(...)` configured for the specified Streamable HTTP port and endpoint path."
         )
         system_prompt = self._build_system_prompt(instructions)
         transport_info = f"Transport: {fixture.transport}"
@@ -237,21 +237,19 @@ class AutomaticSetup:
         instructions = (
             "TASK: Custom Environment Setup\n"
             "Write a Python script defining `setup_environment(workspace_dirs: dict[str, str]) -> None`\n"
-            "that implements the custom setup requirements (e.g. git repo init, process mock, etc.)."
+            "that materializes the declared filesystem artifact (e.g. a git repository or CLI fixture). "
+            "Do not start services or background processes."
         )
-        if fixture.path:
-            instructions += (
-                f"\nArtifact Relative Path: {fixture.path}\n"
-                f"The script must create that exact relative path beneath workspace_dirs['ADAS_INPUT_DIR']."
-            )
+        instructions += (
+            f"\nArtifact Relative Path: {fixture.path}\n"
+            f"The script must create that exact relative path beneath workspace_dirs['ADAS_INPUT_DIR']."
+        )
         system_prompt = self._build_system_prompt(instructions)
 
-        path_info = ""
-        if fixture.path:
-            path_info = (
-                f"Artifact Path: {fixture.path}\n"
-                f'Artifact Location Instruction: Create that exact relative path beneath workspace_dirs["ADAS_INPUT_DIR"].\n'
-            )
+        path_info = (
+            f"Artifact Path: {fixture.path}\n"
+            f'Artifact Location Instruction: Create that exact relative path beneath workspace_dirs["ADAS_INPUT_DIR"].\n'
+        )
 
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
@@ -305,9 +303,11 @@ class AutomaticSetup:
     ) -> SetupGenerationResult:
         """Synthesize all declared fixtures and the preflight script for a TaskSpec."""
         root = Path(task_dir)
+        setup_scripts_dir = root / "setup_scripts"
         fixtures_dir = root / "fixtures"
         has_fixtures = _has_declared_fixtures(task_spec)
         if has_fixtures:
+            setup_scripts_dir.mkdir(parents=True, exist_ok=True)
             fixtures_dir.mkdir(parents=True, exist_ok=True)
 
         created_files: list[Path] = []
@@ -318,43 +318,43 @@ class AutomaticSetup:
             code, reqs = self.generate_file_script(task_spec, file_fix)
             clean_rel = normalize_fixture_path(file_fix.path)
             clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
-            generator_script_dest = fixtures_dir / f"generate_{clean_name}.py"
-            safe_write_text(generator_script_dest, code, root_dir=fixtures_dir)
+            generator_script_dest = setup_scripts_dir / f"generate_{clean_name}.py"
+            safe_write_text(generator_script_dest, code, root_dir=setup_scripts_dir)
             created_files.append(generator_script_dest)
             discovered_packages.update(reqs)
 
         # 2. Generate database seed scripts
         for db_fix in task_spec.test_fixtures.databases:
-            db_script_dest = fixtures_dir / f"seed_{db_fix.name}.py"
+            db_script_dest = setup_scripts_dir / f"seed_{db_fix.name}.py"
             code, reqs = self.generate_database_seed_script(task_spec, db_fix)
-            safe_write_text(db_script_dest, code, root_dir=fixtures_dir)
+            safe_write_text(db_script_dest, code, root_dir=setup_scripts_dir)
             created_files.append(db_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated database seed script: {db_script_dest}")
 
         # 3. Generate MCP mock server scripts
         for mcp_fix in task_spec.test_fixtures.mcps:
-            mcp_script_dest = fixtures_dir / f"mock_{mcp_fix.name}.py"
+            mcp_script_dest = setup_scripts_dir / f"mock_{mcp_fix.name}.py"
             code, reqs = self.generate_mcp_server_script(task_spec, mcp_fix)
-            safe_write_text(mcp_script_dest, code, root_dir=fixtures_dir)
+            safe_write_text(mcp_script_dest, code, root_dir=setup_scripts_dir)
             created_files.append(mcp_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated MCP server script: {mcp_script_dest}")
 
         # 4. Generate mock service scripts
         for mock_fix in task_spec.test_fixtures.mock_services:
-            mock_dest = fixtures_dir / f"mock_{mock_fix.name}.py"
+            mock_dest = setup_scripts_dir / f"mock_{mock_fix.name}.py"
             code, reqs = self.generate_mock_service_script(task_spec, mock_fix)
-            safe_write_text(mock_dest, code, root_dir=fixtures_dir)
+            safe_write_text(mock_dest, code, root_dir=setup_scripts_dir)
             created_files.append(mock_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated mock service script: {mock_dest}")
 
         # 5. Generate custom fixture scripts
         for custom_fix in task_spec.test_fixtures.custom_fixtures:
-            cust_dest = fixtures_dir / f"setup_{custom_fix.name}.py"
+            cust_dest = setup_scripts_dir / f"setup_{custom_fix.name}.py"
             code, reqs = self.generate_custom_fixture_script(task_spec, custom_fix)
-            safe_write_text(cust_dest, code, root_dir=fixtures_dir)
+            safe_write_text(cust_dest, code, root_dir=setup_scripts_dir)
             created_files.append(cust_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated custom fixture script: {cust_dest}")
@@ -371,7 +371,7 @@ class AutomaticSetup:
             self.execute_generated_artifacts(task_spec, root, created_files)
 
         summary = (
-            f"Generated {len(created_files) - 1} fixture file(s) in {fixtures_dir} "
+            f"Generated {len(created_files) - 1} fixture setup artifact(s) in {setup_scripts_dir} / {fixtures_dir} "
             f"and preflight script at {preflight_path}. "
             f"Discovered {len(all_packages)} required package(s): {all_packages}"
         )
@@ -396,12 +396,15 @@ class AutomaticSetup:
         or HTTP service fixtures; the test harness owns their lifecycle.
         """
         root = Path(task_dir)
+        setup_scripts_dir = root / "setup_scripts"
         fixtures_dir = root / "fixtures"
 
         for file_fix in task_spec.test_fixtures.files:
             clean_rel = normalize_fixture_path(file_fix.path)
             clean_name = clean_rel.replace("/", "_").replace("\\", "_").replace(".", "_")
-            script = fixtures_dir / f"generate_{clean_name}.py"
+            script = setup_scripts_dir / f"generate_{clean_name}.py"
+            if not script.is_file():
+                script = fixtures_dir / f"generate_{clean_name}.py"
             dest = fixtures_dir / clean_rel
             if file_fix.count == 1:
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -423,7 +426,9 @@ class AutomaticSetup:
         for db_fix in task_spec.test_fixtures.databases:
             if db_fix.db_type not in ("sqlite", "duckdb"):
                 continue
-            script = fixtures_dir / f"seed_{db_fix.name}.py"
+            script = setup_scripts_dir / f"seed_{db_fix.name}.py"
+            if not script.is_file():
+                script = fixtures_dir / f"seed_{db_fix.name}.py"
             try:
                 ns = {"Path": Path}
                 exec(script.read_text(encoding="utf-8"), ns)
@@ -435,7 +440,9 @@ class AutomaticSetup:
                 raise RuntimeError(f"Error seeding embedded database {db_fix.name}: {exc}") from exc
 
         for custom_fix in task_spec.test_fixtures.custom_fixtures:
-            script = fixtures_dir / f"setup_{custom_fix.name}.py"
+            script = setup_scripts_dir / f"setup_{custom_fix.name}.py"
+            if not script.is_file():
+                script = fixtures_dir / f"setup_{custom_fix.name}.py"
             try:
                 ns = {"Path": Path}
                 exec(script.read_text(encoding="utf-8"), ns)
@@ -466,10 +473,11 @@ def ensure_automatic_setup(
     """
     root = Path(task_dir)
     fixtures_dir = root / "fixtures"
+    setup_scripts_dir = root / "setup_scripts"
     preflight_path = root / "preflight.py"
 
     has_fixtures = _has_declared_fixtures(task_spec)
-    fixtures_ready = fixtures_dir.exists() if has_fixtures else True
+    fixtures_ready = (fixtures_dir.exists() or setup_scripts_dir.exists()) if has_fixtures else True
 
     if not force and preflight_path.exists() and fixtures_ready:
         logger.info(f"Task setup already complete in {root}. Skipping automatic setup.")

@@ -17,8 +17,6 @@ from adas_core.task_spec import (
     CustomFixtureSpec,
     DatabaseFixtureSpec,
     FileFixtureSpec,
-    MCPFixtureSpec,
-    MockServiceFixtureSpec,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -98,10 +96,8 @@ class TestAutomaticSetup:
         # Define canned responses for LLM calls in order:
         # 1. file content (test.csv)
         # 2. database script (neo4j)
-        # 3. mcp script (github_mcp)
-        # 4. mock service script (weather_mock)
-        # 5. custom fixture script (git_repo)
-        # 6. preflight script
+        # 3. custom fixture script (git_repo)
+        # 4. preflight script
         mock_llm.invoke.side_effect = [
             AIMessage(
                 content="""```python
@@ -121,21 +117,6 @@ def seed_database(workspace_dirs: dict[str, str]) -> None:
             ),
             AIMessage(
                 content="""```python
-SETUP_REQUIREMENTS = ["mcp", "langchain-mcp-adapters"]
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("github_mock")
-```"""
-            ),
-            AIMessage(
-                content="""```python
-SETUP_REQUIREMENTS = ["fastapi", "uvicorn"]
-from fastapi import FastAPI
-app = FastAPI()
-```"""
-            ),
-            AIMessage(
-                content="""```python
 SETUP_REQUIREMENTS = ["gitpython"]
 
 def setup_environment(workspace_dirs: dict[str, str]) -> None:
@@ -144,7 +125,7 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
             ),
             AIMessage(
                 content="""```python
-SETUP_REQUIREMENTS = ["neo4j>=5.0", "fastapi", "mcp", "gitpython"]
+SETUP_REQUIREMENTS = ["neo4j>=5.0", "gitpython"]
 
 def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
     return True, "Environment verified"
@@ -174,24 +155,10 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
                         description="Vulnerability graph",
                     )
                 ],
-                mcps=[
-                    MCPFixtureSpec(
-                        name="github_mcp",
-                        transport="stdio",
-                        command="python",
-                        description="Mock GitHub PRs",
-                    )
-                ],
-                mock_services=[
-                    MockServiceFixtureSpec(
-                        name="weather_mock",
-                        port=8001,
-                        description="Mock API",
-                    )
-                ],
                 custom_fixtures=[
                     CustomFixtureSpec(
                         name="git_repo",
+                        path="repo/",
                         description="Git repository with branches",
                     )
                 ],
@@ -203,20 +170,19 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
         result = setup.generate_all(spec, tmp_path)
 
         # Verify files were created
-        assert (tmp_path / "fixtures" / "generate_data_test_csv.py").exists()
+        assert (tmp_path / "setup_scripts" / "generate_data_test_csv.py").exists()
+        assert not (tmp_path / "fixtures" / "generate_data_test_csv.py").exists()
         assert (tmp_path / "fixtures" / "data" / "test.csv").exists()
         assert (tmp_path / "fixtures" / "data" / "test.csv").read_text() == "id,revenue\n1,150.0\n2,250.0\n"
-        assert (tmp_path / "fixtures" / "seed_sec_graph.py").exists()
-        assert (tmp_path / "fixtures" / "mock_github_mcp.py").exists()
-        assert (tmp_path / "fixtures" / "mock_weather_mock.py").exists()
-        assert (tmp_path / "fixtures" / "setup_git_repo.py").exists()
+        assert (tmp_path / "setup_scripts" / "seed_sec_graph.py").exists()
+        assert not (tmp_path / "fixtures" / "seed_sec_graph.py").exists()
+        assert (tmp_path / "setup_scripts" / "setup_git_repo.py").exists()
+        assert not (tmp_path / "fixtures" / "setup_git_repo.py").exists()
         assert (tmp_path / "preflight.py").exists()
 
         # Verify discovered packages union
         assert "pydantic" in result.discovered_packages
         assert "neo4j>=5.0" in result.discovered_packages
-        assert "fastapi" in result.discovered_packages
-        assert "mcp" in result.discovered_packages
         assert "gitpython" in result.discovered_packages
 
     def test_ensure_automatic_setup_skips_when_present(self, tmp_path):

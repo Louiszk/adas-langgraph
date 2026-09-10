@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
 
 
+class FeatureNotImplementedError(NotImplementedError, ValueError):
+    """Raised when a TaskSpec requests a capability unavailable in the runtime."""
+
+
 class ToolRequirement(BaseModel):
     """Specification of a tool required by the target system."""
 
@@ -61,11 +65,20 @@ class ArchitectureContract(BaseModel):
         default_factory=list, description="List of tools the target system must provide"
     )
 
+    @field_validator("execution_mode")
+    @classmethod
+    def validate_execution_mode(cls, v: str) -> str:
+        # TODO(multi_turn): The test runner executes only one turn.
+        if v != "single_turn":
+            raise FeatureNotImplementedError(
+                f"NOT_IMPLEMENTED: Execution mode '{v}' is not supported by the current runtime. "
+                "Only 'single_turn' is currently implemented."
+            )
+        return v
+
     @model_validator(mode="after")
     def validate_multi_turn_persistence(self) -> ArchitectureContract:
-        # TODO: multi-turn checkpointer persistence validation (execution support planned for future commit)
-        if self.execution_mode == "multi_turn" and self.persistence is None:
-            self.persistence = PersistenceContract(checkpointer="memory", requires_thread_id=True)
+        # Execution-mode validation rejects multi_turn before this model validator runs.
         return self
 
 
@@ -179,25 +192,18 @@ class DatabaseFixtureSpec(BaseModel):
 
 
 class MCPFixtureSpec(BaseModel):
-    """Specification for a Model Context Protocol (MCP) server fixture."""
+    """Specification for a Streamable HTTP Model Context Protocol server fixture."""
 
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="MCP server identifier (e.g. 'github_mcp', 'filesystem_mcp')")
-    transport: Literal["stdio", "streamable-http", "sse"] = Field(
-        default="stdio",
-        description="MCP transport protocol: 'stdio' for subprocess pipes, 'streamable-http' for modern HTTP, or 'sse' for legacy HTTP",
+    transport: Literal["streamable-http"] = Field(
+        default="streamable-http",
+        description="MCP transport protocol. Streamable HTTP is the only supported protocol.",
     )
-    command: str | None = Field(
-        default=None, description="Executable command for stdio transport (e.g. 'python fixtures/mock_mcp.py')"
-    )
-    args: list[str] = Field(default_factory=list, description="Command line arguments for stdio transport")
-    env: dict[str, str] = Field(
-        default_factory=dict, description="Environment variables passed to the MCP server process"
-    )
-    port: int | None = Field(default=None, description="Port number if transport is 'streamable-http' or 'sse'")
+    port: int | None = Field(default=None, description="Port number for the Streamable HTTP MCP server")
     endpoint_path: str = Field(
         default="/mcp", description="HTTP endpoint path for Streamable HTTP (defaults to '/mcp')"
     )
@@ -212,13 +218,6 @@ class MCPFixtureSpec(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         return validate_identifier(v, field_name="mcp fixture name")
-
-    @field_validator("transport", mode="before")
-    @classmethod
-    def normalize_transport(cls, v: str) -> str:
-        if v == "streamable_http":
-            return "streamable-http"
-        return v
 
     @model_validator(mode="after")
     def set_default_id(self) -> MCPFixtureSpec:
@@ -256,16 +255,22 @@ class MockServiceFixtureSpec(BaseModel):
 
 
 class CustomFixtureSpec(BaseModel):
-    """Escape hatch for custom environment setup (e.g. git repos, process mocks)."""
+    """Custom fixture that materializes one filesystem artifact for case-local use.
+
+    Custom fixtures are artifact-only. They must not start services or require a
+    runtime lifecycle; use the typed MCP or mock-service fixtures once those
+    process lifecycles are implemented.
+    """
 
     __test__ = False
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Fixture identifier")
-    path: str | None = Field(
-        default=None,
-        description="Optional relative file or directory path produced by custom setup (e.g. 'repo/' or 'config.yaml')",
+    path: str = Field(
+        ...,
+        min_length=1,
+        description="Relative file or directory artifact produced by custom setup (e.g. 'repo/' or 'config.yaml')",
     )
     description: str = Field(..., min_length=1, description="Description of the custom setup requirements")
 
@@ -276,10 +281,8 @@ class CustomFixtureSpec(BaseModel):
 
     @field_validator("path")
     @classmethod
-    def validate_custom_path(cls, v: str | None) -> str | None:
-        if v is not None:
-            return normalize_fixture_path(v, field_name="path")
-        return v
+    def validate_custom_path(cls, v: str) -> str:
+        return normalize_fixture_path(v, field_name="path")
 
     @model_validator(mode="after")
     def set_default_id(self) -> CustomFixtureSpec:
@@ -297,14 +300,12 @@ class TestFixturesSpec(BaseModel):
 
     files: list[FileFixtureSpec] = Field(default_factory=list, description="File fixtures to generate")
     databases: list[DatabaseFixtureSpec] = Field(default_factory=list, description="Database fixtures to generate/seed")
-    mcps: list[MCPFixtureSpec] = Field(
-        default_factory=list, description="MCP server fixtures (stdio, Streamable HTTP, or legacy SSE)"
-    )
+    mcps: list[MCPFixtureSpec] = Field(default_factory=list, description="Streamable HTTP MCP server fixtures")
     mock_services: list[MockServiceFixtureSpec] = Field(
         default_factory=list, description="Mock HTTP services to run during tests"
     )
     custom_fixtures: list[CustomFixtureSpec] = Field(
-        default_factory=list, description="Custom fixture scripts (git repos, CLI mocks, etc.)"
+        default_factory=list, description="Custom scripts that materialize declared filesystem artifacts"
     )
 
     @model_validator(mode="after")
@@ -322,6 +323,18 @@ class TestFixturesSpec(BaseModel):
                 if item.id in seen:
                     raise ValueError(f"Duplicate fixture id '{item.id}' in test_fixtures ({category}).")
                 seen.add(item.id)
+        return self
+
+    @model_validator(mode="after")
+    def reject_unimplemented_process_fixtures(self) -> TestFixturesSpec:
+        # TODO(proper-fixtures): Add per-case process lifecycle management for
+        # Streamable HTTP MCP servers and mock HTTP services before enabling them.
+        # Until then, accepting either kind would produce misleading test results.
+        if self.mcps or self.mock_services:
+            raise FeatureNotImplementedError(
+                "NOT_IMPLEMENTED: MCP and mock HTTP service fixtures require process lifecycle management "
+                "and are not supported by the current runtime."
+            )
         return self
 
     def all_fixture_ids(self) -> set[str]:
@@ -366,6 +379,19 @@ class TestFixturesSpec(BaseModel):
             if (cf.id in normalized_targets or cf.name in normalized_targets) and cf.path:
                 paths.append(normalize_fixture_path(cf.path))
 
+        return list(dict.fromkeys(paths))
+
+    def get_all_file_paths(self) -> list[str]:
+        """Return the relative file paths of all declared filesystem artifacts."""
+        paths: list[str] = []
+        for f in self.files:
+            paths.append(normalize_fixture_path(f.path))
+        for db in self.databases:
+            if db.file_path:
+                paths.append(normalize_fixture_path(db.file_path))
+        for cf in self.custom_fixtures:
+            if cf.path:
+                paths.append(normalize_fixture_path(cf.path))
         return list(dict.fromkeys(paths))
 
     def get_fixture_by_id(self, fixture_id: str) -> Any | None:
@@ -473,6 +499,9 @@ class TestCaseSpec(BaseModel):
         return self
 
 
+SUPPORTED_SCHEMA_VERSIONS: tuple[str, ...] = ("1.0",)
+
+
 class TaskSpec(BaseModel):
     """Complete, versioned specification for a target agentic system task."""
 
@@ -481,6 +510,13 @@ class TaskSpec(BaseModel):
     schema_version: str = Field(default="1.0", description="Specification schema version")
     name: str = Field(..., min_length=1, description="Name of the target system to design")
     system_goal: str = Field(..., min_length=1, description="Primary goal and problem statement for the Meta-Agent")
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, v: str) -> str:
+        if v not in SUPPORTED_SCHEMA_VERSIONS:
+            raise ValueError(f"Unsupported schema_version '{v}'. Supported versions: {list(SUPPORTED_SCHEMA_VERSIONS)}")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -505,6 +541,16 @@ class TaskSpec(BaseModel):
     dev_suite: list[TestCaseSpec] = Field(
         default_factory=list, description="Visible test cases used for iterative refinement"
     )
+
+    @field_validator("required_packages")
+    @classmethod
+    def validate_required_packages(cls, v: list[str]) -> list[str]:
+        from adas_core.environment import validate_package_requirement
+
+        for pkg in v:
+            if not validate_package_requirement(pkg):
+                raise ValueError(f"Invalid package requirement '{pkg}'. Must be a valid PEP 508 requirement.")
+        return v
 
     @field_validator("dev_suite")
     @classmethod
@@ -620,6 +666,13 @@ class HoldoutSuiteSpec(BaseModel):
     holdout_suite: list[TestCaseSpec] = Field(
         ..., min_length=1, description="List of private, unseen test cases for final acceptance"
     )
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, v: str) -> str:
+        if v not in SUPPORTED_SCHEMA_VERSIONS:
+            raise ValueError(f"Unsupported schema_version '{v}'. Supported versions: {list(SUPPORTED_SCHEMA_VERSIONS)}")
+        return v
 
     @field_validator("holdout_suite")
     @classmethod
