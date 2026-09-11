@@ -613,6 +613,71 @@ class TestExecuteToolCalls:
         assert results["multiply"] == 12
         assert "not found" in tool_msgs[1].content
 
+    def test_execute_tool_calls_skips_tool_messages_for_calls_lacking_ids_and_surfaces_errors(self):
+        @tool
+        def add(a: int, b: int) -> int:
+            """Add two ints."""
+            return a + b
+
+        tools_map = {"add": add}
+        # tool call lacks "id"
+        response = AIMessage(content="")
+        object.__setattr__(response, "tool_calls", [{"name": "add", "args": {"a": 2, "b": 3}, "id": None}])
+        tool_msgs, results = execute_tool_calls(response, tools_map)
+        # Must not emit protocol ToolMessage for tool calls lacking valid IDs
+        assert len(tool_msgs) == 0
+        # Error must be safely surfaced in results dictionary
+        assert "add" in results
+        assert "missing or invalid tool call ID" in results["add"]
+        # History validation must pass without errors
+        validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
+
+    def test_execute_tool_calls_skips_tool_messages_for_invalid_calls_lacking_ids(self):
+        tools_map = {}
+        # invalid tool call lacks "id"
+        response = AIMessage(
+            content="",
+            invalid_tool_calls=[{"error": "bad syntax", "name": "bad_call", "id": None}],
+        )
+        tool_msgs, results = execute_tool_calls(response, tools_map)
+        assert len(tool_msgs) == 0
+        assert "bad_call" in results
+        assert "bad syntax" in results["bad_call"]
+        validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
+
+    def test_execute_tool_calls_mixed_valid_and_missing_ids(self):
+        @tool
+        def echo(text: str) -> str:
+            """Echo text."""
+            return text
+
+        tools_map = {"echo": echo}
+        response = AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "valid_call_1", "name": "echo", "args": {"text": "hello"}},
+                {"id": "", "name": "echo", "args": {"text": "world"}},  # empty ID
+            ],
+        )
+        tool_msgs, results = execute_tool_calls(response, tools_map)
+        # Only the call with valid ID gets a ToolMessage
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0].tool_call_id == "valid_call_1"
+        assert "hello" in tool_msgs[0].content
+        # The empty-ID call surfaces an error in results
+        assert "missing or invalid tool call ID" in results["echo"]
+        validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
+
+    def test_execute_tool_calls_missing_name_without_id_surfaces_safely(self):
+        tools_map = {}
+        response = AIMessage(content="")
+        object.__setattr__(response, "tool_calls", [{"id": None, "name": None, "args": {}}])
+        tool_msgs, results = execute_tool_calls(response, tools_map)
+        assert len(tool_msgs) == 0
+        assert "malformed_tool_call_0" in results
+        assert "missing name" in results["malformed_tool_call_0"]
+        validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
+
 
 # ============================================================================
 # 8. Vision Modality & Capabilities Tests

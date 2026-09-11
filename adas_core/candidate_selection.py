@@ -26,9 +26,9 @@ class CandidateRecord(TypedDict, total=False):
     dev_pass_rate: float
     passed_count: int
     total_count: int
-    total_tokens: int
-    duration_seconds: float
-    llm_calls: int
+    total_tokens: int | None
+    duration_seconds: float | None
+    llm_calls: int | None
     checkpoint_path: str
     system_snapshot: bytes
 
@@ -69,9 +69,9 @@ def record_candidate_evaluation(
     iteration: int,
     passed_count: int,
     total_count: int,
-    total_tokens: int = 0,
-    duration_seconds: float = 0.0,
-    llm_calls: int = 0,
+    total_tokens: int | None = None,
+    duration_seconds: float | None = None,
+    llm_calls: int | None = None,
     code_dir: str | None = None,
 ) -> CandidateRecord:
     """Checkpoint system to disk and record a structured CandidateRecord into state['candidates']."""
@@ -106,6 +106,7 @@ def candidate_rank_key(
     2. Efficiency metrics based on preference:
        - if preference == "runtime": -duration_seconds, then -total_tokens
        - if preference == "tokens": -total_tokens, then -duration_seconds
+       Missing or incomplete telemetry is ranked after all known measurements.
     3. iteration (higher is better -> prefer later iterations)
     """
     pass_rate = candidate.get("dev_pass_rate")
@@ -117,20 +118,28 @@ def candidate_rank_key(
 
     raw_tokens = candidate.get("total_tokens")
     if raw_tokens is None:
-        raw_tokens = candidate.get("tokens", 0)
-    total_tokens = float(raw_tokens if raw_tokens is not None else 0)
+        raw_tokens = candidate.get("tokens")
+
+    if raw_tokens is not None:
+        token_score = -float(raw_tokens)
+    else:
+        token_score = -float("inf")
 
     raw_duration = candidate.get("duration_seconds")
     if raw_duration is None:
-        raw_duration = candidate.get("duration", candidate.get("latency", 0.0))
-    duration = float(raw_duration if raw_duration is not None else 0.0)
+        raw_duration = candidate.get("duration", candidate.get("latency"))
+
+    if raw_duration is not None:
+        duration_score = -float(raw_duration)
+    else:
+        duration_score = -float("inf")
 
     iteration = int(candidate.get("iteration", 0) or 0)
 
     if preference == "runtime":
-        return (pass_rate, -duration, -total_tokens, iteration)
+        return (pass_rate, duration_score, token_score, iteration)
     else:
-        return (pass_rate, -total_tokens, -duration, iteration)
+        return (pass_rate, token_score, duration_score, iteration)
 
 
 def select_best_candidate(

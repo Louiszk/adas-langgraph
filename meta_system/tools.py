@@ -509,6 +509,7 @@ def test_system(state: dict[str, Any]) -> str:
         parallel_processing_note = exec_result.parallel_processing_note
         all_tests_passed_overall = exec_result.all_passed
         num_passed_tests = exec_result.passed_count
+        executed_count = exec_result.executed_count
         duration = exec_result.duration_seconds
         metrics = exec_result.token_usage
         total_iterations = exec_result.total_iterations
@@ -518,13 +519,14 @@ def test_system(state: dict[str, Any]) -> str:
         error_message += f"\n\nERROR: running the test_system tool:\n{traceback.format_exc(chain=False)}"
         all_tests_passed_overall = False
         num_passed_tests = 0
+        executed_count = 0
         final_test_case_id = all_test_cases[0].id if all_test_cases else ""
         full_final_state = None
         final_captured_output = ""
         final_flow_chart = ""
         parallel_processing_note = ""
         duration = time.time() - start_time
-        metrics = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        metrics = {"llm_calls": 0, "input_tokens": None, "output_tokens": None, "total_tokens": None}
         total_iterations = 0
         validation_results_summary = [error_message.strip()]
 
@@ -533,28 +535,54 @@ def test_system(state: dict[str, Any]) -> str:
         f"\n{final_test_case_id}:\n<ExecutionFlow>\n{final_flow_chart}{parallel_processing_note}\n</ExecutionFlow>"
     )
 
-    if num_tests > 0:
-        avg_duration = duration / num_tests
-        avg_llm_calls = metrics["llm_calls"] / num_tests
-        avg_total_tokens = metrics["total_tokens"] / num_tests
-        avg_input_tokens = metrics["input_tokens"] / num_tests
-        avg_output_tokens = metrics["output_tokens"] / num_tests
-        avg_iterations = total_iterations / num_tests
-
-        metrics_str = (
-            f"\n\n<Metrics>\n"
-            f"Avg. Graph Iterations: {round(avg_iterations, 2)}\n"
-            f"Avg. Duration: {round(avg_duration, 3)} seconds\n"
-            f"Avg. LLM Calls: {round(avg_llm_calls, 2)}\n"
-            f"Avg. Tokens: {round(avg_total_tokens, 2)} (Input: {round(avg_input_tokens, 2)}, Output: {round(avg_output_tokens, 2)})\n"
-            f"</Metrics>"
+    if executed_count > 0:
+        avg_duration = (duration / executed_count) if duration is not None else None
+        avg_llm_calls = (
+            (metrics["llm_calls"] / executed_count) if metrics and metrics.get("llm_calls") is not None else None
         )
+        avg_total_tokens = (
+            (metrics["total_tokens"] / executed_count) if metrics and metrics.get("total_tokens") is not None else None
+        )
+        avg_input_tokens = (
+            (metrics["input_tokens"] / executed_count) if metrics and metrics.get("input_tokens") is not None else None
+        )
+        avg_output_tokens = (
+            (metrics["output_tokens"] / executed_count)
+            if metrics and metrics.get("output_tokens") is not None
+            else None
+        )
+        avg_iterations = total_iterations / executed_count
+
+        lines = [
+            "\n\n<Metrics>",
+            f"Avg. Graph Iterations: {round(avg_iterations, 2)}",
+        ]
+        if avg_duration is not None:
+            lines.append(f"Avg. Duration: {round(avg_duration, 3)} seconds")
+        else:
+            lines.append("Avg. Duration: None")
+
+        if avg_llm_calls is not None:
+            lines.append(f"Avg. LLM Calls: {round(avg_llm_calls, 2)}")
+        else:
+            lines.append("Avg. LLM Calls: None")
+
+        if avg_total_tokens is not None:
+            in_tok = round(avg_input_tokens, 2) if avg_input_tokens is not None else "None"
+            out_tok = round(avg_output_tokens, 2) if avg_output_tokens is not None else "None"
+            lines.append(f"Avg. Tokens: {round(avg_total_tokens, 2)} (Input: {in_tok}, Output: {out_tok})")
+        else:
+            lines.append("Avg. Tokens: None")
+
+        lines.append("</Metrics>")
+        metrics_str = "\n".join(lines)
     else:
         # Fallback
+        duration_display = f"{round(duration, 3)} seconds" if duration is not None else "None"
         metrics_str = (
             f"\n\n<Metrics>\n"
-            f"Total Duration: {round(duration, 3)} seconds\n"
-            f"Note: No tests were successfully loaded or run, so detailed metrics are unavailable.\n"
+            f"Total Duration: {duration_display}\n"
+            f"Note: No tests were successfully run, so detailed metrics are unavailable.\n"
             f"</Metrics>"
         )
 
@@ -584,6 +612,7 @@ def test_system(state: dict[str, Any]) -> str:
     state["test_metrics"] = {
         "passed": num_passed_tests,
         "total": num_tests,
+        "executed_count": executed_count,
         "pass_rate": (num_passed_tests / num_tests) if num_tests > 0 else 0.0,
     }
 
@@ -597,9 +626,9 @@ def test_system(state: dict[str, Any]) -> str:
         iteration=iteration,
         passed_count=num_passed_tests,
         total_count=num_tests,
-        total_tokens=metrics.get("total_tokens", 0),
-        duration_seconds=round(duration, 3),
-        llm_calls=metrics.get("llm_calls", 0),
+        total_tokens=metrics.get("total_tokens") if metrics else None,
+        duration_seconds=round(duration, 3) if duration is not None else None,
+        llm_calls=metrics.get("llm_calls") if metrics else None,
         code_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
     )
     if candidate.get("checkpoint_path") and num_passed_tests > 0:

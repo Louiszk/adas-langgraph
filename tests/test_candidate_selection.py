@@ -356,3 +356,109 @@ class TestCandidateSelection:
         assert res == "__end__"
         assert state["best_candidate"] is not None
         assert state["best_candidate"].get("iteration") == 1
+
+    def test_missing_telemetry_ranked_after_known_measurements(self):
+        c_known: CandidateRecord = {
+            "iteration": 1,
+            "dev_pass_rate": 1.0,
+            "total_tokens": 5000,
+            "duration_seconds": 10.0,
+        }
+        c_missing_tokens: CandidateRecord = {
+            "iteration": 2,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": 10.0,
+        }
+        # Known tokens must beat missing tokens even if missing is from a later iteration
+        assert candidate_rank_key(c_known, preference="tokens") > candidate_rank_key(
+            c_missing_tokens, preference="tokens"
+        )
+        assert select_best_candidate([c_missing_tokens, c_known], preference="tokens") == c_known
+
+    def test_missing_runtime_ranked_after_known_runtime(self):
+        c_known: CandidateRecord = {
+            "iteration": 1,
+            "dev_pass_rate": 1.0,
+            "total_tokens": 100,
+            "duration_seconds": 5.0,
+        }
+        c_missing_runtime: CandidateRecord = {
+            "iteration": 2,
+            "dev_pass_rate": 1.0,
+            "total_tokens": 100,
+            "duration_seconds": None,
+        }
+        # Under runtime preference, known duration beats missing duration
+        assert candidate_rank_key(c_known, preference="runtime") > candidate_rank_key(
+            c_missing_runtime, preference="runtime"
+        )
+        assert select_best_candidate([c_missing_runtime, c_known], preference="runtime") == c_known
+
+    def test_missing_usage_ranked_after_known_measurements(self):
+        c_complete: CandidateRecord = {
+            "iteration": 1,
+            "dev_pass_rate": 1.0,
+            "total_tokens": 2000,
+            "duration_seconds": 2.0,
+        }
+        c_incomplete: CandidateRecord = {
+            "iteration": 2,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": 2.0,
+        }
+        assert candidate_rank_key(c_complete, preference="tokens") > candidate_rank_key(
+            c_incomplete, preference="tokens"
+        )
+        assert select_best_candidate([c_incomplete, c_complete], preference="tokens") == c_complete
+
+    def test_multiple_missing_telemetry_tiebreaking(self):
+        c_missing_1: CandidateRecord = {
+            "iteration": 1,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": 5.0,
+        }
+        c_missing_2: CandidateRecord = {
+            "iteration": 2,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": 2.0,
+        }
+        # Both lack token telemetry -> tie on tokens -> c_missing_2 has lower duration
+        assert candidate_rank_key(c_missing_2, preference="tokens") > candidate_rank_key(
+            c_missing_1, preference="tokens"
+        )
+
+        # When both lack all telemetry, later iteration wins
+        c_empty_early: CandidateRecord = {
+            "iteration": 1,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": None,
+        }
+        c_empty_late: CandidateRecord = {
+            "iteration": 3,
+            "dev_pass_rate": 1.0,
+            "total_tokens": None,
+            "duration_seconds": None,
+        }
+        assert candidate_rank_key(c_empty_late, preference="tokens") > candidate_rank_key(
+            c_empty_early, preference="tokens"
+        )
+
+    def test_record_candidate_evaluation_defaults_to_none_for_missing_telemetry(self, tmp_path):
+        sys = _dummy_system("NoneTelemetryTest")
+        state: dict[str, Any] = {}
+        cand = record_candidate_evaluation(
+            state=state,
+            system=sys,
+            iteration=1,
+            passed_count=1,
+            total_count=2,
+            code_dir=str(tmp_path),
+        )
+        assert cand.get("total_tokens") is None
+        assert cand.get("duration_seconds") is None
+        assert cand.get("llm_calls") is None

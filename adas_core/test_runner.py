@@ -67,6 +67,8 @@ class TestSuiteExecutionResult:
     last_execution_flow: list[Any] = field(default_factory=list)
     parallel_processing_note: str = ""
     total_iterations: int = 0
+    max_iterations: int = 0
+    executed_count: int = 0
 
 
 def _dispatch_validator(
@@ -245,7 +247,6 @@ def execute_test_suite(
     last_captured_output = ""
     last_execution_flow: list[Any] = []
     parallel_processing_note = ""
-    max_total_iterations = 0
 
     try:
         for test_case in test_cases:
@@ -301,8 +302,6 @@ def execute_test_suite(
                                     else:
                                         execution_flow[step].append(node_name)
                                     case_iterations = step + 1
-
-                            max_total_iterations = max(max_total_iterations, case_iterations)
 
                         execution_flow.append("END")
 
@@ -384,10 +383,21 @@ def execute_test_suite(
     end_time = time.time()
     duration = end_time - start_time
     usage_after = UsageRecorder.get_aggregate(system=system_role, run_id=test_run_id)
-    token_usage = {
+    incomplete_diff = usage_after.get("incomplete_usage_count", 0) - usage_before.get("incomplete_usage_count", 0)
+    usage_is_incomplete = incomplete_diff > 0
+
+    token_usage: dict[str, Any] = {
         metric: usage_after.get(metric, 0) - usage_before.get(metric, 0)
         for metric in ["llm_calls", "input_tokens", "output_tokens", "total_tokens"]
     }
+    if usage_is_incomplete:
+        token_usage["total_tokens"] = None
+        token_usage["input_tokens"] = None
+        token_usage["output_tokens"] = None
+
+    executed_count = len(case_results)
+    summed_iterations = sum(cr.total_iterations for cr in case_results)
+    max_iterations = max((cr.total_iterations for cr in case_results), default=0)
 
     pass_rate = (passed_count / total_tests) if total_tests > 0 else 0.0
 
@@ -406,5 +416,7 @@ def execute_test_suite(
         last_captured_output=last_captured_output,
         last_execution_flow=last_execution_flow,
         parallel_processing_note=parallel_processing_note,
-        total_iterations=max_total_iterations,
+        total_iterations=summed_iterations,
+        max_iterations=max_iterations,
+        executed_count=executed_count,
     )
