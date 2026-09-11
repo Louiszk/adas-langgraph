@@ -20,7 +20,7 @@ from adas_core.exceptions import (
     ValidatorContractError,
     ValidatorDispatchError,
 )
-from adas_core.fixture_lifecycle import process_fixture_lifecycle
+from adas_core.fixture_lifecycle import external_database_seed_lifecycle, process_fixture_lifecycle
 from adas_core.helpers import TruncatingStringIO, sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
@@ -296,7 +296,16 @@ def execute_test_suite(
                             if task_spec is not None
                             else contextlib.nullcontext()
                         )
-                        with fixture_context:
+                        seed_context = (
+                            external_database_seed_lifecycle(
+                                task_spec,
+                                test_case.fixture_ids,
+                                active_fixtures_dir if active_fixtures_dir else Path.cwd(),
+                            )
+                            if task_spec is not None
+                            else contextlib.nullcontext()
+                        )
+                        with seed_context, fixture_context:
                             with usage_scope(system=system_role, run_id=test_run_id, case_id=test_case_id):
                                 stream_modes = ["values", "debug"] if capture_debug_flow else ["values"]
                                 for stream_mode, update in target_workflow.stream(

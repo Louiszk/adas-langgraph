@@ -156,7 +156,7 @@ Your output JSON must strictly conform to the following JSON Schema generated di
    - When providing a specification, output a complete, valid JSON object in a ```json ... ``` block.
 
 4. FIXTURE DEFINITIONS AND TEST CASE SCOPING:
-   - Each fixture declared in `test_fixtures` (files, databases, mcps, mock_services, custom_fixtures) must have a clean unique `id` (e.g. 'sales_csv', 'customers_json', 'weather_api', 'analytics_db').
+   - Each fixture declared in `test_fixtures` (files, databases, mcps, mock_services, custom_fixtures, external_database_seeds) must have a clean unique `id` (e.g. 'sales_csv', 'customers_json', 'weather_api', 'analytics_db').
    - When declaring file fixtures in `test_fixtures.files`, `path` must be relative to the input folder (e.g. "sales.csv", "customers.json"). Never use hardcoded sandbox prefixes or absolute paths.
    - In `dev_suite`, each test case SHOULD specify `fixture_ids: ["fixture_id_1", ...]` to declare the exact subset of fixtures provisioned into its environment.
      * Tier 1 tests should provision only clean baseline fixtures.
@@ -165,7 +165,8 @@ Your output JSON must strictly conform to the following JSON Schema generated di
    - In `resource_manifest.available_resources`, declare input and output directories generically (e.g. "data/input/" or "input/") and specify in descriptions that systems should inspect files dynamically or use standard environment variables (`ADAS_INPUT_DIR`, `ADAS_OUTPUT_DIR`) rather than assuming static host paths.
    - Keep user-owned resources in `resource_manifest`, including files, directories, running services, and their connection URL/URI. Put required credentials in `available_api_keys`; preflight verifies those resources rather than starting or mocking them.
    - Use `test_fixtures` only for harness-owned, deterministic evaluation resources. The harness can mock Streamable HTTP MCP servers and HTTP services, and can create and seed embedded SQLite or DuckDB database files.
-   - Do NOT represent an external database service (for example Postgres, Neo4j, Redis, or Qdrant) as a mock fixture: it must already be running and be declared in `resource_manifest`. Fixture setup may seed its test data only when the user has explicitly provided an isolated test instance/namespace and cleanup expectations.
+   - Do NOT represent an external database service (for example Postgres, Neo4j, Redis, or Qdrant) as a mock fixture: it must already be running and be declared in `resource_manifest`.
+   - To seed deterministic evaluation data, declare `test_fixtures.external_database_seeds` with a unique id, the matching database resource name, engine/driver, connection_env mapping containing ENVIRONMENT VARIABLE NAMES only (never credentials), an explicit namespace_kind, an isolated namespace beginning `adas_test_`, cleanup_policy `drop_namespace`, and a seed/schema description.
 
 5. DEV SUITE 3-TIER PROGRESSION:
    - The test cases in `dev_suite` must follow a strictly progressive difficulty gradient:

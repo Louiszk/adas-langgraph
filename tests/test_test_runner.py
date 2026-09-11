@@ -7,8 +7,11 @@ from typing import Any
 
 from adas_core.task_spec import (
     ArchitectureContract,
+    ExternalDatabaseSeedSpec,
     FileFixtureSpec,
     MockServiceFixtureSpec,
+    ResourceEntry,
+    ResourceManifest,
     TaskSpec,
     TestCaseSpec,
     TestFixturesSpec,
@@ -33,6 +36,68 @@ def _create_dummy_system(name: str = "TestSystem") -> VirtualAgenticSystem:
 
 
 class TestExecuteTestSuite:
+    def test_execute_test_suite_cleans_external_seed_after_validator_failure(self, tmp_path, monkeypatch):
+        events = tmp_path / "seed-events.txt"
+        scripts = tmp_path / "setup_scripts"
+        scripts.mkdir()
+        (scripts / "seed_external_orders_seed.py").write_text(
+            "from pathlib import Path\n"
+            f"EVENTS = Path({str(events)!r})\n"
+            "def _record(value):\n"
+            "    EVENTS.write_text((EVENTS.read_text() if EVENTS.exists() else '') + value + '\\n')\n"
+            "def seed_external_database(connection_config, namespace):\n"
+            "    _record('seed:' + namespace)\n"
+            "def cleanup_external_database(connection_config, namespace):\n"
+            "    _record('cleanup:' + namespace)\n",
+            encoding="utf-8",
+        )
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+        spec = TaskSpec(
+            name="ExternalSeedRunner",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"query": "str"}),
+            resource_manifest=ResourceManifest(
+                available_resources=[ResourceEntry(name="evaluation_db", type="database")]
+            ),
+            test_fixtures=TestFixturesSpec(
+                external_database_seeds=[
+                    ExternalDatabaseSeedSpec(
+                        name="orders_seed",
+                        resource_name="evaluation_db",
+                        db_type="postgres",
+                        driver="psycopg",
+                        connection_env={"uri": "EVALUATION_DB_URI"},
+                        namespace_kind="schema",
+                        namespace="adas_test_orders",
+                        description="Seed deterministic order rows.",
+                    )
+                ]
+            ),
+            dev_suite=[
+                TestCaseSpec(id="seeded", description="desc", fixture_ids=["orders_seed"], turns=[{"query": "q"}])
+            ],
+        )
+
+        class Validator:
+            @staticmethod
+            def validate_seeded(final_state, workspace_dirs):
+                return False, "intentional validator failure"
+
+        result = execute_test_suite(
+            _create_dummy_system("ExternalSeedSystem"),
+            spec.dev_suite,
+            Validator(),
+            workspace_root=tmp_path / "workspace",
+            fixtures_dir=fixtures_dir,
+            task_spec=spec,
+            stop_on_first_failure=True,
+        )
+
+        assert not result.all_passed
+        assert events.read_text(encoding="utf-8").splitlines() == ["seed:adas_test_orders", "cleanup:adas_test_orders"]
+
     def test_execute_test_suite_runs_selected_process_fixture(self, tmp_path):
         import socket
 

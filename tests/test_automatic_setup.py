@@ -13,6 +13,7 @@ from adas_core.task_spec import (
     ArchitectureContract,
     CustomFixtureSpec,
     DatabaseFixtureSpec,
+    ExternalDatabaseSeedSpec,
     FileFixtureSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
@@ -159,6 +160,46 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
         # Verify discovered packages union
         assert "pydantic" in result.discovered_packages
         assert "gitpython" in result.discovered_packages
+
+    def test_generate_external_database_seed_script_without_executing_it(self, tmp_path):
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = [
+            AIMessage(
+                content=(
+                    "SETUP_REQUIREMENTS = ['psycopg']\n"
+                    "def seed_external_database(connection_config, namespace): pass\n"
+                    "def cleanup_external_database(connection_config, namespace): pass\n"
+                )
+            ),
+            AIMessage(content="def check_environment(workspace_dirs): return True, 'ok'\n"),
+        ]
+        spec = TaskSpec(
+            name="ExternalSeedSetup",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            resource_manifest=ResourceManifest(
+                available_resources=[ResourceEntry(name="evaluation_db", type="database")]
+            ),
+            test_fixtures=TestFixturesSpec(
+                external_database_seeds=[
+                    ExternalDatabaseSeedSpec(
+                        name="orders_seed",
+                        resource_name="evaluation_db",
+                        db_type="postgres",
+                        driver="psycopg",
+                        connection_env={"uri": "EVALUATION_DB_URI"},
+                        namespace_kind="schema",
+                        namespace="adas_test_orders",
+                        description="Seed deterministic orders.",
+                    )
+                ]
+            ),
+        )
+
+        result = AutomaticSetup(llm=mock_llm).generate_all(spec, tmp_path)
+
+        assert (tmp_path / "setup_scripts" / "seed_external_orders_seed.py").is_file()
+        assert "psycopg" in result.discovered_packages
 
     def test_ensure_automatic_setup_skips_when_present(self, tmp_path):
         # Create fixtures dir and preflight.py to simulate existing setup

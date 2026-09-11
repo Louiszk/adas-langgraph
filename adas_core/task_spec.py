@@ -91,6 +91,11 @@ class ResourceEntry(BaseModel):
     path_or_uri: str | None = Field(default=None, description="Filesystem path or URI to the resource")
     description: str = Field(default="", description="Description of the resource schema or contents")
 
+    @field_validator("name")
+    @classmethod
+    def validate_resource_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="resource name")
+
 
 class ApiKeyRequirement(BaseModel):
     """Declaration of an expected environment variable/API key."""
@@ -113,6 +118,13 @@ class ResourceManifest(BaseModel):
     available_api_keys: list[ApiKeyRequirement] = Field(
         default_factory=list, description="Required environment variables/API keys"
     )
+
+    @model_validator(mode="after")
+    def validate_unique_resource_names(self) -> ResourceManifest:
+        names = [resource.name for resource in self.available_resources]
+        if len(names) != len(set(names)):
+            raise ValueError("resource_manifest.available_resources contains duplicate resource names.")
+        return self
 
 
 class FileFixtureSpec(BaseModel):
@@ -313,6 +325,76 @@ class CustomFixtureSpec(BaseModel):
         return self
 
 
+class ExternalDatabaseSeedSpec(BaseModel):
+    """Per-test seed data for an isolated, user-provided external database.
+
+    The database service itself remains a resource-manifest responsibility.  This
+    spec only authorizes deterministic setup and teardown of a namespace that is
+    clearly reserved for ADAS evaluation.
+    """
+
+    __test__ = False
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default="", description="Unique seed identifier. Defaults to name if empty.")
+    name: str = Field(..., min_length=1, description="Seed script identifier")
+    resource_name: str = Field(..., min_length=1, description="Name of the database resource in resource_manifest")
+    db_type: Literal["postgres", "neo4j", "redis", "qdrant", "custom"] = Field(
+        ..., description="External database engine type"
+    )
+    driver: str = Field(..., min_length=1, description="Expected Python driver/package used by the seed script")
+    connection_env: dict[str, str] = Field(
+        ...,
+        min_length=1,
+        description="Connection parameter to environment-variable mapping; values never contain secrets",
+    )
+    namespace_kind: Literal["schema", "database", "namespace", "collection"] = Field(
+        ..., description="The isolated unit that setup owns and cleanup drops"
+    )
+    namespace: str = Field(..., min_length=1, description="Dedicated ADAS test namespace, beginning with 'adas_test_'")
+    cleanup_policy: Literal["drop_namespace"] = Field(
+        default="drop_namespace", description="Required conservative cleanup action after every case"
+    )
+    description: str = Field(..., min_length=1, description="Schema and deterministic seed-data requirements")
+
+    @field_validator("name", "resource_name")
+    @classmethod
+    def validate_identifiers(cls, v: str) -> str:
+        return validate_identifier(v, field_name="external database seed identifier")
+
+    @field_validator("driver")
+    @classmethod
+    def validate_driver(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", v):
+            raise ValueError("external database seed driver must be a package/driver identifier.")
+        return v
+
+    @field_validator("connection_env")
+    @classmethod
+    def validate_connection_env(cls, v: dict[str, str]) -> dict[str, str]:
+        for parameter, env_var in v.items():
+            validate_identifier(parameter, field_name="external database connection parameter")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_var):
+                raise ValueError("external database seed connection_env values must be environment-variable names.")
+        return v
+
+    @field_validator("namespace")
+    @classmethod
+    def validate_isolated_namespace(cls, v: str) -> str:
+        if not re.fullmatch(r"adas_test_[A-Za-z0-9_]{1,52}", v):
+            raise ValueError(
+                "external database seed namespace must be an isolated identifier beginning with 'adas_test_'."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> ExternalDatabaseSeedSpec:
+        if not self.id:
+            self.id = self.name
+        validate_identifier(self.id, field_name="external database seed id")
+        return self
+
+
 class TestFixturesSpec(BaseModel):
     """Declarative specification of all test fixtures."""
 
@@ -328,6 +410,10 @@ class TestFixturesSpec(BaseModel):
     custom_fixtures: list[CustomFixtureSpec] = Field(
         default_factory=list, description="Custom scripts that materialize declared filesystem artifacts"
     )
+    external_database_seeds: list[ExternalDatabaseSeedSpec] = Field(
+        default_factory=list,
+        description="Deterministic per-case seeds for isolated user-provided external database resources",
+    )
 
     @model_validator(mode="after")
     def validate_unique_fixture_ids(self) -> TestFixturesSpec:
@@ -339,6 +425,7 @@ class TestFixturesSpec(BaseModel):
             ("mcps", self.mcps),
             ("mock_services", self.mock_services),
             ("custom_fixtures", self.custom_fixtures),
+            ("external_database_seeds", self.external_database_seeds),
         ]:
             for item in items:
                 if item.id in seen:
@@ -385,6 +472,8 @@ class TestFixturesSpec(BaseModel):
             ids.add(s.id)
         for c in self.custom_fixtures:
             ids.add(c.id)
+        for seed in self.external_database_seeds:
+            ids.add(seed.id)
         return ids
 
     def get_file_paths_for_fixture_ids(self, fixture_ids: list[str] | None) -> list[str] | None:
@@ -424,6 +513,17 @@ class TestFixturesSpec(BaseModel):
         fixtures: list[MCPFixtureSpec | MockServiceFixtureSpec] = [*self.mcps, *self.mock_services]
         return fixtures if selected is None else [fixture for fixture in fixtures if fixture.id in selected]
 
+    def get_external_database_seeds_for_fixture_ids(
+        self, fixture_ids: list[str] | None
+    ) -> list[ExternalDatabaseSeedSpec]:
+        """Return external database seeds selected for a case; ``None`` selects all."""
+        selected = None if fixture_ids is None else set(fixture_ids)
+        return (
+            self.external_database_seeds
+            if selected is None
+            else [seed for seed in self.external_database_seeds if seed.id in selected]
+        )
+
     def get_all_file_paths(self) -> list[str]:
         """Return the relative file paths of all declared filesystem artifacts."""
         paths: list[str] = []
@@ -454,6 +554,9 @@ class TestFixturesSpec(BaseModel):
         for c in self.custom_fixtures:
             if c.id == fixture_id:
                 return c
+        for seed in self.external_database_seeds:
+            if seed.id == fixture_id:
+                return seed
         return None
 
     def get_script_filenames_for_fixture(self, fixture_id: str) -> list[str]:
@@ -473,6 +576,8 @@ class TestFixturesSpec(BaseModel):
             names.extend([f"mock_{fix.id}.py", f"mock_{fix.name}.py"])
         elif isinstance(fix, CustomFixtureSpec):
             names.extend([f"setup_{fix.id}.py", f"setup_{fix.name}.py"])
+        elif isinstance(fix, ExternalDatabaseSeedSpec):
+            names.extend([f"seed_external_{fix.id}.py", f"seed_external_{fix.name}.py"])
 
         return list(dict.fromkeys(names))
 
@@ -650,6 +755,22 @@ class TaskSpec(BaseModel):
                             f"TestCase '{test_case.id}' references unknown fixture_id '{fid}'. "
                             f"Available fixture IDs: {sorted(all_ids)}"
                         )
+        return self
+
+    @model_validator(mode="after")
+    def validate_external_database_seed_resources(self) -> TaskSpec:
+        """Ensure a seed explicitly targets a declared external database resource."""
+        resources = {resource.name: resource for resource in self.resource_manifest.available_resources}
+        for seed in self.test_fixtures.external_database_seeds:
+            resource = resources.get(seed.resource_name)
+            if resource is None:
+                raise ValueError(
+                    f"External database seed '{seed.id}' references unknown resource '{seed.resource_name}'."
+                )
+            if resource.type != "database":
+                raise ValueError(
+                    f"External database seed '{seed.id}' references resource '{seed.resource_name}', which is not a database."
+                )
         return self
 
     def to_dict(self) -> dict[str, Any]:

@@ -15,6 +15,7 @@ from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
     DatabaseFixtureSpec,
+    ExternalDatabaseSeedSpec,
     FileFixtureSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
@@ -77,7 +78,9 @@ CODE CONSTRAINTS:
 def _has_declared_fixtures(task_spec: TaskSpec) -> bool:
     """Return True if the TaskSpec declares any test fixtures."""
     tf = task_spec.test_fixtures
-    return bool(tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures)
+    return bool(
+        tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures or tf.external_database_seeds
+    )
 
 
 # normalize_fixture_path is imported from adas_core.helpers and re-exported
@@ -176,6 +179,40 @@ class AutomaticSetup:
         code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
         return code, reqs
+
+    def generate_external_database_seed_script(
+        self, task_spec: TaskSpec, seed: ExternalDatabaseSeedSpec
+    ) -> tuple[str, list[str]]:
+        """Generate a per-case setup/teardown script for an isolated external database namespace."""
+        instructions = (
+            "TASK: Isolated External Database Seed Lifecycle\n"
+            "Write a self-contained Python script for deterministic external-database evaluation data.\n"
+            "The script must define BOTH functions:\n"
+            "`def seed_external_database(connection_config: dict[str, str], namespace: str) -> None:`\n"
+            "`def cleanup_external_database(connection_config: dict[str, str], namespace: str) -> None:`\n"
+            "Rules:\n"
+            "1. Use connection_config only; do not read or log credentials directly.\n"
+            "2. Seed only inside the supplied namespace. Never mutate a default, shared, or production namespace.\n"
+            "3. cleanup_external_database must drop/delete only the supplied namespace and be safe after partial setup.\n"
+            "4. Do not start or manage the database service; it is user-provided.\n"
+            "5. Do not print connection values, credentials, or full connection strings."
+        )
+        system_prompt = self._build_system_prompt(instructions)
+        user_prompt = (
+            f"{self._format_task_context(task_spec)}\n"
+            f"Database Resource: {seed.resource_name}\n"
+            f"Engine Type: {seed.db_type}\n"
+            f"Expected Driver: {seed.driver}\n"
+            f"Connection Parameters (names only): {sorted(seed.connection_env)}\n"
+            f"Namespace Kind: {seed.namespace_kind}\n"
+            f"Isolated Namespace: {seed.namespace}\n"
+            f"Cleanup Policy: {seed.cleanup_policy}\n"
+            f"Schema & Seed Requirements:\n{seed.description}\n\n"
+            "Write the complete Python seed lifecycle script:"
+        )
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        code = normalize_future_imports(extract_code_block(str(response.content)))
+        return code, extract_setup_requirements(code)
 
     def generate_mcp_server_script(self, task_spec: TaskSpec, fixture: MCPFixtureSpec) -> tuple[str, list[str]]:
         """Prompt setup_model to generate a mock FastMCP server script."""
@@ -336,6 +373,15 @@ class AutomaticSetup:
             created_files.append(db_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated database seed script: {db_script_dest}")
+
+        # 2b. Generate external-database seed lifecycle scripts.
+        for seed in task_spec.test_fixtures.external_database_seeds:
+            seed_script_dest = setup_scripts_dir / f"seed_external_{seed.name}.py"
+            code, reqs = self.generate_external_database_seed_script(task_spec, seed)
+            safe_write_text(seed_script_dest, code, root_dir=setup_scripts_dir)
+            created_files.append(seed_script_dest)
+            discovered_packages.update(reqs)
+            logger.info(f"Generated external database seed lifecycle script: {seed_script_dest}")
 
         # 3. Generate MCP mock server scripts
         for mcp_fix in task_spec.test_fixtures.mcps:

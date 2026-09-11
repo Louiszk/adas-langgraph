@@ -13,7 +13,7 @@
     "generator_version": "1",
     "schema_version": "1.0",
     "task_name": "gsm_hard",
-    "task_spec_hash": "f7489118e5cb6aa0d4cf629085eed4b57e331863d09eca45f91074b9e1704875",
+    "task_spec_hash": "0a499f0301e6f0f89b0eb1f999db4202b444016174168e7acc833b1f24764ba0",
     "validator_file": "gsm_hard.validation.py",
     "validator_hash": "07a6e80fa56720e2a926f57ea5ac0ea3c6bb2df98b826c6ba5425ec0a85466aa"
   }

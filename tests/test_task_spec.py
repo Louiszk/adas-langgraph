@@ -6,6 +6,7 @@ from adas_core.task_spec import (
     ArchitectureContract,
     CustomFixtureSpec,
     DatabaseFixtureSpec,
+    ExternalDatabaseSeedSpec,
     FileFixtureSpec,
     HoldoutSuiteSpec,
     MCPFixtureSpec,
@@ -526,6 +527,47 @@ class TestHoldoutSuiteSpecModel:
     def test_external_database_types_are_rejected_as_test_fixtures(self):
         with pytest.raises(ValidationError, match="Declare external databases in resource_manifest"):
             TestFixturesSpec(databases=[DatabaseFixtureSpec(name="graph", db_type="neo4j")])
+
+    def test_external_database_seed_requires_declared_database_and_isolated_namespace(self):
+        seed = ExternalDatabaseSeedSpec(
+            name="orders_seed",
+            resource_name="evaluation_db",
+            db_type="postgres",
+            driver="psycopg",
+            connection_env={"uri": "EVALUATION_DB_URI"},
+            namespace_kind="schema",
+            namespace="adas_test_orders",
+            description="Seed deterministic order rows.",
+        )
+        with pytest.raises(ValidationError, match="unknown resource 'evaluation_db'"):
+            TaskSpec(
+                name="SeedTask",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(state_schema={"q": "str"}),
+                test_fixtures=TestFixturesSpec(external_database_seeds=[seed]),
+            )
+        with pytest.raises(ValidationError, match="beginning with 'adas_test_'"):
+            ExternalDatabaseSeedSpec(
+                name="unsafe_seed",
+                resource_name="evaluation_db",
+                db_type="postgres",
+                driver="psycopg",
+                connection_env={"uri": "EVALUATION_DB_URI"},
+                namespace_kind="schema",
+                namespace="public",
+                description="Unsafe shared schema.",
+            )
+        with pytest.raises(ValidationError, match="isolated identifier"):
+            ExternalDatabaseSeedSpec(
+                name="escaping_seed",
+                resource_name="evaluation_db",
+                db_type="postgres",
+                driver="psycopg",
+                connection_env={"uri": "EVALUATION_DB_URI"},
+                namespace_kind="schema",
+                namespace="adas_test_orders/../../public",
+                description="Must not escape its cleanup namespace.",
+            )
 
     def test_custom_fixture_requires_artifact_path(self):
         with pytest.raises(ValidationError, match="path"):
