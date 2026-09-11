@@ -11,20 +11,17 @@ from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.graph import (
     create_meta_workflow,
     design_completed_condition,
-    hardening_condition,
     workflow,
 )
-from meta_system.helpers import ignored_nodes_message, normalize_response_content, parse_validation_code
-from meta_system.nodes import formatting_function
+from meta_system.helpers import ignored_nodes_message, normalize_response_content
+from meta_system.nodes import formatting_function, initial_test_runner_function
 from meta_system.prompts import (
     agentic_system_documentation,
     build_meta_agent_prompt,
     decorator_reminder,
     decorator_tool_prompt,
-    hardening_prompt,
     test_reminder,
     trimming_message,
-    validation_prompt,
 )
 from meta_system.state import MetaState
 from meta_system.tools import function_signatures, tools
@@ -36,10 +33,10 @@ class TestMetaSystemWorkflow:
         assert workflow is not None
         compiled_nodes = workflow.nodes
         assert "Formatting" in compiled_nodes
-        assert "Validation" in compiled_nodes
         assert "InitialTestRunner" in compiled_nodes
         assert "MetaAgent" in compiled_nodes
         assert "ToolExecution" in compiled_nodes
+        assert "Validation" not in compiled_nodes
 
     def test_create_meta_workflow_factory(self):
         """Factory function must construct a valid, independent compiled workflow."""
@@ -70,8 +67,7 @@ class TestMetaSystemPromptsAndSignatures:
     def test_prompts_contain_core_references(self):
         """Prompt constants must contain essential instructions and documentation."""
         assert "LangGraph + ADAS Core Reference" in agentic_system_documentation
-        assert "You validate agentic systems" in validation_prompt
-        assert "TARGET_SYSTEM_TEST_CASES" in hardening_prompt
+        assert "ADAS_INPUT_DIR" in agentic_system_documentation
         assert "@@decorator_name" in decorator_reminder
         assert "Analyze these test result logs" in test_reminder
         assert "{trimmed_iterations}" in trimming_message
@@ -91,24 +87,6 @@ class TestMetaSystemHelpers:
         assert normalize_response_content("hello") == "hello"
         assert normalize_response_content([{"text": "foo"}, {"text": "bar"}]) == "foo bar"
         assert normalize_response_content(None) == ""
-
-    def test_parse_validation_code_valid(self):
-        """parse_validation_code must extract executable TARGET_SYSTEM_TEST_CASES and validator."""
-        code = """```python
-TARGET_SYSTEM_TEST_CASES = [{"x": 1}, {"x": 2}, {"x": 3}]
-def validate_target_system_output(idx, state):
-    return True, "Passed"
-```"""
-        block, errors = parse_validation_code(code)
-        assert block is not None
-        assert errors is None
-        assert "TARGET_SYSTEM_TEST_CASES" in block
-
-    def test_parse_validation_code_invalid(self):
-        """parse_validation_code must return error when no valid validation block is found."""
-        code = "No code blocks here."
-        block, errors = parse_validation_code(code)
-        assert block is None
 
     def test_ignored_nodes_message(self):
         """ignored_nodes_message generates readable warning notes for disallowed AST structures."""
@@ -131,14 +109,6 @@ class TestMetaSystemNodesAndRouting:
         assert "Build a math agent" in str(res["messages"][0].content)
         assert "25 iterations" in str(res["messages"][0].content)
         assert res["system_passed"] is False
-        assert res["hardening_steps"] == 0
-
-    def test_hardening_condition_routes(self):
-        """hardening_condition must correctly route based on optimize and hardening_passed flags."""
-        assert hardening_condition({"optimize": False}) == "MetaAgent"
-        assert hardening_condition({"optimize": True, "hardening_passed": False}) == "MetaAgent"
-        assert hardening_condition({"optimize": True, "hardening_passed": True, "hardening_steps": 1}) == "Validation"
-        assert hardening_condition({"optimize": True, "hardening_passed": True, "hardening_steps": 5}) == END
 
     def test_design_completed_condition_routes(self):
         """design_completed_condition routes to END when design is completed or iteration limit exceeded."""
@@ -147,3 +117,43 @@ class TestMetaSystemNodesAndRouting:
         assert (
             design_completed_condition({"design_completed": True, "messages": [], "target_agentic_system": sys}) == END
         )
+
+    def test_initial_test_runner_function_skips_when_not_optimize(self):
+        """initial_test_runner_function returns empty dict when optimize is not enabled."""
+        res = initial_test_runner_function({"optimize": False})
+        assert res == {}
+
+    def test_initial_test_runner_function_when_optimize_all_pass(self, monkeypatch):
+        """When initial system already passes all tests, prompts to optimize robustness and efficiency."""
+
+        class MockTool:
+            def invoke(self, kwargs):
+                state = kwargs["state"]
+                state["test_metrics"] = {"passed": 3, "total": 3, "pass_rate": 1.0}
+                return "The system passed 3/3 tests."
+
+        monkeypatch.setitem(tools, "TestSystem", MockTool())
+        state: MetaState = {"optimize": True}
+        res = initial_test_runner_function(state)
+        assert "verbose_initial_test_results" in res
+        content = str(res["verbose_initial_test_results"].content)
+        assert "already passes all 3/3" in content
+        assert "optimize the system for greater robustness, token efficiency" in content
+        assert res.get("test_metrics") == {"passed": 3, "total": 3, "pass_rate": 1.0}
+
+    def test_initial_test_runner_function_when_optimize_partial_pass(self, monkeypatch):
+        """When initial system fails some tests, prompts to pass all tests."""
+
+        class MockTool:
+            def invoke(self, kwargs):
+                state = kwargs["state"]
+                state["test_metrics"] = {"passed": 1, "total": 3, "pass_rate": 0.33}
+                return "The system passed 1/3 tests."
+
+        monkeypatch.setitem(tools, "TestSystem", MockTool())
+        state: MetaState = {"optimize": True}
+        res = initial_test_runner_function(state)
+        assert "verbose_initial_test_results" in res
+        content = str(res["verbose_initial_test_results"].content)
+        assert "passed 1/3" in content
+        assert "achieving passing tests for all 3" in content

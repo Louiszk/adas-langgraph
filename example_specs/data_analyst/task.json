@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "name": "automatic_data_analyst",
+  "system_goal": "Build a general-purpose automatic data analyst that receives an analysis_task under the state key analysis_task, discovers and loads all CSV and JSON files from the configured input directory, dynamically generates pandas and matplotlib analysis code, executes that code in a subprocess using exec, retries code generation when execution fails by supplying the traceback to the model, saves TXT, CSV, JSON, and plot artifacts to the configured output directory, and returns a concise analytical response under final_answer. The system must remain robust to heterogeneous schemas, missing values, mixed data types, missing columns, and partially unusable files; it should report skipped files and caveats transparently instead of crashing.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "analysis_task": "str",
+      "input_files": "list[str]",
+      "file_inventory": "dict[str, dict[str, Any]]",
+      "generated_code": "str",
+      "execution_traceback": "str | None",
+      "retry_count": "int",
+      "artifact_manifest": "list[dict[str, Any]]",
+      "analysis_summary": "str",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "discover_input_files",
+        "description": "Inspect the configured ADAS input directory, dynamically discover every CSV and JSON file, and return relative paths, file types, sizes, and readable metadata without assuming fixed filenames or schemas."
+      },
+      {
+        "name": "execute_analysis_subprocess",
+        "description": "Execute dynamically generated Python analysis code in an isolated subprocess using exec. The subprocess must expose pandas and matplotlib, write all artifacts beneath the configured output directory, capture stdout and stderr, enforce a finite execution timeout, and return the exit status, output, traceback, and artifact inventory."
+      },
+      {
+        "name": "validate_output_artifacts",
+        "description": "Inspect generated TXT, CSV, JSON, and plot files, verify that they exist beneath the configured output directory and are readable or valid for their declared format, and return a normalized artifact manifest."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [
+      {
+        "name": "analysis_input_directory",
+        "type": "directory",
+        "path_or_uri": "input/",
+        "description": "Directory containing all CSV and JSON inputs for the current invocation. The runtime should map this logical path to sandbox/workspace/data/input/ or use ADAS_INPUT_DIR. The analyst must inspect the directory dynamically and must not assume static filenames."
+      },
+      {
+        "name": "analysis_output_directory",
+        "type": "directory",
+        "path_or_uri": "output/",
+        "description": "Directory where all generated TXT, CSV, JSON, and plot artifacts must be saved. The runtime should map this logical path to sandbox/workspace/data/output/ or use ADAS_OUTPUT_DIR. The analyst must create the directory if needed and avoid writing artifacts elsewhere."
+      }
+    ],
+    "available_api_keys": []
+  },
+  "required_packages": [
+    "pandas",
+    "matplotlib"
+  ],
+  "test_fixtures": {
+    "files": [
+      {
+        "id": "sales_csv",
+        "path": "sales.csv",
+        "count": 1,
+        "description": "Clean baseline CSV with columns order_id, order_date, customer_id, product, region, quantity, unit_price, and revenue. Include at least 12 rows spanning multiple dates, products, customers, and regions. Values should support aggregation, time-series analysis, and plotting.",
+        "content_type": "csv"
+      },
+      {
+        "id": "customers_json",
+        "path": "customers.json",
+        "count": 1,
+        "description": "Clean JSON array of customer records with customer_id, customer_name, segment, and region fields. Include records matching most but not necessarily all customer_id values in sales.csv so the analyst must handle joins and unmatched records.",
+        "content_type": "json"
+      },
+      {
+        "id": "messy_sales_csv",
+        "path": "messy_sales.csv",
+        "count": 1,
+        "description": "Messy CSV containing null values, numeric values represented as strings, duplicate rows, inconsistent date values, and at least one row missing a commonly expected column value. It should remain parseable by pandas but require defensive cleaning.",
+        "content_type": "csv"
+      },
+      {
+        "id": "schema_variant_json",
+        "path": "schema_variant.json",
+        "count": 1,
+        "description": "JSON input with a valid but different schema, such as nested event records or records using amount instead of revenue and timestamp instead of order_date. The file should be readable but not blindly assumed to have the sales schema.",
+        "content_type": "json"
+      },
+      {
+        "id": "malformed_records_csv",
+        "path": "malformed_records.csv",
+        "count": 1,
+        "description": "CSV with sparse rows, blank lines, missing optional fields, mixed categorical values, and a small number of malformed or nonnumeric measurements. The file must be useful for testing graceful coercion, skipped records, and caveat reporting.",
+        "content_type": "csv"
+      }
+    ],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": []
+  },
+  "dev_suite": [
+    {
+      "id": "tier1_basic_csv_analysis",
+      "description": "Tier 1 baseline smoke test. Analyze the clean sales CSV only, calculate total revenue and revenue by region, identify the top product, create at least one plot, and save a concise textual summary plus tabular artifacts. The invocation must complete without requiring clarification.",
+      "fixture_ids": [
+        "sales_csv"
+      ],
+      "turns": [
+        {
+          "analysis_task": "Analyze sales.csv. Calculate total revenue, revenue by region, monthly revenue if order_date is usable, and the top three products by revenue. Save a readable TXT summary, CSV summary tables, a JSON metrics file, and at least one PNG plot in the output directory. Clearly state the input file used and the main findings."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "artifact_manifest"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer and a nonempty artifact_manifest. At least one TXT, one CSV, one JSON, and one plot artifact are created beneath the output directory. Generated CSV and JSON artifacts are parseable. The final answer identifies sales.csv and reports total revenue and a regional or product aggregation.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the final answer accurately and clearly summarizes the requested sales analysis, names or references the generated artifacts, avoids unsupported claims, and communicates results in a useful analyst-style format. Do not require exact prose or a particular artifact filename.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tier2_multi_file_join_analysis",
+      "description": "Tier 2 core functional complexity test. Use both a clean sales CSV and a customer JSON file, infer compatible keys, perform a defensible multi-file analysis, explicitly handle unmatched records, and produce multiple analytical artifacts and plots.",
+      "fixture_ids": [
+        "sales_csv",
+        "customers_json"
+      ],
+      "turns": [
+        {
+          "analysis_task": "Analyze sales.csv together with customers.json. Join customer attributes to sales using the best available compatible identifier, quantify matched and unmatched sales records, compare revenue by customer segment and region, identify the highest-value customers, and create an appropriate visualization. Save TXT, CSV, JSON, and plot outputs in the output directory. Explain any join assumptions and caveats in the final answer."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "artifact_manifest"
+      ],
+      "deterministic_criteria": "The invocation returns successfully with a nonempty final_answer and artifact_manifest. Output includes at least one parseable CSV and JSON artifact and at least one plot. The analysis reports match or unmatched-record information and includes a segment, customer, or region aggregation. The system does not fabricate customer attributes for unmatched records.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the response demonstrates a coherent multi-file analysis, explains the join key and limitations, distinguishes matched from unmatched data, and presents conclusions supported by generated artifacts. Penalize claims that imply complete matching when the fixture contains unmatched records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tier3_resilient_messy_inputs",
+      "description": "Tier 3 resilience and edge-case test. Provide heterogeneous, messy, and schema-variant inputs. The system should inspect schemas, use compatible data where possible, skip or quarantine unusable records or files transparently, continue with valid data, and report caveats instead of crashing.",
+      "fixture_ids": [
+        "messy_sales_csv",
+        "schema_variant_json",
+        "malformed_records_csv"
+      ],
+      "turns": [
+        {
+          "analysis_task": "Perform a robust exploratory analysis over all provided files: messy_sales.csv, schema_variant.json, and malformed_records.csv. Inspect each schema before analysis, identify usable fields and compatible datasets, safely coerce numeric and date values where reasonable, remove or account for duplicates, handle missing values, and skip incompatible analyses without failing the whole run. Produce a TXT report, CSV and JSON summaries of file quality and usable statistics, and plots only where the data supports them. The final answer must explicitly list processed and skipped files, cleaning actions, warnings, and limitations."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "artifact_manifest"
+      ],
+      "deterministic_criteria": "The invocation does not raise an unhandled exception even with malformed or heterogeneous content. final_answer is nonempty and identifies processed files, skipped or partially usable data, and at least one caveat. At least one valid TXT report and one parseable JSON or CSV diagnostic artifact are written. Any generated plots must be valid files and correspond to available usable data. If analysis code fails initially, a subsequent retry must use the traceback and either succeed or return a transparent diagnostic result.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the system is transparent about data quality, avoids inventing cross-file relationships, distinguishes successful analysis from skipped analysis, reports cleaning and coercion decisions, and remains useful despite anomalies. Reward calibrated uncertainty and actionable caveats; penalize silent data loss and claims of universal completeness.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

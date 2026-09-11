@@ -6,9 +6,15 @@ on:
 
 jobs:
   lint-and-typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install ShellCheck 0.9.0
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck=0.9.0-1
+        test "$(shellcheck --version | awk '/^version:/ {print $2}')" = "0.9.0"
     
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -20,7 +26,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m venv adasvenv
         source adasvenv/bin/activate
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; elif [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         
     - name: Run Ruff Format Check
       run: |
@@ -34,7 +40,6 @@ jobs:
 
     - name: Run Shellcheck
       run: |
-        source adasvenv/bin/activate
         shellcheck scripts/*.sh
       
     - name: Run Pyright
@@ -57,7 +62,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m venv adasvenv
         source adasvenv/bin/activate
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; elif [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
     - name: Run Pytest
       run: |

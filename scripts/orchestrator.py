@@ -13,8 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from adas_core.logging_config import get_logger, setup_logging
-from sandbox.sandbox import ensure_cached_sandbox_image
+# Ensure repository root is on sys.path when invoked directly as a script
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from adas_core.logging_config import get_logger, setup_logging  # noqa: E402
+from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
 
 logger = get_logger("orchestrator")
 
@@ -481,37 +486,36 @@ class Orchestrator:
         overall_exit = 0
         iterations = self._parse_iterations(getattr(self.args, "iterations", "1-16"))
         approach = getattr(self.args, "type", "ablationC")
-        benchmark = getattr(self.args, "benchmark", "gsm")
-        bench_dir, _ = self._get_benchmark_info(benchmark)
 
         initial_dir = Path.cwd()
         target_dir = initial_dir / f"ADAS_{approach}"
         work_dir = target_dir if target_dir.is_dir() else initial_dir
 
-        problem_path = getattr(self.args, "problem_path", None)
-        if not problem_path:
-            candidate = work_dir / "generated_systems" / bench_dir / "prompts.txt"
-            problem_path = (
-                candidate if candidate.is_file() else initial_dir / "generated_systems" / bench_dir / "prompts.txt"
-            )
-
-        problem_text = ""
-        if Path(problem_path).is_file():
-            problem_text = Path(problem_path).read_text(encoding="utf-8").strip()
-        else:
-            problem_text = getattr(self.args, "problem", "") or "Solve the benchmark tasks."
+        task_spec_arg = getattr(self.args, "task_spec", None)
+        if not task_spec_arg:
+            logger.error("Design runs require an established --task-spec.")
+            return 2
+        task_spec_path = Path(task_spec_arg)
+        if not task_spec_path.is_file():
+            logger.error("TaskSpec file not found: %s", task_spec_path)
+            return 2
 
         for iter_num in iterations:
-            sys_name = f"{approach}_{benchmark}{iter_num}_gpt"
+            if getattr(self.args, "benchmark", None):
+                sys_name = f"{approach}_{self.args.benchmark}{iter_num}_gpt"
+            else:
+                base_name = task_spec_path.stem.replace(".task", "")
+                sys_name = f"{approach}_{base_name}{iter_num}_gpt" if approach else f"{base_name}_{iter_num}"
+
             logger.info("=========================================================")
-            logger.info(f"   Running Design Generation for {sys_name}")
+            logger.info("   Running Design Generation for %s (system: %s, run %s)", task_spec_path, sys_name, iter_num)
             logger.info("=========================================================")
             cmd = [
                 sys.executable,
-                "run_design.py",
-                "--problem",
-                problem_text,
-                "--name",
+                "invoke_design.py",
+                "--task-spec",
+                str(task_spec_path.resolve()),
+                "--system-name",
                 sys_name,
                 "--container",
                 self.args.container,
@@ -531,11 +535,9 @@ class Orchestrator:
         if not system_names:
             system_names = ["data_analyst_gpt5_v0"]
 
-        state_json = getattr(self.args, "state", '{"messages": []}')
+        state_json = getattr(self.args, "state", None)
+        state_file_arg = getattr(self.args, "state_file", None)
         data_gen_script = getattr(self.args, "data_gen_script", "")
-
-        Path("data/input").mkdir(parents=True, exist_ok=True)
-        Path("data/output").mkdir(parents=True, exist_ok=True)
 
         if data_gen_script and Path(data_gen_script).is_file():
             logger.info(f"--- Running Data Generation Script: {data_gen_script} ---")
@@ -544,40 +546,39 @@ class Orchestrator:
                 logger.error("Data generation script failed.")
                 return 1
 
+        task_spec_arg = getattr(self.args, "task_spec", None)
+
         for sys_name in system_names:
             logger.info("-------------------------------------------------")
             logger.info(f" STARTING RUN FOR: {sys_name}")
             logger.info("-------------------------------------------------")
 
-            metrics_file = Path("generated_systems/metrics") / f"{sys_name}.json"
-            packages = DependencyParser.get_installed_packages(metrics_file)
-            image_to_use = None
-            temp_image_name: str | None = None
-
-            if packages:
-                temp_image_name = f"adas-temp-image-{self.unique_id}-{sys_name}"
-                if self.container_manager.create_temp_image(self._cached_sandbox_image(), temp_image_name, packages):
-                    image_to_use = temp_image_name
-
             cmd = [
                 sys.executable,
-                "test_target.py",
+                "invoke_target.py",
                 "--system_name",
                 sys_name,
-                "--state",
-                state_json,
                 "--container",
                 self.args.container,
             ]
-            if image_to_use:
-                cmd.extend(["--base-image", image_to_use])
+            if state_file_arg:
+                cmd.extend(["--state-file", str(Path(state_file_arg).resolve())])
+            elif state_json:
+                cmd.extend(["--state", state_json])
+            else:
+                cmd.extend(["--state", '{"messages": []}'])
+
+            if task_spec_arg:
+                cmd.extend(["--task-spec", str(Path(task_spec_arg).resolve())])
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))
             if res["exit_code"] != 0:
                 overall_exit = 1
-
-            if temp_image_name:
-                self.container_manager.remove_image(temp_image_name, force=True)
+                logger.error("Target execution failed for %s with exit code %s", sys_name, res["exit_code"])
+                if res.get("stderr"):
+                    logger.error("STDERR:\n%s", res["stderr"])
+                if res.get("stdout"):
+                    logger.info("STDOUT:\n%s", res["stdout"])
 
         return overall_exit
 
@@ -613,12 +614,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="auto",
         help="Container runtime engine.",
     )
-    parser.add_argument("--problem-path", default=None, help="Path to prompt file for design runs.")
-    parser.add_argument("--problem", default="", help="Problem statement for design runs.")
+    parser.add_argument(
+        "--task-spec",
+        default=None,
+        help="Established TaskSpec file for design or target runs.",
+    )
     parser.add_argument(
         "--system-names", nargs="+", default=["data_analyst_gpt5_v0"], help="System names for target execution."
     )
-    parser.add_argument("--state", default='{"messages": []}', help="Initial JSON state string for target execution.")
+    parser.add_argument("--state", default=None, help="Initial JSON state string for target execution.")
+    parser.add_argument(
+        "--state-file",
+        type=Path,
+        default=None,
+        help="Path to initial JSON state file for target execution.",
+    )
     parser.add_argument(
         "--data-gen-script", default="", help="Optional script for generating input data before running target."
     )

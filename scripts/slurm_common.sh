@@ -23,7 +23,8 @@ setup_podman_service() {
     PODMAN_SOCKET="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
     export ADAS_PODMAN_SOCKET=$PODMAN_SOCKET
 
-    # shellcheck disable=SC2329
+    # This cleanup function is invoked indirectly by the EXIT/INT/TERM trap.
+    # shellcheck disable=SC2317
     cleanup_podman() {
         if [ -n "${PODMAN_PID:-}" ]; then
             kill "$PODMAN_PID" 2>/dev/null || true

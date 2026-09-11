@@ -22,7 +22,7 @@ if [[ "$*" != *"--container"* ]]; then
 fi
 
 if [ $# -gt 0 ]; then
-    python scripts/orchestrator.py --task benchmark "${CONTAINER_ARGS[@]}" "$@"
+    python -m scripts.orchestrator --task benchmark "${CONTAINER_ARGS[@]}" "$@"
 else
-    python scripts/orchestrator.py --task benchmark --container podman --benchmark mmlu --type ablationC --iterations 1-16
+    python -m scripts.orchestrator --task benchmark --container podman --benchmark mmlu --type ablationC --iterations 1-16
 fi

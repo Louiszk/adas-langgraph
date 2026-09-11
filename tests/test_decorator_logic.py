@@ -9,7 +9,6 @@ from typing import Any
 from adas_core.decorator_logic import (
     build_decorator_signatures,
     execute_decorator_tool_calls,
-    find_code_blocks,
     parse_arguments,
     parse_decorator_tool_calls,
 )
@@ -20,27 +19,6 @@ from meta_system.tools import (
     manage_tool,
     manage_utilities,
 )
-
-
-class TestMarkdownCodeBlockParsing:
-    def test_find_code_blocks_extracts_multiple_blocks(self):
-        """Contract: Must extract valid Python code blocks with line bounds using tokenizer."""
-        markdown_text = textwrap.dedent("""
-            Here is Python code:
-            ```python
-            def foo():
-                return 42
-            ```
-            And another block:
-            ```python
-            x = 10 + 20
-            ```
-        """)
-        blocks = find_code_blocks(markdown_text)
-        assert len(blocks) == 2
-        assert "def foo():" in str(blocks[0]["content"])
-        assert "x = 10 + 20" in str(blocks[1]["content"])
-        assert "start_line" in blocks[0] and "end_line" in blocks[0]
 
 
 class TestDecoratorArgumentParsing:
@@ -137,3 +115,82 @@ class TestDecoratorExecutionEngine:
         assert results[0][0] == "ManageNode"
         assert human_msg is not None
         assert "Successfully updated filter_node." in str(human_msg.content)
+
+    def test_execute_decorator_halts_after_test_system(self):
+        """Contract: @@test_system() acts as a turn boundary. It executes and skips all following decorators."""
+        execution_log: list[tuple[Any, ...]] = []
+
+        @dataclass
+        class MockManageNodeTool:
+            def func(self, *args: Any, **kwargs: Any) -> str:
+                execution_log.append(("ManageNode", kwargs.get("name")))
+                return f"Successfully updated {kwargs.get('name')}."
+
+        @dataclass
+        class MockTestSystemTool:
+            def func(self, *args: Any, **kwargs: Any) -> str:
+                execution_log.append(("TestSystem",))
+                return "All 2 test cases passed successfully."
+
+        tools_dict = {
+            "ManageNode": MockManageNodeTool(),
+            "TestSystem": MockTestSystemTool(),
+        }
+        markdown_input = textwrap.dedent("""
+            ```python
+            @@manage_node(action="create", name="node_1")
+            def node_1(state): return state
+
+            @@test_system()
+
+            @@manage_node(action="create", name="node_2")
+            def node_2(state): return state
+            ```
+        """)
+        state = {}
+        human_msg, results = execute_decorator_tool_calls(
+            response_content=markdown_input,
+            available_tools=tools_dict,
+            code_related_tools={"manage_node": "function_code"},
+            state=state,
+        )
+
+        assert execution_log == [("ManageNode", "node_1"), ("TestSystem",)]
+        assert len(results) == 2
+        assert results[0][0] == "ManageNode"
+        assert results[1][0] == "TestSystem"
+        assert human_msg is not None
+        assert "Execution halted after @@test_system." in str(human_msg.content)
+        assert "1 subsequent decorator call(s) in this response were skipped." in str(human_msg.content)
+
+    def test_execute_decorator_halts_on_first_of_multiple_test_system_calls(self):
+        """Contract: Multiple @@test_system() calls execute only the first and skip subsequent ones."""
+        test_call_count = 0
+
+        @dataclass
+        class MockTestSystemTool:
+            def func(self, *args: Any, **kwargs: Any) -> str:
+                nonlocal test_call_count
+                test_call_count += 1
+                return "All 1 test cases passed successfully."
+
+        tools_dict = {"TestSystem": MockTestSystemTool()}
+        markdown_input = textwrap.dedent("""
+            ```python
+            @@test_system()
+            @@test_system()
+            ```
+        """)
+        state = {}
+        human_msg, results = execute_decorator_tool_calls(
+            response_content=markdown_input,
+            available_tools=tools_dict,
+            code_related_tools={},
+            state=state,
+        )
+
+        assert test_call_count == 1
+        assert len(results) == 1
+        assert human_msg is not None
+        assert "Execution halted after @@test_system." in str(human_msg.content)
+        assert "1 subsequent decorator call(s) in this response were skipped." in str(human_msg.content)

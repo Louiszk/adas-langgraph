@@ -1,0 +1,22 @@
+{
+  "files": {
+    "preflight.py": "93e2e0289d5647623d7b3be1ae3032ccf35512e37640ceed33bf12189ced1658",
+    "task.json": "069614e7b192b56a6079674793f19f8505f7d53ba59a40d0815ead1c23e8dcb6"
+  },
+  "required_packages": [
+    "wikipedia"
+  ],
+  "schema_version": "1.0",
+  "task_name": "fever",
+  "task_schema_version": "1.0",
+  "validation": {
+    "fixture_generator_hashes": {},
+    "generator_prompt_hash": "6ffeea4d84178b93ed70fd04770f564e0ddc62aa2c0b42c9a6350362fe93eecf",
+    "generator_version": "1",
+    "schema_version": "1.0",
+    "task_name": "fever",
+    "task_spec_hash": "1e3432f81b7f3470c2e1e131fc4c4ca065def46f13210440c3eb4a32592ad4f9",
+    "validator_file": "fever.validation.py",
+    "validator_hash": "0dee66e41f348ae63bf44a238362e923b2f4c449dee5d23ce83adbb3e34eeef1"
+  }
+}

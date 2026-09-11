@@ -77,3 +77,13 @@ def sample_state_class_code() -> str:
             context: str
             step_count: int
     """).strip()
+
+
+@pytest.fixture(autouse=True)
+def isolate_generated_systems(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Automatically isolate all generated system checkpoints and files to a temporary directory during tests."""
+    temp_dir = tmp_path_factory.mktemp("generated_systems")
+    monkeypatch.setattr("meta_system.tools.SANDBOX_GENERATED_SYSTEMS_DIR", str(temp_dir))
+    monkeypatch.setattr("meta_system.graph.SANDBOX_GENERATED_SYSTEMS_DIR", str(temp_dir), raising=False)
+    monkeypatch.setattr("adas_core.candidate_selection.SANDBOX_GENERATED_SYSTEMS_DIR", str(temp_dir), raising=False)
+    monkeypatch.setattr("adas_core.environment.SANDBOX_GENERATED_SYSTEMS_DIR", str(temp_dir))

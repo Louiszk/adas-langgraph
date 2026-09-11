@@ -1,22 +1,36 @@
 import ast
-import contextlib
 import os
-import re
 import subprocess
 import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Literal
 
-import dill as pickle
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
+from adas_core.candidate_selection import record_candidate_evaluation
 from adas_core.decorator_logic import build_decorator_signatures
-from adas_core.helpers import TruncatingStringIO, get_filtered_packages, truncate_state
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.environment import (
+    DEFAULT_EXCLUDED_PACKAGES,
+    SANDBOX_FIXTURES_DIR,
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_TASK_SPEC_PATH,
+    is_package_excluded,
+    normalize_package_name,
+    validate_package_requirement,
+)
+from adas_core.helpers import (
+    get_filtered_packages,
+    sanitize_identifier,
+    truncate_state,
+    validate_identifier,
+)
 from adas_core.logging_config import get_logger
-from adas_core.materialize import materialize_system
+from adas_core.task_spec import TaskSpec, TestCaseSpec
+from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.config import RECURSION_LIMIT
 from meta_system.helpers import ignored_nodes_message
@@ -32,32 +46,16 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
         package_name: The name of the package to install, optionally with a version specifier (e.g., "numpy", "pandas==2.0.3").
     """
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
-    exclude_packages = [
-        "datasets",
-        "docker",
-        "grpcio-status",
-        "langchain-openai",
-        "wheel",
-        "llm-sandbox",
-        "pip",
-        "dill",
-        "podman",
-        "python-dotenv",
-        "setuptools",
-    ]
     # Validate package name to prevent command injection
-    valid_pattern = r"^[a-zA-Z0-9._-]+(\s*[=<>!]=\s*[0-9a-zA-Z.]+)?$"
-
-    if not re.match(valid_pattern, package_name):
+    if not validate_package_requirement(package_name):
         return f"ERROR: Invalid package name format. Package name '{package_name}' contains invalid characters."
-    if any(ep in package_name for ep in exclude_packages + ["langgraph", "langchain-core"]):
+    if is_package_excluded(package_name, excluded_packages=DEFAULT_EXCLUDED_PACKAGES + ["langgraph", "langchain-core"]):
         return f"{package_name} is already installed."
 
     # Parse package name to get the canonical name for `pip show`
-    name_only_match = re.match(r"^[a-zA-Z0-9._-]+", package_name.strip())
-    if not name_only_match:
+    name_only = normalize_package_name(package_name)
+    if not name_only:
         return f"ERROR: Could not parse package name from '{package_name}'."
-    name_only = name_only_match.group(0).lower()
 
     try:
         process = subprocess.run(
@@ -90,7 +88,9 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
             except Exception:
                 target_agentic_system.installed_packages[name_only] = package_name.strip()
 
-            target_agentic_system.packages_info = get_filtered_packages(exclude_packages) + ["langchain-core 0.3.75"]
+            target_agentic_system.packages_info = get_filtered_packages(DEFAULT_EXCLUDED_PACKAGES) + [
+                "langchain-core 0.3.75"
+            ]
             return f"Successfully installed {package_name}"
         else:
             return f"ERROR: installing {package_name}:\n{process.stdout}"
@@ -102,7 +102,7 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
 def set_imports(import_code: str, state: dict[str, Any]) -> str:
     """
     Sets the import statements for the target system. This replaces any existing custom imports.
-    The Python code containing the import statements MUST be placed immediately after this decorator line.
+    The Python code containing the import statements must be placed immediately after this decorator line.
     """
     if not import_code:
         return "ERROR: You must provide the import statements code block below the decorator."
@@ -132,7 +132,7 @@ def set_state(state_code: str, state: dict[str, Any]) -> str:
     """
     Defines the AgentState for the target system. This decorator should be used at the beginning of the design process.
     If called again, it will completely replace the previous AgentState definition.
-    The Python code defining the AgentState class MUST be placed immediately after this decorator line.
+    The Python code defining the AgentState class must be placed immediately after this decorator line.
     """
     if not state_code:
         return "ERROR: You must provide the AgentState class definition below the decorator."
@@ -237,6 +237,10 @@ def _manage_function(
         return error
     if state is None:
         return "ERROR: state is required"
+    try:
+        name = validate_identifier(name, field_name=f"{component_type} name")
+    except ValueError as exc:
+        return f"ERROR: {exc}"
 
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
     if component_type == "conditional edge":
@@ -361,6 +365,91 @@ def manage_utilities(
         return f"ERROR: {action}ing utilities: {e!r}"
 
 
+def _resolve_task_validation(
+    state: dict[str, Any],
+) -> tuple[TaskSpec | None, Any | None, list[TestCaseSpec]]:
+    """Resolve TaskSpec, validation module, and dev suite test cases.
+
+    Returns:
+        (task_spec, validation_module, test_cases)
+    """
+    # Import lazily: automatic_validation depends on meta_system.config, whose
+    # package initialization imports this module.
+    from adas_core.automatic_validation import load_validation_module
+
+    # 1. Check if task_spec is explicitly in state
+    task_spec: TaskSpec | None = None
+    raw_spec = state.get("task_spec")
+    if isinstance(raw_spec, TaskSpec):
+        task_spec = raw_spec
+    elif isinstance(raw_spec, dict):
+        task_spec = TaskSpec.model_validate(raw_spec)
+    elif isinstance(raw_spec, (str, Path)):
+        task_spec = TaskSpec.from_file(raw_spec)
+
+    # 2. Check for task.json in task_dir or standard sandbox locations
+    if task_spec is None:
+        task_dir_env = os.environ.get("ADAS_TASK_DIR")
+        candidate_paths: list[Path] = [
+            Path(SANDBOX_TASK_SPEC_PATH),
+            Path("task_setup/task.json"),
+        ]
+        if task_dir_env:
+            candidate_paths.insert(0, Path(task_dir_env) / "task.json")
+        for cp in candidate_paths:
+            if cp.exists():
+                try:
+                    task_spec = TaskSpec.from_file(cp)
+                    break
+                except Exception as e:
+                    logger.debug(f"Could not load TaskSpec from {cp}: {e}")
+
+    # 3. If TaskSpec is resolved, load or generate the validation module
+    if task_spec is not None:
+        validation_module = state.get("validation_module")
+        if validation_module is None:
+            val_path = state.get("validation_module_path")
+            if val_path and Path(val_path).exists():
+                validation_module = load_validation_module(val_path)
+            else:
+                task_dir_candidates: list[Path] = []
+                if state.get("task_dir"):
+                    task_dir_candidates.append(Path(state["task_dir"]))
+                if os.environ.get("ADAS_TASK_DIR"):
+                    task_dir_candidates.append(Path(os.environ["ADAS_TASK_DIR"]))
+                task_dir_candidates.extend(
+                    [
+                        Path(SANDBOX_TASK_SETUP_DIR),
+                        Path("task_setup"),
+                        Path("."),
+                    ]
+                )
+
+                found_file = None
+                safe_name = sanitize_identifier(task_spec.name)
+                for td in task_dir_candidates:
+                    for name in [f"{safe_name}.validation.py", f"{task_spec.name}.validation.py", "validation.py"]:
+                        candidate = td / name
+                        if candidate.exists():
+                            found_file = candidate
+                            break
+                    if found_file:
+                        break
+
+                if found_file:
+                    validation_module = load_validation_module(found_file)
+                else:
+                    searched = ", ".join(str(path) for path in task_dir_candidates)
+                    raise FileNotFoundError(
+                        f"No frozen validation module found for TaskSpec '{task_spec.name}'. "
+                        f"Generate and review its LLM-authored validator before design. Searched: {searched}"
+                    )
+
+        return task_spec, validation_module, list(task_spec.dev_suite)
+
+    return None, None, []
+
+
 def test_system(state: dict[str, Any]) -> str:
     """
     Executes the current target system with predefined test input states to validate its functionality.
@@ -369,196 +458,136 @@ def test_system(state: dict[str, Any]) -> str:
     Analyze this report carefully to identify errors or confirm correct behavior.
     """
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
-    validation_code_snippets = state.get("validation_code_snippets", [])
-    full_final_state = None
-    final_test_case_id = ""
-    error_message = ""
-    stdout_capture = TruncatingStringIO()
-    stderr_capture = TruncatingStringIO()
-    final_captured_output = ""
-    final_flow_chart = ""
-    parallel_processing_note = ""
-    start_time = time.time()
-    total_iterations = 0
-    validation_results_summary = []
-    all_tests_passed_overall = True
-    num_passed_tests = 0
-    usage_before = LargeLanguageModel.usage_metrics["target_usage"]["overall"].copy()
-    num_tests = 0
-
-    if not validation_code_snippets:
-        return "ERROR: validation_code_snippets list is empty."
 
     try:
-        validation_errors = target_agentic_system.validate_graph()
-        if validation_errors:
+        task_spec, validation_module, all_test_cases = _resolve_task_validation(state)
+    except Exception as e_prep:
+        eval_err = (
+            f"EVALUATOR_ERROR: Failed to prepare validation environment: {e_prep!r}\n"
+            f"{traceback.format_exc(chain=False)}"
+        )
+        logger.error(eval_err)
+        return f"Test suite aborted.\n\n<ValidatorResult>\nOverall: FAILED\nDetails:\n{eval_err}\n</ValidatorResult>"
+
+    num_tests = len(all_test_cases)
+    if num_tests == 0:
+        return "ERROR: No validation test cases found. No valid TaskSpec dev_suite was provided."
+    if validation_module is None:
+        return "ERROR: No validation module found to validate test execution."
+
+    fixtures_dir_env = os.environ.get("ADAS_FIXTURES_DIR")
+    fixtures_path = Path(fixtures_dir_env) if fixtures_dir_env else Path(SANDBOX_FIXTURES_DIR)
+    active_fixtures_dir = fixtures_path if fixtures_path.exists() else None
+
+    start_time = time.time()
+    error_message = ""
+    try:
+        exec_result = execute_test_suite(
+            system=target_agentic_system,
+            test_cases=all_test_cases,
+            validation_module=validation_module,
+            recursion_limit=RECURSION_LIMIT,
+            stop_on_first_failure=True,
+            workspace_root=os.environ.get("ADAS_WORKSPACE_ROOT"),
+            fixtures_dir=active_fixtures_dir,
+            capture_debug_flow=True,
+            system_role="target",
+            task_spec=task_spec,
+        )
+
+        if exec_result.structural_errors:
             return "ERROR: Validation failed before execution. The TargetSystem has structural flaws:\n" + "\n".join(
-                validation_errors
+                exec_result.structural_errors
             )
 
-        # Aggregate test cases and validators from all snippets
-        all_test_cases = []
-        all_validator_funcs = []
-        for snippet in validation_code_snippets:
-            snippet_namespace = {
-                "LargeLanguageModel": LargeLanguageModel,
-                "HumanMessage": HumanMessage,
-                "ToolMessage": ToolMessage,
-                "SystemMessage": SystemMessage,
-                "AIMessage": AIMessage,
-            }
-            try:
-                exec(snippet, snippet_namespace)
-                cases = snippet_namespace.get("TARGET_SYSTEM_TEST_CASES")
-                validator = snippet_namespace.get("validate_target_system_output")
-                if isinstance(cases, list) and len(cases) == 3 and callable(validator):
-                    all_test_cases.extend(cases)
-                    all_validator_funcs.append(validator)
-            except Exception as e_snippet:
-                logger.error(f"Failed to parse a validation code snippet: {e_snippet!r}")
+        if exec_result.materialization_error:
+            eval_err = f"EVALUATOR_ERROR: Failed to prepare system: {exec_result.materialization_error}\n"
+            logger.error(eval_err)
+            return (
+                f"Test suite aborted.\n\n<ValidatorResult>\nOverall: FAILED\nDetails:\n{eval_err}\n</ValidatorResult>"
+            )
 
-        num_tests = len(all_test_cases)
-
-        source_code = materialize_system(target_agentic_system, output_dir=None)
-        main_namespace = {}
-        exec(source_code, main_namespace)
-
-        if "workflow" not in main_namespace:
-            raise Exception("Could not find 'workflow' in generated code.")
-        target_workflow = main_namespace["workflow"]
-
-        for i, test_input_state in enumerate(all_test_cases):
-            test_case_id = f"Test Case {i + 1}"
-            final_test_case_id = test_case_id
-            current_test_final_state = {}
-            execution_flow: list[Any] = ["START"]
-
-            purge_command = "rm -rf /sandbox/workspace/data/output && mkdir -p /sandbox/workspace/data/output"
-            subprocess.run(purge_command, shell=True, check=False)
-
-            stdout_capture.truncate(0)
-            stdout_capture.seek(0)
-            stderr_capture.truncate(0)
-            stderr_capture.seek(0)
-
-            with (
-                contextlib.redirect_stdout(stdout_capture),
-                contextlib.redirect_stderr(stderr_capture),
-            ):
-                try:
-                    for stream_mode, update in target_workflow.stream(
-                        test_input_state,
-                        config={"recursion_limit": RECURSION_LIMIT},
-                        stream_mode=["values", "debug"],
-                    ):
-                        if stream_mode == "values":
-                            current_test_final_state = update
-                        elif stream_mode == "debug" and update["type"] == "task_result":
-                            step = update["step"]
-                            if step >= len(execution_flow):
-                                execution_flow.append([update["payload"]["name"]])
-                            else:
-                                execution_flow[step].append(update["payload"]["name"])
-                            total_iterations = step + 1
-                    execution_flow.append("END")
-
-                    try:
-                        # Determine which validator to use and the sub-index
-                        validator_index = i // 3
-                        sub_index = i % 3
-                        validator_func = all_validator_funcs[validator_index]
-                        is_pass, message = validator_func(sub_index, current_test_final_state)
-                    except Exception as e_validation:
-                        is_pass, message = (
-                            False,
-                            f"ERROR: executing validation function for {test_case_id}: {e_validation!r}",
-                        )
-
-                    if is_pass:
-                        num_passed_tests += 1
-                    else:
-                        all_tests_passed_overall = False
-                        if num_passed_tests > 0:
-                            success_message = (
-                                f"Test cases 1-{num_passed_tests} passed."
-                                if num_passed_tests > 1
-                                else "Test case 1 passed."
-                            )
-                            validation_results_summary.append(success_message)
-                        validation_results_summary.append(f"{test_case_id}: FAIL - {message}")
-
-                except Exception as e_test_case:
-                    execution_flow.append("... -> FAILED_DURING_EXECUTION")
-                    e_message = f"ERROR: during {test_case_id} execution: {e_test_case!r}"
-
-                    if "GraphRecursionError" in repr(e_test_case):
-                        e_message += " The TargetSystem hit the 20 iteration recursion limit during the test case."
-                    else:
-                        e_message += f"\n{traceback.format_exc(chain=False)}"
-
-                    all_tests_passed_overall = False
-                    if num_passed_tests > 0:
-                        success_message = (
-                            f"Test cases 1-{num_passed_tests} passed."
-                            if num_passed_tests > 1
-                            else "Test case 1 passed."
-                        )
-                        validation_results_summary.append(success_message)
-                    validation_results_summary.append(f"{test_case_id}: FAIL - {e_message}")
-
-            full_final_state = current_test_final_state
-            final_captured_output = stdout_capture.getvalue() + stderr_capture.getvalue()
-            final_flow_chart = " -> ".join([str(flow_step) for flow_step in execution_flow])
-            parallel_index, paths = None, None
-            for index, flow_step in enumerate(execution_flow):
-                if isinstance(flow_step, list) and len(flow_step) > 1:
-                    parallel_index, paths = max(index - 1, 0), len(flow_step)
-                    parallel_processing_note = (
-                        f"\nNote: Node {execution_flow[parallel_index]!s} introduced {paths} parallel execution paths."
-                    )
-                    break
-            if not all_tests_passed_overall:
-                break
-
-        if all_tests_passed_overall and num_tests > 0:
-            validation_results_summary.append(f"All {num_tests} test cases passed successfully.")
+        final_test_case_id = exec_result.last_executed_case_id
+        full_final_state = exec_result.last_final_state
+        final_captured_output = exec_result.last_captured_output
+        final_flow_chart = " -> ".join([str(flow_step) for flow_step in exec_result.last_execution_flow])
+        parallel_processing_note = exec_result.parallel_processing_note
+        all_tests_passed_overall = exec_result.all_passed
+        num_passed_tests = exec_result.passed_count
+        executed_count = exec_result.executed_count
+        duration = exec_result.duration_seconds
+        metrics = exec_result.token_usage
+        total_iterations = exec_result.total_iterations
+        validation_results_summary = exec_result.summary_lines
 
     except Exception:
         error_message += f"\n\nERROR: running the test_system tool:\n{traceback.format_exc(chain=False)}"
         all_tests_passed_overall = False
-
-    end_time = time.time()
-    duration = end_time - start_time
-    usage_after = LargeLanguageModel.usage_metrics["target_usage"]["overall"].copy()
-    metrics = {metric: usage_after[metric] - usage_before[metric] for metric in usage_before}
+        num_passed_tests = 0
+        executed_count = 0
+        final_test_case_id = all_test_cases[0].id if all_test_cases else ""
+        full_final_state = None
+        final_captured_output = ""
+        final_flow_chart = ""
+        parallel_processing_note = ""
+        duration = time.time() - start_time
+        metrics = {"llm_calls": 0, "input_tokens": None, "output_tokens": None, "total_tokens": None}
+        total_iterations = 0
+        validation_results_summary = [error_message.strip()]
 
     captured_output_str = f"\n{final_test_case_id}:\n<STDOUT+STDERR>\n{final_captured_output}\n</STDOUT+STDERR>"
     flow_chart_str = (
         f"\n{final_test_case_id}:\n<ExecutionFlow>\n{final_flow_chart}{parallel_processing_note}\n</ExecutionFlow>"
     )
 
-    if num_tests > 0:
-        avg_duration = duration / num_tests
-        avg_llm_calls = metrics["llm_calls"] / num_tests
-        avg_total_tokens = metrics["total_tokens"] / num_tests
-        avg_input_tokens = metrics["input_tokens"] / num_tests
-        avg_output_tokens = metrics["output_tokens"] / num_tests
-        avg_iterations = total_iterations / num_tests
-
-        metrics_str = (
-            f"\n\n<Metrics>\n"
-            f"Avg. Graph Iterations: {round(avg_iterations, 2)}\n"
-            f"Avg. Duration: {round(avg_duration, 3)} seconds\n"
-            f"Avg. LLM Calls: {round(avg_llm_calls, 2)}\n"
-            f"Avg. Tokens: {round(avg_total_tokens, 2)} (Input: {round(avg_input_tokens, 2)}, Output: {round(avg_output_tokens, 2)})\n"
-            f"</Metrics>"
+    if executed_count > 0:
+        avg_duration = (duration / executed_count) if duration is not None else None
+        avg_llm_calls = (
+            (metrics["llm_calls"] / executed_count) if metrics and metrics.get("llm_calls") is not None else None
         )
+        avg_total_tokens = (
+            (metrics["total_tokens"] / executed_count) if metrics and metrics.get("total_tokens") is not None else None
+        )
+        avg_input_tokens = (
+            (metrics["input_tokens"] / executed_count) if metrics and metrics.get("input_tokens") is not None else None
+        )
+        avg_output_tokens = (
+            (metrics["output_tokens"] / executed_count)
+            if metrics and metrics.get("output_tokens") is not None
+            else None
+        )
+        avg_iterations = total_iterations / executed_count
+
+        lines = [
+            "\n\n<Metrics>",
+            f"Avg. Graph Iterations: {round(avg_iterations, 2)}",
+        ]
+        if avg_duration is not None:
+            lines.append(f"Avg. Duration: {round(avg_duration, 3)} seconds")
+        else:
+            lines.append("Avg. Duration: None")
+
+        if avg_llm_calls is not None:
+            lines.append(f"Avg. LLM Calls: {round(avg_llm_calls, 2)}")
+        else:
+            lines.append("Avg. LLM Calls: None")
+
+        if avg_total_tokens is not None:
+            in_tok = round(avg_input_tokens, 2) if avg_input_tokens is not None else "None"
+            out_tok = round(avg_output_tokens, 2) if avg_output_tokens is not None else "None"
+            lines.append(f"Avg. Tokens: {round(avg_total_tokens, 2)} (Input: {in_tok}, Output: {out_tok})")
+        else:
+            lines.append("Avg. Tokens: None")
+
+        lines.append("</Metrics>")
+        metrics_str = "\n".join(lines)
     else:
         # Fallback
+        duration_display = f"{round(duration, 3)} seconds" if duration is not None else "None"
         metrics_str = (
             f"\n\n<Metrics>\n"
-            f"Total Duration: {round(duration, 3)} seconds\n"
-            f"Note: No tests were successfully loaded or run, so detailed metrics are unavailable.\n"
+            f"Total Duration: {duration_display}\n"
+            f"Note: No tests were successfully run, so detailed metrics are unavailable.\n"
             f"</Metrics>"
         )
 
@@ -584,44 +613,52 @@ def test_system(state: dict[str, Any]) -> str:
         f"{validator_result_str}"
     )
 
-    # Also checkpoint on initial tests so we do not accept a system with decreased performance
-    if num_passed_tests > 0:
-        try:
-            code_dir = "sandbox/workspace/generated_systems"
-            os.makedirs(code_dir, exist_ok=True)
-            escaped_name = target_agentic_system.escaped_name
-            base_path = os.path.join(code_dir, escaped_name)
+    # Record structured test metrics in state
+    state["test_metrics"] = {
+        "passed": num_passed_tests,
+        "total": num_tests,
+        "executed_count": executed_count,
+        "pass_rate": (num_passed_tests / num_tests) if num_tests > 0 else 0.0,
+    }
 
-            checkpoint_path = f"{base_path}_checkpoint_{num_passed_tests}.pkl"
-            with open(checkpoint_path, "wb") as f:
-                pickle.dump(target_agentic_system, f)
+    test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests."
 
-            test_result += f"\n\nThe system passed {num_passed_tests}/{num_tests} tests. A snapshot of the current system has been saved."
-
-        except Exception:
-            logger.error(f"Error during system checkpoint saving: {traceback.format_exc(chain=False)}")
+    messages = state.get("messages", [])
+    iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
+    candidate = record_candidate_evaluation(
+        state=state,
+        system=target_agentic_system,
+        iteration=iteration,
+        passed_count=num_passed_tests,
+        total_count=num_tests,
+        total_tokens=metrics.get("total_tokens") if metrics else None,
+        duration_seconds=round(duration, 3) if duration is not None else None,
+        llm_calls=metrics.get("llm_calls") if metrics else None,
+        code_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
+    )
+    if candidate.get("checkpoint_path") and num_passed_tests > 0:
+        test_result += " A snapshot of the current system has been saved."
 
     is_initial_test = state.get("optimize") and state.get("initial_test_results") is None
     if is_initial_test:
         return test_result + error_message
 
-    if num_passed_tests >= num_tests:
-        state["design_completed"] = True
-        return test_result + "\nThe design process will now end automatically."
-
-    initial_test_passes = state.get("initial_test_passes")
-    tests_to_pass = 2
-    if initial_test_passes is not None:
-        tests_to_pass = max(2, initial_test_passes + 1)
-
-    if num_passed_tests >= tests_to_pass:
+    all_passed = num_tests > 0 and num_passed_tests >= num_tests
+    if all_passed:
         state["system_passed"] = True
-        test_result += (
-            "\nYou can continue improving the system, or execute `@@end_design()` if it fulfills all task requirements."
-        )
+        if not state.get("optimize"):
+            state["design_completed"] = True
+            return test_result + "\nAll tests passed successfully! The design process will now end automatically."
+        else:
+            test_result += (
+                "\nAll tests passed successfully! You can continue optimizing the system's architecture, efficiency, or robustness, "
+                "or execute `@@end_design()` if you are satisfied."
+            )
+    else:
+        state["system_passed"] = False
 
     final_test_output = test_result + error_message
-    if num_passed_tests < tests_to_pass:
+    if not all_passed:
         final_test_output += test_reminder
     return final_test_output
 
@@ -634,7 +671,13 @@ def end_design(state: dict[str, Any]) -> str:
     max_iterations = state.get("max_iterations", 30)
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)]) - 1
     system_passed = state.get("system_passed")
-    if system_passed or iteration >= (max_iterations - 2):
+    candidates = state.get("candidates", [])
+    has_passing_candidate = any(
+        c.get("dev_pass_rate", 0.0) == 1.0
+        or (c.get("total_count", 0) > 0 and c.get("passed_count") == c.get("total_count"))
+        for c in candidates
+    )
+    if system_passed or has_passing_candidate or iteration >= (max_iterations - 2):
         state["design_completed"] = True
         return "Ending the design process..."
     else:

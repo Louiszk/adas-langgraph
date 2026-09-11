@@ -1,0 +1,20 @@
+{
+  "files": {
+    "preflight.py": "4281bf10415698db153981ebbf2b5dc6514ab24bb904d1dcfb776c390a50dd28",
+    "task.json": "688da6f1b995cd65b292c8a56cf64bf4974caf346a19cd1eec049775027096ee"
+  },
+  "required_packages": [],
+  "schema_version": "1.0",
+  "task_name": "gsm_hard",
+  "task_schema_version": "1.0",
+  "validation": {
+    "fixture_generator_hashes": {},
+    "generator_prompt_hash": "6ffeea4d84178b93ed70fd04770f564e0ddc62aa2c0b42c9a6350362fe93eecf",
+    "generator_version": "1",
+    "schema_version": "1.0",
+    "task_name": "gsm_hard",
+    "task_spec_hash": "f7489118e5cb6aa0d4cf629085eed4b57e331863d09eca45f91074b9e1704875",
+    "validator_file": "gsm_hard.validation.py",
+    "validator_hash": "07a6e80fa56720e2a926f57ea5ac0ea3c6bb2df98b826c6ba5425ec0a85466aa"
+  }
+}

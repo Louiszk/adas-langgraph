@@ -2,10 +2,23 @@ import codecs
 import glob
 import hashlib
 import os
+import posixpath
+import shlex
 from pathlib import Path
 
 from llm_sandbox import SandboxBackend, create_session
 
+from adas_core.environment import (
+    SANDBOX_GENERATED_SYSTEMS_DIR,
+    SANDBOX_TARGET_METRICS_DIR,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_WORKSPACE_DIR,
+)
+from adas_core.exceptions import (
+    SandboxConfigurationError,
+    SandboxRuntimeUnavailableError,
+    SandboxSessionError,
+)
 from adas_core.logging_config import get_logger
 from config import settings
 
@@ -97,11 +110,11 @@ class StreamingSandboxSession:
         backend = None
         if container_type == "docker":
             if not check_docker_running():
-                raise RuntimeError("Docker is selected but not running or available.")
+                raise SandboxRuntimeUnavailableError("Docker is selected but not running or available.")
             backend = SandboxBackend.DOCKER
         elif container_type == "podman":
             if not check_podman_running():
-                raise RuntimeError("Podman is selected but not running or available.")
+                raise SandboxRuntimeUnavailableError("Podman is selected but not running or available.")
             backend = SandboxBackend.PODMAN
         elif container_type == "auto":
             if check_docker_running():
@@ -109,9 +122,11 @@ class StreamingSandboxSession:
             elif check_podman_running():
                 backend = SandboxBackend.PODMAN
             else:
-                raise RuntimeError("Neither Docker nor Podman are running or available. Please install and start one.")
+                raise SandboxRuntimeUnavailableError(
+                    "Neither Docker nor Podman are running or available. Please install and start one."
+                )
         else:
-            raise ValueError(f"Unknown container type: {container_type}")
+            raise SandboxConfigurationError(f"Unknown container type: {container_type}")
 
         if self.verbose:
             logger.info(f"Using {backend.value} as container runtime")
@@ -142,7 +157,7 @@ class StreamingSandboxSession:
 
     def open(self):
         if not self.session:
-            raise RuntimeError("Session was not initialized correctly.")
+            raise SandboxSessionError("Session was not initialized correctly.")
         if self._uses_cached_image:
             # Each run receives a fresh container, while this image (including
             # Python packages) persists in the container engine's local image cache.
@@ -155,13 +170,16 @@ class StreamingSandboxSession:
 
     def execute_command(self, command, workdir=None):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         return self.session.execute_command(command, workdir)
 
     def copy_to_runtime(self, src, dest):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         try:
+            dest_dir = os.path.dirname(str(dest).replace("\\", "/"))
+            if dest_dir:
+                self.session.execute_command(f"mkdir -p '{dest_dir}'")
             return self.session.copy_to_runtime(src, dest)
         except Exception as e:
             logger.error(f"Exception during copying to runtime: {e!r}")
@@ -169,18 +187,21 @@ class StreamingSandboxSession:
 
     def copy_from_runtime(self, src, dest):
         if not self.session:
-            raise RuntimeError("Session is not open.")
+            raise SandboxSessionError("Session is not open.")
         return self.session.copy_from_runtime(src, dest)
 
-    def execute_command_streaming(self, command, workdir=None):
+    def execute_command_streaming(self, command, workdir=None, environment=None):
         if not self.session or not self.session.container:
-            raise RuntimeError("Session is not open or container is not running.")
+            raise SandboxSessionError("Session is not open or container is not running.")
 
         kwargs = {"stream": True, "tty": True}
         if workdir:
             kwargs["workdir"] = workdir
+        if environment:
+            kwargs["environment"] = environment
 
-        _, output_stream = self.session.container.exec_run(command, **kwargs)
+        cmd_to_run = ["/bin/sh", "-c", command] if isinstance(command, str) else command
+        _, output_stream = self.session.container.exec_run(cmd_to_run, **kwargs)
 
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -220,13 +241,13 @@ class StreamingSandboxSession:
 
     def copy_dir_from_runtime(self, src_dir: str, dest_dir: str, pattern: str = "*"):
         """
-        Copies files matching a glob pattern from a source directory inside the sandbox
-        to a local destination directory.
+        Recursively copy matching files from a sandbox directory while preserving
+        their paths relative to ``src_dir``.
         """
         os.makedirs(dest_dir, exist_ok=True)
 
-        full_path_pattern = os.path.join(src_dir, pattern).replace("\\", "/")
-        command = f'sh -c "ls -d {full_path_pattern} 2>/dev/null"'
+        normalized_src_dir = src_dir.replace("\\", "/").rstrip("/")
+        command = f'sh -c "find {shlex.quote(normalized_src_dir)} -type f -name {shlex.quote(pattern)} 2>/dev/null"'
         command_output = self.execute_command(command)
         file_list_str = str(command_output.stdout) if command_output and command_output.stdout else ""
 
@@ -235,14 +256,18 @@ class StreamingSandboxSession:
                 logger.info(f"No files found in sandbox '{src_dir}' matching pattern '{pattern}'.")
             return
 
-        sandbox_paths = [path for path in file_list_str.strip().split("\n") if path]
+        sandbox_paths = [path for path in file_list_str.splitlines() if path]
 
         if self.verbose:
             logger.info(f"Copying {len(sandbox_paths)} files from sandbox '{src_dir}' to '{dest_dir}'...")
 
         for src_path_in_sandbox in sandbox_paths:
-            filename = os.path.basename(src_path_in_sandbox)
-            dest_path_on_host = os.path.join(dest_dir, filename)
+            relative_path = posixpath.relpath(src_path_in_sandbox, normalized_src_dir)
+            if relative_path == ".." or relative_path.startswith("../"):
+                logger.warning("Skipping sandbox artifact outside requested directory: %s", src_path_in_sandbox)
+                continue
+            dest_path_on_host = os.path.join(dest_dir, *relative_path.split("/"))
+            os.makedirs(os.path.dirname(dest_path_on_host), exist_ok=True)
             self.copy_from_runtime(src_path_in_sandbox, dest_path_on_host)
 
 
@@ -278,39 +303,29 @@ def setup_sandbox_environment(session, reinstall=False):
     """Set up the sandbox environment with required files and dependencies."""
     logger.info("Setting up sandbox environment...")
 
-    session.execute_command("mkdir -p /sandbox/workspace/meta_system")
-    session.execute_command("mkdir -p /sandbox/workspace/adas_core")
-    session.execute_command("mkdir -p /sandbox/workspace/generated_systems")
-    session.execute_command("mkdir -p /sandbox/workspace/config")
-    session.execute_command("rm -rf /sandbox/workspace/data/input")
-    session.execute_command("rm -rf /sandbox/workspace/data/output")
-    session.execute_command("rm -rf /sandbox/workspace/target_metrics")
-
-    session.execute_command("mkdir -p /sandbox/workspace/data/output")
-    session.copy_dir_to_runtime(src_dir="data/input", dest_dir="/sandbox/workspace/data/input", pattern="*")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/meta_system")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/adas_core")
+    session.execute_command(f"mkdir -p {SANDBOX_GENERATED_SYSTEMS_DIR}")
+    session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/config")
+    session.execute_command(f"rm -rf {SANDBOX_TARGET_METRICS_DIR}")
 
     # Copy meta-system package files
-    session.copy_dir_to_runtime(src_dir="meta_system", dest_dir="/sandbox/workspace/meta_system", pattern="*.py")
+    session.copy_dir_to_runtime(src_dir="meta_system", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/meta_system", pattern="*.py")
 
     # Copy core framework files
-    required_files = [
-        "adas_core/ast_parser.py",
-        "adas_core/virtual_agentic_system.py",
-        "adas_core/decorator_logic.py",
-        "adas_core/llm_wrapper.py",
-        "adas_core/materialize.py",
-        "adas_core/helpers.py",
-        "adas_core/logging_config.py",
-        "config/settings.py",
-        ".env",
+    session.copy_dir_to_runtime(src_dir="adas_core", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/adas_core", pattern="*.py")
+
+    # Copy individual config, env and runner files
+    additional_files = [
+        ("config/settings.py", f"{SANDBOX_WORKSPACE_DIR}/config/settings.py"),
+        (".env", f"{SANDBOX_WORKSPACE_DIR}/.env"),
+        ("sandbox/run_meta.py", f"{SANDBOX_WORKSPACE_DIR}/run_meta.py"),
+        ("sandbox/run_target.py", f"{SANDBOX_WORKSPACE_DIR}/run_target.py"),
+        ("sandbox/run_setup.py", f"{SANDBOX_WORKSPACE_DIR}/run_setup.py"),
+        ("sandbox/run_preflight.py", f"{SANDBOX_WORKSPACE_DIR}/run_preflight.py"),
     ]
 
-    copy_paths = [(path, f"/sandbox/workspace/{path}") for path in required_files] + [
-        ("sandbox/run_meta.py", "/sandbox/workspace/run_meta.py"),
-        ("sandbox/run_target.py", "/sandbox/workspace/run_target.py"),
-    ]
-
-    for src_path, dest_path in copy_paths:
+    for src_path, dest_path in additional_files:
         if os.path.exists(src_path):
             session.copy_to_runtime(src_path, dest_path)
         else:
@@ -319,12 +334,12 @@ def setup_sandbox_environment(session, reinstall=False):
     logger.info("Searching for existing agentic systems to copy to sandbox...")
     session.copy_dir_to_runtime(
         src_dir="generated_systems",
-        dest_dir="/sandbox/workspace/generated_systems",
+        dest_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
         pattern="*.py",
     )
     session.copy_dir_to_runtime(
         src_dir="generated_systems",
-        dest_dir="/sandbox/workspace/generated_systems",
+        dest_dir=SANDBOX_GENERATED_SYSTEMS_DIR,
         pattern="*.pkl",
     )
 
@@ -338,4 +353,59 @@ def setup_sandbox_environment(session, reinstall=False):
         session.execute_command(f"pip install {' '.join(settings.dependencies)}")
 
     logger.info("Sandbox environment set up successfully!")
+    return True
+
+
+def copy_task_setup_to_sandbox(
+    session: StreamingSandboxSession,
+    task_dir: Path | str,
+    task_spec_path: Path | str,
+) -> str:
+    """Copy the visible, frozen setup artifacts into a design sandbox."""
+    task_dir_path = Path(task_dir)
+    spec_path = Path(task_spec_path)
+    runtime_task_dir = SANDBOX_TASK_SETUP_DIR
+    session.execute_command(f"mkdir -p '{runtime_task_dir}'")
+
+    # Pre-create all necessary subdirectories
+    subdirs = {
+        source_path.relative_to(task_dir_path).parent.as_posix()
+        for source_path in task_dir_path.rglob("*")
+        if source_path.is_file()
+        and "__pycache__" not in source_path.parts
+        and source_path.relative_to(task_dir_path).parent != Path(".")
+    }
+    for subdir in sorted(subdirs):
+        session.execute_command(f"mkdir -p '{runtime_task_dir}/{subdir}'")
+
+    for source_path in task_dir_path.rglob("*"):
+        if source_path.is_file() and "__pycache__" not in source_path.parts:
+            relative_path = source_path.relative_to(task_dir_path).as_posix()
+            session.copy_to_runtime(str(source_path), f"{runtime_task_dir}/{relative_path}")
+    # The sandbox entry point always loads the explicit, visible TaskSpec from
+    # this stable path, regardless of the host file's chosen name.
+    session.copy_to_runtime(str(spec_path), f"{runtime_task_dir}/task.json")
+    return runtime_task_dir
+
+
+def run_sandbox_preflight(
+    session: StreamingSandboxSession,
+    runtime_task_dir: str = SANDBOX_TASK_SETUP_DIR,
+) -> bool:
+    """Install frozen setup requirements and validate them inside the sandbox."""
+    result = session.execute_command(f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}")
+    exit_code = getattr(result, "exit_code", None)
+    output_str = str(getattr(result, "stdout", "") or "")
+    stderr_str = str(getattr(result, "stderr", "") or "")
+    combined = (output_str + "\n" + stderr_str).strip()
+
+    if "Preflight check failed" in combined or "Preflight verification passed" not in combined:
+        logger.error("Sandbox preflight verification failed: %s", combined or result)
+        return False
+
+    if exit_code is not None and exit_code != 0:
+        logger.error("Sandbox preflight verification failed with exit code %s: %s", exit_code, combined or result)
+        return False
+
+    logger.info("Sandbox preflight verification passed.")
     return True

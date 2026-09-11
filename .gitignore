@@ -14,10 +14,20 @@ adasvenv2/
 
 # Data & Logs
 /data
-*.json
 *.jsonl
 *.log
 
 # ADAS Framework Artifacts
-/generated_systems/*.py
-/generated_systems/*.pkl
+/generated_systems
+/sandbox/workspace
+/benchmark/*/*.json
+/target_metrics
+/specs
+
+# CLI Agents
+AGENTS.md
+GEMINI.md
+CLAUDE.md
+/scratch
+*plan.md
+*log.md

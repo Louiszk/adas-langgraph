@@ -1,9 +1,11 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.graph.message import add_messages
 from langgraph.managed.is_last_step import RemainingSteps
 
+from adas_core.candidate_selection import CandidateRecord
+from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 
@@ -12,8 +14,9 @@ class MetaState(TypedDict, total=False):
     target_agentic_system: VirtualAgenticSystem
     verbose_initial_test_results: HumanMessage | None
     initial_test_results: HumanMessage | None
-    initial_test_passes: int
-    validation_code_snippets: list[str]
+    test_metrics: dict[str, Any]
+    candidates: list[CandidateRecord]
+    best_candidate: CandidateRecord | None
     system_passed: bool
     design_completed: bool
     initial_task: str
@@ -21,5 +24,5 @@ class MetaState(TypedDict, total=False):
     remaining_steps: RemainingSteps
     max_iterations: int
     optimize: bool
-    hardening_passed: bool | None
-    hardening_steps: int
+    task_spec: TaskSpec | dict[str, Any]
+    task_dir: str

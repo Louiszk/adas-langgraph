@@ -14,7 +14,7 @@ def extract_fever_combined_subset(input_file, output_file):
     samples_by_label = defaultdict(list)
 
     try:
-        with open(input_file, "r", encoding="utf-8") as f:
+        with open(input_file, encoding="utf-8") as f:
             for line in f:
                 sample = json.loads(line.strip())
                 label = sample.get("label")

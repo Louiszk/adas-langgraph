@@ -9,7 +9,7 @@ agentic_system_documentation = """
    - Any extra custom state keys must be declared in `AgentState` before use.
 
 2. **Node and Conditional-Edge Function Signatures**:
-   - **Strict Rule**: EVERY node and conditional-edge function MUST accept **exactly one** argument named `state`.
+   - **Strict Rule**: EVERY node and conditional-edge function must accept **exactly one** argument named `state`.
      - Node Signature: `def my_node(state: AgentState) -> dict:`
      - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
    - Nodes return a dictionary containing state keys to update (e.g., `{"final_answer": "42"}`).
@@ -20,17 +20,65 @@ agentic_system_documentation = """
 
 ---
 
-## ADAS Core Module (`adas_core.llm_wrapper`)
+## Runtime Filesystem Contract
 
-### `LargeLanguageModel` Class
-A standardized wrapper for interacting with LLMs.
-- **Initialization**: `llm = LargeLanguageModel()`
-- **Tool Binding**: `llm.bind_tools(tool_objects: List[Any]) -> LargeLanguageModel`
-  Informs the LLM about available tool functions.
+Every evaluation case receives its own filesystem. Resolve these variables **inside nodes or tools when they run**; never resolve them as module-level constants because their values differ per test case.
+
+- `ADAS_INPUT_DIR` is the only root for reading supplied task files and frozen fixtures.
+- `ADAS_OUTPUT_DIR` is the only root for required output artifacts. Create parent directories before writing.
+- `ADAS_WORKSPACE_DIR` is only for temporary, case-local scratch data.
+- Never use hard-coded paths such as `/sandbox/workspace/data/input`, `data/input`, `data/output`, or host paths.
+- Any filename supplied by state or the task is a relative path. Reject absolute paths and traversal that escapes its assigned root. Return logical artifact names or metadata in state, not host/container paths.
+
+Use this pattern when a task accepts a caller-specified filename:
+```python
+from pathlib import Path
+import os
+
+def resolve_under(root: Path, relative_name: str) -> Path:
+    candidate = (root / relative_name).resolve()
+    candidate.relative_to(root.resolve())
+    return candidate
+
+input_dir = Path(os.environ["ADAS_INPUT_DIR"])
+output_dir = Path(os.environ["ADAS_OUTPUT_DIR"])
+source = resolve_under(input_dir, state["input_filename"])
+target = resolve_under(output_dir, state["output_filename"])
+target.parent.mkdir(parents=True, exist_ok=True)
+```
+
+For a fixed-file task, use the declared fixture's relative path beneath `ADAS_INPUT_DIR` and write the declared artifact path beneath `ADAS_OUTPUT_DIR`.
+
+---
+
+## ADAS Core Module (`adas_core.chat_model`)
+
+### `ChatModel` Class
+A standardized, composition-based wrapper for interacting with LLMs.
+- **Initialization**:
+  ```python
+  llm = ChatModel()  # Automatically defaults to the primary model declared in available_models
+  llm = ChatModel(model="gpt-5.6-terra", reasoning_effort="medium")
+  llm = ChatModel(provider="openai", model="gpt-4o-mini", temperature=0.7)
+  ```
+- **Allowed Models (`available_models`)**:
+  - The target system may **only** instantiate models declared in the task's `available_models` contract.
+  - Calling `ChatModel()` with no arguments automatically defaults to the primary model declared in `available_models`.
+  - You can leverage multi-model architectures by selecting different models from `available_models` for different nodes (e.g. a lightweight model for classification and a reasoning model for complex planning).
+  - Attempting to instantiate an unlisted model will raise an authorization error.
+- **Parameters**:
+  - `model`: Model name from `available_models`.
+  - `provider`: Provider name (`"openai"`). Optional unless the model name is ambiguous across multiple providers.
+  - `temperature`: Sampling temperature (0.0 to 2.0). Only supported by standard chat models. Unsupported combinations fail explicitly.
+  - `reasoning_effort`: Reasoning intensity for reasoning models (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`). Only passed when explicitly specified.
+- **Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = True) -> ChatModel`
+  Returns a **new** `ChatModel` instance with tools bound (immutable).
+- **Structured Output**: `structured_llm = llm.with_structured_output(schema: Any) -> ChatModel`
+  Returns a **new** `ChatModel` instance bound to output the schema.
 - **Invocation**: `response = llm.invoke(messages_input: List[Any]) -> AIMessage`
   Sends requests to the model and returns an `AIMessage` (which may contain `tool_calls`).
-- **Token Counter**: `LargeLanguageModel.token_counter`
-  Tokenizer property used for exact token count calculations in message trimming.
+- **Token Counter**: `ChatModel.token_counter` or `llm.get_num_tokens_from_messages`
+  Callable token counter used for exact token count calculations in message trimming.
 
 ### `execute_tool_calls` Function
 - **Signature**: `execute_tool_calls(response: AIMessage, available_tools: Dict[str, Any]) -> Tuple[List[ToolMessage], Dict[str, Any]]`
@@ -40,15 +88,16 @@ A standardized wrapper for interacting with LLMs.
 
 ### Standard Agent Node Pattern
 ```python
-from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls
+from adas_core.chat_model import ChatModel
+from adas_core.tool_calls import execute_tool_calls
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 def agent_node(state: AgentState) -> dict:
-    llm = LargeLanguageModel()
+    llm = ChatModel()
     
     # Bind available tools from the global `tools` dict if needed
     if "MyTool" in tools:
-        llm.bind_tools([tools["MyTool"]])
+        llm = llm.bind_tools([tools["MyTool"]])
     
     messages = state.get("messages", [])
     full_messages = [SystemMessage(content="Instructions...")] + messages
@@ -73,7 +122,7 @@ result = tools["SearchTool"].invoke({"query": "LangGraph documentation"})
 ## Parallel Execution & State Reducers
 
 - Default state updates replace existing values.
-- If multiple parallel nodes update the same state key in a single superstep, you MUST declare a reducer in `AgentState` using `Annotated`:
+- If multiple parallel nodes update the same state key in a single superstep, you must declare a reducer in `AgentState` using `Annotated`:
 ```python
 import operator
 from typing import Annotated, TypedDict
@@ -92,12 +141,12 @@ class AgentState(TypedDict):
 ## Message Types & Context History Trimming
 
 - **Message Types**: `SystemMessage`, `HumanMessage`, `AIMessage`, `ToolMessage` (from `langchain_core.messages`).
-- **Tool Message Rule**: Every `AIMessage` containing `tool_calls` MUST be followed immediately by its corresponding `ToolMessage` objects before the next LLM call.
+- **Tool Message Rule**: Every `AIMessage` containing `tool_calls` must be followed immediately by its corresponding `ToolMessage` objects before the next LLM call.
 - **Context Window Trimming**: Use `trim_messages` from `langchain_core.messages` to prevent token overflow on long trajectories:
 
 ```python
 from langchain_core.messages import trim_messages
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 # Example: Keep the last 16 messages
 trimmed_messages_by_count = trim_messages(
@@ -112,7 +161,7 @@ trimmed_messages = trim_messages(
     current_messages,
     max_tokens=8000,
     strategy="last",
-    token_counter=LargeLanguageModel.token_counter,
+    token_counter=ChatModel.token_counter,
 )
 ```
 """
@@ -148,90 +197,6 @@ Remember to always structure your output according to the required format and ex
 ```
 """
 
-validation_prompt = (
-    """
-You validate agentic systems for a given task by writing Python code.
-
-"""
-    + agentic_system_documentation
-    + """
-
-# Validation
-- Generate a single markdown code block specifically for validating the target system you are designing.
-- Define a list of dictionaries named `TARGET_SYSTEM_TEST_CASES`. This list should contain three distinct and representative input states for the target system, tailored to the problem statement.
-- The test cases should be of increasing hardness, beginning with easy difficulty. Do not include trivial test cases.
-- Define a Python function `validate_target_system_output(input_index: int, final_state: Dict[str, Any]) -> Tuple[bool, str]:`
-- This function must verify the correctness of `final_state` for each corresponding test case in `TARGET_SYSTEM_TEST_CASES`. Accurate validation is essential.
-- It should also perform any necessary checks for side effects like file creation or specific output formats as per the problem requirements.
-- The validation must avoid overly strict heuristics or assumptions that are not directly specified by the problem statement or test case.
-- It must return `(True, "Descriptive success message")` on success, or `(False, "Descriptive failure message")` on failure.
-- Your validation code must not import any external libraries. You can only use the Python standard library and imports.
-
-## Example Validation
-
-```python
-# This is an example. You MUST tailor TARGET_SYSTEM_TEST_CASES and validate_target_system_output to the specific problem.
-TARGET_SYSTEM_TEST_CASES = [
-    {"input_file": "input1.txt"},  # Easy
-    {"input_file": "input2.txt"},  # Medium
-    {"input_file": "input3.txt"},  # Hard
-]
-
-def validate_target_system_output(input_index: int, final_state: Dict[str, Any]) -> Tuple[bool, str]:
-    \"\"\"
-    Validates the output of the target system for a given test case.
-
-    Checks performed:
-    - final_state contains a 'solution' string.
-    - final_state contains a 'messages' list with at least one valid ToolMessage and one valid AIMessage.
-    - The solution contains the expected value for the given test case index.
-    \"\"\"
-    solution = final_state.get("solution", "")
-    messages = final_state.get("messages", [])
-
-    if not solution:
-        return False, "The final state is missing the 'solution' key."
-
-    if not messages:
-        return False, "The final state is missing the 'messages' key."
-
-    if not any(isinstance(msg, ToolMessage) and msg.content for msg in messages):
-        return False, "Found no valid ToolMessage in the messages list."
-    
-    if not any(isinstance(msg, AIMessage) and msg.content for msg in messages):
-        return False, "Found no valid AIMessage in the messages list."
-
-    expected_solution = None
-    if input_index == 0:
-        expected_solution = "expected_output_for_case_0"
-    elif input_index == 1:
-        expected_solution = "expected_output_for_case_1"
-    elif input_index == 2:
-        expected_solution = "expected_output_for_case_2"
-    else:
-        return False, f"Invalid test case index: {input_index}."
-
-    if expected_solution in solution:
-        return True, f"Solution matches expected: '{solution}'."
-    else:
-        return False, f"Expected '{expected_solution}' in the solution, got '{solution}'."
-```
-"""
-)
-
-hardening_prompt = """
-The system has already been tested against and passed the following test cases:
-```python
-[
-{previous_test_cases_str}
-]
-```
-
-Generate a single Python markdown code block containing only:
-1.  A list named `TARGET_SYSTEM_TEST_CASES` with exactly three (3) new, {level} difficult test cases. These should probe for edge cases, complex scenarios, or potential failure points that the previous tests might have missed.
-2.  A validation function named `validate_target_system_output` that validates the output for **only** your three new test cases. The `input_index` argument for this function will be 0, 1, or 2.
-"""
-
 decorator_tool_prompt = """
 Using these decorators is the only way to design the system. Always enclose them in triple backticks to execute them, e.g.:
 ```
@@ -243,7 +208,7 @@ Using these decorators is the only way to design the system. Always enclose them
 Example for `@@set_imports`:
 ```python
 @@set_imports()
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 # ... other imports
 ```
 
@@ -271,7 +236,7 @@ def my_helper_function(input_list: List[str]) -> str:
     # ... helper implementation
 ```
 
-Use `@@manage_node`, `@@manage_tool`, and `@@manage_conditional_edge` with `action="create"`, `"update"`, or `"delete"`. Create requires a missing item; update requires an existing item; delete may target a missing item and returns a warning. The `source` argument identifies a conditional edge. Create and update conditional edges MUST include a non-empty explicit `path_map` mapping every condition-function return value to its destination node (or `END`).
+Use `@@manage_node`, `@@manage_tool`, and `@@manage_conditional_edge` with `action="create"`, `"update"`, or `"delete"`. Create requires a missing item; update requires an existing item; delete may target a missing item and returns a warning. The `source` argument identifies a conditional edge. Create and update conditional edges must include a non-empty explicit `path_map` mapping every condition-function return value to its destination node (or `END`).
 ```python
 @@manage_conditional_edge(action="create", source="SourceNodeName", path_map={"continue": "WorkerNode", "complete": END})
 def route_from_source_node(state: dict) -> str | List[str]:

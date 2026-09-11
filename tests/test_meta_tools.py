@@ -4,6 +4,7 @@ enforce security guardrails, and handle malformed AI-generated code safely.
 """
 
 import textwrap
+from unittest.mock import MagicMock, patch
 
 import pytest
 from langgraph.graph import START
@@ -173,6 +174,12 @@ class TestMetaToolsSpecification:
 
 
 class TestSecurityAndMalformedInputRejection:
+    @pytest.mark.parametrize("manager, name", [(manage_node, 'bad"node'), (manage_tool, "bad\nname")])
+    def test_manage_functions_reject_unsafe_names(self, manager, name, meta_state):
+        result = manager(action="delete", name=name, state=meta_state)
+        assert "ERROR" in result
+        assert "Invalid" in result
+
     @pytest.mark.parametrize(
         "malicious_pkg",
         [
@@ -197,6 +204,23 @@ class TestSecurityAndMalformedInputRejection:
         # Pre-excluded package to verify format check passes before installation check
         res = install_package(package_name="langgraph==1.2.9", state=meta_state)
         assert "is already installed" in res
+
+    def test_install_package_canonicalizes_excluded_packages(self, meta_state: dict):
+        """Contract: install_package matches excluded packages by canonical name (ignoring case/hyphens)."""
+        # Case and underscore variation of langchain-core
+        res = install_package(package_name="LangChain_Core>=0.3", state=meta_state)
+        assert "is already installed" in res
+
+        # Case variation of langgraph
+        res2 = install_package(package_name="LANGGRAPH", state=meta_state)
+        assert "is already installed" in res2
+
+    def test_install_package_does_not_exclude_substring_packages(self, meta_state: dict):
+        """Contract: install_package does not mistakenly reject packages containing an excluded substring."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            res = install_package(package_name="pip-tools", state=meta_state)
+            assert "Successfully installed" in res
 
 
 class TestInvalidSyntaxAndErrorRecovery:

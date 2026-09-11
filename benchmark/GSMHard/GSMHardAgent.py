@@ -10,7 +10,7 @@ from langchain_core.messages import (
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 
 class AgentState(TypedDict):
@@ -43,8 +43,7 @@ def python_interpreter(code: str) -> str:
 
 
 def agent_node(state):
-    llm = LargeLanguageModel(temperature=0)
-    llm.bind_tools([python_interpreter], parallel_tool_calls=False)
+    llm = ChatModel().bind_tools([python_interpreter], parallel_tool_calls=False)
 
     system_prompt = """
     You are an expert mathematician and python programmer.

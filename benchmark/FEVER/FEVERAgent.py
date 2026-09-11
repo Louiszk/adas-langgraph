@@ -11,7 +11,7 @@ from langchain_core.messages import (
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.chat_model import ChatModel
 
 
 class AgentState(TypedDict):
@@ -66,12 +66,12 @@ def agent_node(state):
     evidence = state.get("evidence")
     available_pages = state.get("available_pages")
 
-    llm = LargeLanguageModel(temperature=0)
+    llm = ChatModel()
     if iteration <= 3:
         if not available_pages:
-            llm.bind_tools([wiki_search_tool])
+            llm = llm.bind_tools([wiki_search_tool])
         else:
-            llm.bind_tools([wiki_search_tool, wiki_content_tool])
+            llm = llm.bind_tools([wiki_search_tool, wiki_content_tool])
 
     system_prompt = """
     You are an expert at evaluating factual claims using Wikipedia.

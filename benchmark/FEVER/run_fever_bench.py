@@ -2,9 +2,9 @@ import importlib
 import sys
 import time
 
-from adas_core.llm_wrapper import LargeLanguageModel
+from adas_core.environment import SANDBOX_WORKSPACE_DIR
 from adas_core.logging_config import get_logger, setup_logging
-from benchmark.benchmark_base import run_benchmark_parallel
+from benchmark.benchmark_base import extract_target_usage, reset_target_usage, run_benchmark_parallel
 
 logger = get_logger("run_fever_bench")
 
@@ -17,19 +17,13 @@ try:
 except ImportError:
     logger.warning("Wikipedia library not installed")
 
-sys.path.append("/sandbox/workspace")
+sys.path.append(SANDBOX_WORKSPACE_DIR)
 
 
 def execute_problem(problem_item: dict, system_path: str) -> dict:
     time.sleep(0.2)
     start_time = time.time()
-
-    LargeLanguageModel.usage_metrics["target_usage"]["overall"] = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "llm_calls": 0,
-    }
+    reset_target_usage()
 
     predicted = "NO ANSWER"
     is_correct = False
@@ -51,20 +45,15 @@ def execute_problem(problem_item: dict, system_path: str) -> dict:
 
     finally:
         duration = time.time() - start_time
-        usage = LargeLanguageModel.usage_metrics["target_usage"]["overall"]
 
-        return {
-            "id": problem_item["id"],
-            "claim": problem_item["claim"],
-            "predicted": predicted,
-            "expected": problem_item["label"],
-            "is_correct": is_correct,
-            "duration_seconds": duration,
-            "llm_calls": usage.get("llm_calls", 0),
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0),
-        }
+    return {
+        "id": problem_item["id"],
+        "claim": problem_item["claim"],
+        "predicted": predicted,
+        "expected": problem_item["label"],
+        "is_correct": is_correct,
+        **extract_target_usage(duration),
+    }
 
 
 def custom_results_init(results: dict):

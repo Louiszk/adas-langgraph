@@ -12,6 +12,9 @@ from typing import (
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END, START
 
+from adas_core.exceptions import DecoratorParseError
+from adas_core.markdown_parser import find_code_blocks
+
 
 def extract_parenthesized_content(
     lines: list[str], start_line_idx: int, start_pos: int | None = None
@@ -64,51 +67,6 @@ def extract_parenthesized_content(
     return None, None
 
 
-def find_code_blocks(markdown: str) -> list[dict[str, str | int]]:
-    """
-    Finds Python code blocks in markdown, using the built-in `tokenize` module
-    to correctly handle Python's own syntax.
-    """
-    lines = markdown.splitlines()
-    found_blocks = []
-
-    in_code_block = False
-    current_block_content: list[str] = []
-    current_block_start_line = None
-
-    for i, line in enumerate(lines):
-        stripped_line = line.strip()
-
-        if not in_code_block:
-            if stripped_line.startswith("```"):
-                in_code_block = True
-                current_block_content = []
-                current_block_start_line = i + 1
-        else:
-            if stripped_line == "```":
-                block_so_far = "\n".join(current_block_content)
-
-                try:
-                    list(tokenize.generate_tokens(io.StringIO(block_so_far).readline))
-
-                    in_code_block = False
-                    found_blocks.append(
-                        {
-                            "content": block_so_far,
-                            "start_line": current_block_start_line,
-                            "end_line": i + 1,
-                        }
-                    )
-                    current_block_content = []
-
-                except tokenize.TokenError:
-                    current_block_content.append(line)
-            else:
-                current_block_content.append(line)
-
-    return found_blocks
-
-
 def parse_arguments(args_str: str | None) -> tuple[tuple[Any, ...], dict[str, Any]]:
     pos_args, kw_args = (), {}
 
@@ -134,15 +92,15 @@ def parse_arguments(args_str: str | None) -> tuple[tuple[Any, ...], dict[str, An
                 f"Invalid argument: a name '{ne.name}' was used in the tool arguments "
                 f"'{args_str}' but it is not defined. Do not use '{ne.name}'."
             )
-            raise ValueError(error_msg) from ne
+            raise DecoratorParseError(error_msg) from ne
         except SyntaxError as se:
             error_msg = (
                 f"Syntax error in tool arguments: '{args_str}'. Please ensure the "
                 f"arguments are correctly formatted. Details: {se}"
             )
-            raise ValueError(error_msg) from se
+            raise DecoratorParseError(error_msg) from se
         except Exception as e:
-            raise ValueError(f"Failed to parse tool arguments '{args_str}': {e}") from e
+            raise DecoratorParseError(f"Failed to parse tool arguments '{args_str}': {e}") from e
 
     return pos_args, kw_args
 
@@ -263,7 +221,11 @@ def execute_decorator_tool_calls(
                     add_skipped_calls_message(idx, "Execution halted. Design completed.")
                     break
 
-                if "ERROR:" in result_str.split("</Metrics>")[-1]:
+                if tool_name == "TestSystem":
+                    add_skipped_calls_message(idx, "Execution halted after @@test_system.")
+                    break
+
+                if "ERROR:" in result_str:
                     add_skipped_calls_message(idx, "Execution halted due to error.")
                     break
 

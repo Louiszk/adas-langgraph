@@ -4,11 +4,6 @@ A framework for the automated design, testing, and optimization of graph-structu
 
 Manual engineering of complex, multi-agent workflows is time-intensive and limits the exploration of effective architectures. This project provides a **meta-system** that iteratively builds, tests, and refines target agentic systems using the [LangGraph](https://github.com/langchain-ai/langgraph) library. By operating on a code-based search space, the meta-system can autonomously discover novel control flows, integrate custom tools, and install external dependencies.
 
-## Architecture
-
-![Enhanced Meta-System Architecture](assets/architecture.png)
-*The meta-system architecture: A feedback-driven refinement loop where the meta-agent generates targeted code modifications, evaluates them against an automatically generated test suite, and uses execution logs to debug and optimize its own designs.*
-
 ## Key Features & Findings
 
 * **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent uses `manage_node`, `manage_tool`, `manage_conditional_edge`, `manage_edge`, and `manage_utilities` to make targeted changes to a virtual system.
@@ -16,15 +11,15 @@ Manual engineering of complex, multi-agent workflows is time-intensive and limit
 * **Safe Graph and Utility Changes:** Deleting a node also removes standard edges connected to it and conditional edges that route to it. Utility deletion identifies the exact top-level `function`, `class`, or `assignment`, so same-named definitions can be removed unambiguously.
 * **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends, invalid path-map destinations, or infinite loops), and improves target system accuracy.
 
-* **Example Design Session Trace:** View a complete, step-by-step design log of an automatic Data Analyst agent in [assets/example_trace.md](assets/example_trace.md).
-
 ## Repository Structure
 
-* `adas_core/`: The core logic, including the `VirtualAgenticSystem` representation, AST-based materialization, and custom LLM wrappers.
+* `adas_core/`: The core logic, including the `VirtualAgenticSystem` representation, AST-based materialization, task specification schemas, and custom LLM wrappers.
 * `meta_system/`: The implementation of the meta-agent, its management tools (`ManageNode`, `ManageTool`, `ManageConditionalEdge`, `ManageEdge`, `ManageUtilities`), and evaluation prompts.
+* `example_specs/`: Task specifications (e.g., `data_analyst`) with schemas, contracts, and test fixtures.
 * `generated_systems/`: The output directory where the meta-system saves the successfully built and compiled LangGraph target systems.
 * `benchmark/`: Parallelized benchmarking suites (FEVER, GSM-Hard, MMLU-Pro) to evaluate target system accuracy and resource consumption.
 * `sandbox/`: Docker/Podman integration using `llm-sandbox` to safely execute and evaluate generated code in isolated environments.
+* `scripts/`: Central execution orchestrator and HPC/SLURM batch execution scripts.
 
 ---
 
@@ -53,10 +48,10 @@ source adasvenv/bin/activate
 # OR on Windows
 # .\adasvenv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install runtime dependencies
 pip install -r requirements.txt
-# OR install minimal dependencies to run the sandbox
-# pip install -r requirements-min.txt
+# OR install development dependencies (testing, linting, formatting)
+# pip install -r requirements-dev.txt
 ```
 
 ### Docker Setup (for sandbox execution)
@@ -67,41 +62,97 @@ The system uses Docker or Podman to create a sandbox environment for secure code
 docker --version
 ```
 
+### Security & Sandboxing Disclaimer
+
+> [!WARNING]
+> While execution occurs inside Docker/Podman containers, the sandbox is a cooperative boundary:
+> - **Unrestricted Network Egress:** Outbound internet access is enabled by default.
+> - **Credential Exposure:** The `.env` file and environment variables are readable by sandboxed code.
+> - **Model Restrictions:** `ChatModel` allowlists and token budgets operate at the application layer and can be bypassed if generated code accesses `os.environ` or external SDKs directly.
+>
+> **Best Practice:** Use dedicated evaluation-only API keys with strict spend caps, keep `.env` minimal, and never store production credentials.
+
 ## Running the System
 
-### Creating and Running the Meta System
+ADAS provides a 5-stage lifecycle for defining, provisioning, validating, designing, and executing agentic systems.
 
-The meta system is an agentic system that can design other agentic systems.
-
-**Run design:**
+### 1. Define Task Specification (`create_taskspec.py`)
+Synthesize a schema-validated task specification (`task.json`) defining the agent's goals, architecture contract, resource requirements, fixtures, and evaluation suite:
 ```bash
-python run_design.py
+# Interactive CLI:
+python create_taskspec.py
+
+# Or non-interactive from command line / prompt:
+python create_taskspec.py --name DataAnalyst --goal "Analyze CSV data and output summary" --non-interactive
 ```
-*Dependencies are installed into a persisted local sandbox image once per dependency version, then reused by later runs.*
+Pre-built specifications are available in the `example_specs/` and `benchmark/` directories:
+- `example_specs/data_analyst/task.json`: Automatic data analyst generating pandas & matplotlib workflows.
+- `benchmark/GSMHard/spec/task.json`: Multi-step mathematical reasoning benchmark.
+- `benchmark/FEVER/spec/task.json`: Factual claim verification with Wikipedia retrieval.
+- `benchmark/MMLUPro/spec/task.json`: Computer science multiple-choice reasoning benchmark.
+
+### 2. Synthesize Fixtures & Setup (`create_setup.py`)
+Materialize deterministic sandbox fixtures (files, sqlite tables, mock endpoints) and preflight verification scripts based on `task.json`:
+```bash
+python create_setup.py --task-spec example_specs/data_analyst/task.json
+```
+
+### 3. Generate Frozen Validation Module (`create_validation.py`)
+Synthesize standalone, frozen evaluation code (`<task>.validation.py`) implementing deterministic checks and LLM-as-a-judge rubrics:
+```bash
+python create_validation.py --task-spec example_specs/data_analyst/task.json
+```
+
+### 4. Run Meta-System Design Optimization (`invoke_design.py`)
+Run the autonomous meta-agent loop to design, iterate, and optimize a target LangGraph system inside an isolated container sandbox:
+```bash
+python invoke_design.py --task-spec example_specs/data_analyst/task.json --system-name data_analyst_iter1_gpt
+```
+*Dependencies are installed into a persisted local sandbox image once per dependency version, then reused by subsequent runs.*
 
 **Options:**
-* `--name`: Target system name
-* `--problem`: Problem statement to solve
+* `--task-spec`: Required path to validated `task.json`.
+* `--system-name`: Target system output identifier (defaults to TaskSpec name).
+* `--auto-setup`: Automatically generate frozen fixtures and preflight artifacts if missing or stale.
+* `--optimize-system`: Specify existing target system name to optimize/refine.
 * `--reinstall`: Force re-installation of dependencies.
 
-### Running Scripts
+### 5. Execute Target System (`invoke_target.py`)
+Execute a materialized target system in the sandbox with custom state and task fixtures:
+```bash
+# Invoke with custom state and task fixtures:
+python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst/task.json --state '{"analysis_task": "Analyze sales.csv"}'
 
-The repository includes a central Python engine (`scripts/orchestrator.py`) and thin SLURM shell wrappers in the `scripts/` directory to automate system generation, benchmarking, and target execution across Docker and Podman environments.
+# Or invoke using a JSON state file:
+python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst/task.json --state-file path/to/state.json
+
+# --state and --state-file are mutually exclusive; one is required.
+```
+
+---
+
+### Running Scripts & Batch Orchestration
+
+The repository includes a central Python engine (`scripts/orchestrator.py`) and thin SLURM shell wrappers in the `scripts/` directory to automate batch benchmarks, iterative system design, and parallel target execution across Docker and Podman environments.
 
 #### 1. Python Orchestrator (`scripts/orchestrator.py`)
 The orchestrator manages base and temporary container builds via the Docker Python SDK, dependency parsing from JSON metrics files, execution timeout enforcement, and CSV/text result aggregation.
 
+Run via standard module invocation (`python -m scripts.orchestrator`) or direct script execution (`python scripts/orchestrator.py`):
+
 * **Run Benchmarks:**
   ```bash
-  python scripts/orchestrator.py --task benchmark --benchmark mmlu --type ablationC --iterations 1-16
+  python -m scripts.orchestrator --task benchmark --benchmark mmlu --type ablationC --iterations 1-16
   ```
 * **Iterative System Design:**
   ```bash
-  python scripts/orchestrator.py --task design --benchmark gsm --type ablationC --iterations 1-10
+  python -m scripts.orchestrator --task design --task-spec benchmark/GSMHard/spec/task.json --benchmark gsm --type ablationC --iterations 1-10
   ```
 * **Run Target Systems:**
   ```bash
-  python scripts/orchestrator.py --task target --system-names data_analyst_gpt5_v0 --state '{"messages": []}'
+  python -m scripts.orchestrator --task target --system-names data_analyst_gpt5_v0 --state '{"messages": []}'
+  # Or with a task specification and state file:
+  python -m scripts.orchestrator --task target --task-spec example_specs/data_analyst/task.json --system-names data_analyst_iter1_gpt --state-file path/to/state.json
   ```
 
 #### 2. HPC / SLURM Wrappers

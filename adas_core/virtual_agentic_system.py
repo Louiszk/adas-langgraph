@@ -13,7 +13,8 @@ from adas_core.ast_parser import (
     extract_top_level_names,
     get_top_level_definitions,
 )
-from adas_core.helpers import validate_node_conditional_edge_signature
+from adas_core.exceptions import GraphTopologyError
+from adas_core.helpers import escape_system_name, validate_identifier, validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
 
@@ -27,7 +28,7 @@ class VirtualAgenticSystem:
 
     def __init__(self, system_name: str = "Default") -> None:
         self.system_name = system_name
-        self.escaped_name = system_name.replace("/", "").replace("\\", "").replace(":", "")
+        self.escaped_name = escape_system_name(system_name)
 
         self.nodes = {}  # node_name -> {'description': str, 'source_code': str}
         self.tools = {}  # tool_name -> {'description': str, 'source_code': str}
@@ -38,7 +39,8 @@ class VirtualAgenticSystem:
         self.packages_info = ["langchain-core 1.5.1", "langgraph 1.2.9"]
         self.installed_packages = {}
         self.base_imports = [
-            "from adas_core.llm_wrapper import LargeLanguageModel, execute_tool_calls",
+            "from adas_core.chat_model import ChatModel",
+            "from adas_core.tool_calls import execute_tool_calls",
             "from typing import Dict, List, Any, Callable, Optional, Union, TypeVar, Generic, Tuple, Set, TypedDict, Iterable, Sequence, Annotated",
             "from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, AnyMessage, trim_messages",
             "from langgraph.graph import StateGraph, START, END",
@@ -59,7 +61,6 @@ class VirtualAgenticSystem:
 
     def set_state_from_node(self, class_def_node: ast.ClassDef) -> str:
         """Validates the AgentState definition from a code string, then sets it."""
-        attributes_found = {}
         attributes_found = {}
         try:
             for item in class_def_node.body:
@@ -148,8 +149,9 @@ class VirtualAgenticSystem:
         func: Callable,
         func_source_code: str | None = None,
     ) -> bool:
+        name = validate_identifier(name, field_name="node name")
         if name in ENDPOINTS:
-            raise ValueError("START and END are reserved names for the endpoints of the graph.")
+            raise GraphTopologyError("START and END are reserved names for the endpoints of the graph.")
 
         if not func_source_code:
             func_source_code = textwrap.dedent(inspect.getsource(func))
@@ -168,6 +170,7 @@ class VirtualAgenticSystem:
         func_source_code: str | None = None,
     ) -> bool:
         """Create a tool function that can be used by nodes."""
+        name = validate_identifier(name, field_name="tool name")
         if func.__doc__ is None or func.__doc__.strip() == "":
             raise ValueError("Tool function must contain a detailed docstring.")
 
@@ -189,13 +192,13 @@ class VirtualAgenticSystem:
 
         # Validate source and target nodes
         if source != START and source not in self.nodes:
-            raise ValueError(f"Invalid source node: '{source}' does not exist")
+            raise GraphTopologyError(f"Invalid source node: '{source}' does not exist")
 
         if target != END and target not in self.nodes:
-            raise ValueError(f"Invalid target node: '{target}' does not exist")
+            raise GraphTopologyError(f"Invalid target node: '{target}' does not exist")
 
         if source == target:
-            raise ValueError(
+            raise GraphTopologyError(
                 f"Standard edges from a node to itself are not allowed. Cannot create an edge from '{source}' to itself. "
                 f"This would create an unconditional infinite loop, as standard edges lack an exit condition. "
                 f"If you intend for a node to loop back to itself, you must use a conditional edge."
@@ -216,21 +219,22 @@ class VirtualAgenticSystem:
         path_map: Any = None,
     ) -> bool:
         """Create a conditional edge with a condition function and explicit path map."""
+        source = validate_identifier(source, field_name="conditional edge source")
         if source in ["END", "__end__", END]:
-            raise ValueError("Invalid source node: Conditional edges from END are not allowed.")
+            raise GraphTopologyError("Invalid source node: Conditional edges from END are not allowed.")
         if source not in self.nodes:
-            raise ValueError(f"Invalid source node: '{source}' does not exist")
+            raise GraphTopologyError(f"Invalid source node: '{source}' does not exist")
 
         # Get or set condition code
         if not condition_code:
             condition_code = textwrap.dedent(inspect.getsource(condition))
 
         if path_map is None:
-            raise ValueError("Conditional edges require a non-empty explicit path_map.")
+            raise GraphTopologyError("Conditional edges require a non-empty explicit path_map.")
         if not isinstance(path_map, dict):
             raise TypeError("Conditional edge path_map must be a dictionary.")
         if not path_map:
-            raise ValueError("Conditional edges require a non-empty explicit path_map.")
+            raise GraphTopologyError("Conditional edges require a non-empty explicit path_map.")
 
         normalized_path_map = {}
         for route, destination in path_map.items():
@@ -255,7 +259,7 @@ class VirtualAgenticSystem:
     def delete_node(self, name: str) -> bool:
         """Delete a node and all associated edges."""
         if name in ENDPOINTS:
-            raise ValueError("Deletion of endpoints is not allowed")
+            raise GraphTopologyError("Deletion of endpoints is not allowed")
         if name not in self.nodes:
             return False
 
@@ -643,4 +647,4 @@ class VirtualAgenticSystem:
                     )
                     break
 
-        return sorted(list(set(errors)))
+        return sorted(set(errors))
