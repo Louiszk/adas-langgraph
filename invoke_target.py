@@ -7,7 +7,7 @@ import datetime
 import json
 import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from adas_core.environment import (
@@ -16,6 +16,8 @@ from adas_core.environment import (
 )
 from adas_core.helpers import validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
+from adas_core.runtime_resources import RuntimeResourceProfile
+from adas_core.task_spec import TaskSpec
 from create_setup import run_setup_for_task, setup_manifest_is_current
 from sandbox.sandbox import (
     StreamingSandboxSession,
@@ -33,6 +35,7 @@ def run_target_system_in_sandbox(
     state: dict[str, Any],
     run_id: str,
     task_dir: str | None = None,
+    runtime_profile: RuntimeResourceProfile | None = None,
 ) -> bool:
     """Constructs and executes the command to run the target system inside the sandbox."""
     cmd_parts = [
@@ -42,6 +45,8 @@ def run_target_system_in_sandbox(
     ]
     if task_dir:
         cmd_parts.append(f"--task-dir={shlex.quote(task_dir)}")
+    if runtime_profile:
+        cmd_parts.append(f"--runtime-profile={shlex.quote(runtime_profile.model_dump_json())}")
 
     state_str = json.dumps(state)
     cmd_parts.append(f"--state={shlex.quote(state_str)}")
@@ -69,6 +74,36 @@ def run_target_system_in_sandbox(
     return succeeded
 
 
+def stage_runtime_profile_sources(
+    session: StreamingSandboxSession, profile: RuntimeResourceProfile
+) -> RuntimeResourceProfile:
+    """Copy user-selected local artifacts into the sandbox and rewrite their profile paths."""
+    staged = profile.model_copy(deep=True)
+    staging_root = f"{SANDBOX_WORKSPACE_DIR}/runtime_resources"
+    for fixture_id, override in staged.overrides.items():
+        if override.provider != "local_file":
+            continue
+        source = Path(override.source or "").resolve()
+        destination = f"{staging_root}/{fixture_id}"
+        session.execute_command(f"mkdir -p {shlex.quote(destination)}")
+        if source.is_file():
+            runtime_source = f"{destination}/{source.name}"
+            session.copy_to_runtime(str(source), runtime_source)
+        else:
+            for item in source.rglob("*"):
+                relative = item.relative_to(source).as_posix()
+                runtime_file = f"{destination}/{relative}"
+                runtime_parent = PurePosixPath(runtime_file).parent.as_posix()
+                if item.is_dir():
+                    session.execute_command(f"mkdir -p {shlex.quote(runtime_file)}")
+                elif item.is_file():
+                    session.execute_command(f"mkdir -p {shlex.quote(runtime_parent)}")
+                    session.copy_to_runtime(str(item), runtime_file)
+            runtime_source = destination
+        override.source = runtime_source
+    return staged
+
+
 def main() -> int:
     """Main function to set up and run a target agentic system in a sandboxed environment."""
     setup_logging()
@@ -91,6 +126,12 @@ def main() -> int:
         "--auto-setup",
         action="store_true",
         help="Generate frozen fixtures and preflight artifacts in a separate sandbox before running.",
+    )
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=None,
+        help="Optional runtime resource profile JSON overriding selected fixture providers.",
     )
     state_group = parser.add_mutually_exclusive_group(required=True)
     state_group.add_argument(
@@ -152,9 +193,12 @@ def main() -> int:
         return 1
 
     initial_state: dict[str, Any] = raw_state
+    runtime_profile: RuntimeResourceProfile | None = None
+    task_spec: TaskSpec | None = None
 
     if args.task_spec:
         task_spec_path = args.task_spec.resolve()
+        task_spec = TaskSpec.from_file(task_spec_path)
         if args.auto_setup or not setup_manifest_is_current(task_spec_path):
             logger.info(
                 "Task setup is missing, stale, or --auto-setup was requested; ensuring setup for %s...",
@@ -167,6 +211,16 @@ def main() -> int:
                 container=args.container,
                 base_image=args.base_image,
             )
+    if args.runtime_config:
+        if task_spec is None:
+            logger.error("--runtime-config requires --task-spec.")
+            return 1
+        try:
+            runtime_profile = RuntimeResourceProfile.from_file(args.runtime_config)
+            runtime_profile.validate_for_task(task_spec, check_local_sources=True)
+        except (OSError, ValueError) as exc:
+            logger.error("Invalid runtime resource profile: %s", exc)
+            return 1
 
     session = StreamingSandboxSession(
         image=args.base_image,
@@ -183,7 +237,14 @@ def main() -> int:
             if args.task_spec:
                 task_dir = args.task_spec.resolve().parent
                 runtime_task_dir = copy_task_setup_to_sandbox(session, task_dir, args.task_spec.resolve())
-                if not run_sandbox_preflight(session, runtime_task_dir):
+                if runtime_profile:
+                    runtime_profile = stage_runtime_profile_sources(session, runtime_profile)
+                preflight_ok = (
+                    run_sandbox_preflight(session, runtime_task_dir, runtime_profile.model_dump_json())
+                    if runtime_profile
+                    else run_sandbox_preflight(session, runtime_task_dir)
+                )
+                if not preflight_ok:
                     logger.error("Sandbox preflight verification failed.")
                     return 1
 
@@ -199,6 +260,7 @@ def main() -> int:
                 initial_state,
                 run_id=timestamp,
                 task_dir=runtime_task_dir,
+                runtime_profile=runtime_profile,
             ):
                 return 1
 

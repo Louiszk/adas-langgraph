@@ -72,11 +72,17 @@ class TestTaskSpecModel:
             resource_manifest=ResourceManifest(
                 available_resources=[
                     ResourceEntry(
+                        name="graph_store",
+                        type="database",
+                        path_or_uri="${NEO4J_URI}",
+                        description="User-provided Neo4j graph",
+                    ),
+                    ResourceEntry(
                         name="output_dir",
                         type="directory",
                         path_or_uri="data/output",
                         description="Location for outputs",
-                    )
+                    ),
                 ],
                 available_api_keys=[
                     ApiKeyRequirement(env_var="NEO4J_PASSWORD", description="Neo4j auth", optional=False)
@@ -93,13 +99,6 @@ class TestTaskSpecModel:
                     )
                 ],
                 databases=[
-                    DatabaseFixtureSpec(
-                        name="graph_store",
-                        db_type="neo4j",
-                        connection_env={"uri": "NEO4J_URI", "user": "NEO4J_USER", "password": "NEO4J_PASSWORD"},
-                        count=500,
-                        description="Nodes for Company, Product, and Vulnerability",
-                    ),
                     DatabaseFixtureSpec(
                         name="local_cache",
                         db_type="sqlite",
@@ -137,10 +136,9 @@ class TestTaskSpecModel:
         assert restored.name == spec.name
         assert restored.required_packages == ["neo4j>=5.0", "fastapi", "httpx"]
         assert restored.test_fixtures.files[0].count == 1
-        assert len(restored.test_fixtures.databases) == 2
-        assert restored.test_fixtures.databases[0].db_type == "neo4j"
-        assert restored.test_fixtures.databases[0].count == 500
-        assert restored.test_fixtures.databases[0].connection_env["uri"] == "NEO4J_URI"
+        assert len(restored.test_fixtures.databases) == 1
+        assert restored.test_fixtures.databases[0].db_type == "sqlite"
+        assert restored.test_fixtures.databases[0].count == 50
         assert restored.test_fixtures.custom_fixtures[0].name == "git_repo"
 
         # File save/load roundtrip
@@ -504,7 +502,6 @@ class TestHoldoutSuiteSpecModel:
                 DatabaseFixtureSpec(
                     id="sqlite_cache", name="cache_db", db_type="sqlite", file_path="data/cache.db", description="Cache"
                 ),
-                DatabaseFixtureSpec(id="remote_neo4j", name="graph_db", db_type="neo4j", description="Remote Neo4j"),
             ],
             custom_fixtures=[
                 CustomFixtureSpec(id="sample_repo", name="sample_repo", path="repo/", description="Git repo"),
@@ -524,9 +521,11 @@ class TestHoldoutSuiteSpecModel:
             "data/cache.db",
             "repo",
         ]
-        # Remote databases have no file artifact; custom fixtures always declare one.
-        assert tf.get_file_paths_for_fixture_ids(["remote_neo4j"]) == []
         assert tf.get_file_paths_for_fixture_ids(["custom_config"]) == ["config/custom.yaml"]
+
+    def test_external_database_types_are_rejected_as_test_fixtures(self):
+        with pytest.raises(ValidationError, match="Declare external databases in resource_manifest"):
+            TestFixturesSpec(databases=[DatabaseFixtureSpec(name="graph", db_type="neo4j")])
 
     def test_custom_fixture_requires_artifact_path(self):
         with pytest.raises(ValidationError, match="path"):

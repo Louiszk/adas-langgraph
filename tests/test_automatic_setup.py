@@ -72,7 +72,7 @@ class TestAutomaticSetup:
 
         # Define canned responses for LLM calls in order:
         # 1. file content (test.csv)
-        # 2. database script (neo4j)
+        # 2. database script (sqlite)
         # 3. custom fixture script (git_repo)
         # 4. preflight script
         mock_llm.invoke.side_effect = [
@@ -86,7 +86,7 @@ def generate_files(output_path: Path) -> None:
             ),
             AIMessage(
                 content="""```python
-SETUP_REQUIREMENTS = ["neo4j>=5.0"]
+SETUP_REQUIREMENTS = []
 
 def seed_database(workspace_dirs: dict[str, str]) -> None:
     pass
@@ -102,7 +102,7 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
             ),
             AIMessage(
                 content="""```python
-SETUP_REQUIREMENTS = ["neo4j>=5.0", "gitpython"]
+SETUP_REQUIREMENTS = ["gitpython"]
 
 def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
     return True, "Environment verified"
@@ -127,8 +127,7 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
                 databases=[
                     DatabaseFixtureSpec(
                         name="sec_graph",
-                        db_type="neo4j",
-                        connection_env={"uri": "NEO4J_URI", "password": "NEO4J_PASSWORD"},
+                        db_type="sqlite",
                         description="Vulnerability graph",
                     )
                 ],
@@ -159,7 +158,6 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
 
         # Verify discovered packages union
         assert "pydantic" in result.discovered_packages
-        assert "neo4j>=5.0" in result.discovered_packages
         assert "gitpython" in result.discovered_packages
 
     def test_ensure_automatic_setup_skips_when_present(self, tmp_path):
@@ -266,3 +264,19 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         lines = [line.strip() for line in code.splitlines() if line.strip()]
         assert lines[0] == "from __future__ import annotations"
         assert lines[1] == 'SETUP_REQUIREMENTS = ["pandas"]'
+
+    def test_generate_preflight_script_requires_runtime_resource_contracts(self):
+        spec = TaskSpec(
+            name="RuntimeContractTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            dev_suite=[TestCaseSpec(id="c1", description="desc", turns=[{"q": "value"}])],
+        )
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(content="def check_environment(workspace_dirs): return True, 'ok'")
+
+        AutomaticSetup(llm=mock_llm).generate_preflight_script(spec, [])
+
+        system_prompt = mock_llm.invoke.call_args.args[0][0].content
+        assert "Never hardcode a host or sandbox path" in system_prompt
+        assert "runtime resource profile" in system_prompt

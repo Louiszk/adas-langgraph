@@ -290,7 +290,7 @@ def execute_test_suite(
                             process_fixture_lifecycle(
                                 task_spec.test_fixtures,
                                 test_case.fixture_ids,
-                                active_fixtures_dir.parent if active_fixtures_dir else Path.cwd(),
+                                active_fixtures_dir if active_fixtures_dir else Path.cwd(),
                                 workspace_dirs,
                             )
                             if task_spec is not None

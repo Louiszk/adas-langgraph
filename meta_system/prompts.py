@@ -51,6 +51,17 @@ For a fixed-file task, use the declared fixture's relative path beneath `ADAS_IN
 
 ---
 
+## Runtime Service Contract
+
+HTTP APIs, Streamable HTTP MCP servers, and external database connections are runtime-provided resources. Read their addresses and connection settings from the environment-variable names declared by the TaskSpec; resolve them inside nodes or tools when they run.
+
+- Never hardcode a service URL, hostname, localhost port, MCP endpoint path, or database connection string.
+- A fixture run supplies the declared URL environment variable for its mock HTTP/MCP service. A direct invocation may supply a user-owned replacement through a runtime resource profile. Both use the same environment-variable name.
+- Do not start or manage service processes from generated target code. The ADAS harness owns fixture lifecycles; user-owned services already run independently.
+- Treat a missing required service environment variable as a clear configuration error, rather than silently falling back to a fixture-specific address.
+
+---
+
 ## ADAS Core Module (`adas_core.chat_model`)
 
 ### `ChatModel` Class

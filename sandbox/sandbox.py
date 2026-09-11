@@ -391,9 +391,13 @@ def copy_task_setup_to_sandbox(
 def run_sandbox_preflight(
     session: StreamingSandboxSession,
     runtime_task_dir: str = SANDBOX_TASK_SETUP_DIR,
+    runtime_profile_json: str | None = None,
 ) -> bool:
     """Install frozen setup requirements and validate them inside the sandbox."""
-    result = session.execute_command(f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}")
+    command = f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}"
+    if runtime_profile_json:
+        command += f" --runtime-profile {shlex.quote(runtime_profile_json)}"
+    result = session.execute_command(command)
     exit_code = getattr(result, "exit_code", None)
     output_str = str(getattr(result, "stdout", "") or "")
     stderr_str = str(getattr(result, "stderr", "") or "")

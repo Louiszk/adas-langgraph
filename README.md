@@ -103,6 +103,23 @@ Use `resource_manifest` for user-owned resources: files, directories, HTTP APIs,
 
 Use `test_fixtures` for deterministic, harness-owned evaluation inputs. ADAS can generate file data, create and seed embedded SQLite/DuckDB database files, and run mock HTTP or Streamable HTTP MCP services for a test case. External databases such as Postgres, Neo4j, Redis, and Qdrant cannot be mocked by this fixture mechanism; they must be available beforehand. Their test data may only be seeded into an explicitly isolated user-provided test instance, schema, or namespace with defined cleanup expectations.
 
+For a direct invocation, use a runtime profile to replace selected fixture providers without changing the target system. The profile keys are declared fixture IDs: use `external` with a URL for HTTP/MCP fixtures, or `local_file` with a host file/directory path for file and embedded SQLite/DuckDB fixtures. ADAS stages local paths into the isolated workspace at the fixture's declared path.
+
+```bash
+python invoke_target.py --system-name my_system --task-spec task.json --runtime-config my_environment.json --state '{"query": "..."}'
+```
+
+```json
+{
+  "overrides": {
+    "transit_api": {"provider": "external", "url": "https://staging.transit.example/api"},
+    "stations_csv": {"provider": "local_file", "source": "C:/data/stations.csv"}
+  }
+}
+```
+
+Resources not listed in the profile continue to use their generated fixtures. Credentials remain normal environment/secret configuration, not profile values.
+
 ### 3. Generate Frozen Validation Module (`create_validation.py`)
 Synthesize standalone, frozen evaluation code (`<task>.validation.py`) implementing deterministic checks and LLM-as-a-judge rubrics:
 ```bash

@@ -39,7 +39,7 @@ class TestExecuteTestSuite:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir = tmp_path / "custom-process-fixtures"
         fixtures_dir.mkdir()
         (fixtures_dir / "mock_weather.py").write_text(
             "from http.server import HTTPServer, BaseHTTPRequestHandler\n"

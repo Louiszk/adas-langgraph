@@ -70,6 +70,7 @@ SETUP_REQUIREMENTS = []
 CODE CONSTRAINTS:
 - Output valid, complete, runnable Python code only.
 - Do not use conversational filler, markdown explanations, or commentary outside the code.
+- Never hardcode absolute host paths, sandbox paths, service URLs, or connection strings. Use the function arguments and declared environment variables supplied at runtime.
 """
 
 
@@ -276,8 +277,9 @@ class AutomaticSetup:
             "`def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:`\n"
             "Rules for check_environment:\n"
             "1. Check that required environment variables / API keys exist (log names only, NEVER secrets).\n"
-            "2. Verify access to declared database resources or file inputs (search input directories recursively using rglob, as fixtures may have relative subdirectories).\n"
-            "3. Return (True, 'Environment verified') on success, or (False, error_description) on failure."
+            "2. Verify declared file and embedded-database inputs only through workspace_dirs and the runtime ADAS_INPUT_DIR environment; search input directories recursively using rglob, as fixtures may have relative subdirectories. Never hardcode a host or sandbox path.\n"
+            "3. For a declared HTTP, MCP, or external database resource, use only its declared environment variable when checking configuration. Do not hardcode localhost URLs, ports, endpoint paths, or connection strings: these may be replaced by a runtime resource profile.\n"
+            "4. Return (True, 'Environment verified') on success, or (False, error_description) on failure."
         )
         system_prompt = self._build_system_prompt(instructions)
         api_keys = [

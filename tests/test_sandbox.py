@@ -389,6 +389,37 @@ class TestSetupSandboxUtilities:
 
         assert run_sandbox_preflight(mock_session) is False
 
+    def test_run_sandbox_preflight_passes_runtime_profile(self):
+        from sandbox.sandbox import run_sandbox_preflight
+
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = MagicMock(
+            exit_code=0, stdout="Preflight verification passed", stderr=""
+        )
+        profile_json = '{"overrides":{"api":{"provider":"external","url":"https://example.test"}}}'
+
+        assert run_sandbox_preflight(mock_session, "/sandbox/task", profile_json)
+        command = mock_session.execute_command.call_args.args[0]
+        assert "--runtime-profile" in command
+        assert "https://example.test" in command
+
+    def test_stage_runtime_profile_sources_preserves_empty_directories(self, tmp_path):
+        from adas_core.runtime_resources import RuntimeResourceProfile
+        from invoke_target import stage_runtime_profile_sources
+
+        source = tmp_path / "source"
+        (source / "empty" / "nested").mkdir(parents=True)
+        profile = RuntimeResourceProfile.model_validate(
+            {"overrides": {"docs": {"provider": "local_file", "source": str(source)}}}
+        )
+        session = MagicMock()
+
+        staged = stage_runtime_profile_sources(session, profile)
+
+        assert staged.overrides["docs"].source == "/sandbox/workspace/runtime_resources/docs"
+        commands = [call.args[0] for call in session.execute_command.call_args_list]
+        assert any("runtime_resources/docs/empty/nested" in command for command in commands)
+
     def test_run_sandbox_preflight_failure_exit_code(self):
         from sandbox.sandbox import run_sandbox_preflight
 

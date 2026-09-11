@@ -361,6 +361,17 @@ class TestFixturesSpec(BaseModel):
             env_names.add(env_name)
         return self
 
+    @model_validator(mode="after")
+    def reject_external_database_fixtures(self) -> TestFixturesSpec:
+        """Only embedded database files can be harness-owned test fixtures."""
+        for fixture in self.databases:
+            if fixture.db_type not in {"sqlite", "duckdb"}:
+                raise ValueError(
+                    f"Database fixture '{fixture.id}' uses unsupported external type '{fixture.db_type}'. "
+                    "Declare external databases in resource_manifest instead."
+                )
+        return self
+
     def all_fixture_ids(self) -> set[str]:
         """Return the set of all declared fixture IDs across all categories."""
         ids: set[str] = set()
