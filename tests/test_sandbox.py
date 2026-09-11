@@ -18,17 +18,23 @@ class TestSandboxSessionSpecification:
         session = object.__new__(StreamingSandboxSession)
         session.verbose = False
         copied = []
+        executed_commands = []
         monkeypatch.setattr(
             session,
             "execute_command",
-            lambda command: SimpleNamespace(
-                stdout="/sandbox/output/reports/monthly/summary.csv\n/sandbox/output/charts/revenue.png\n"
-            ),
+            lambda command: (
+                executed_commands.append(command),
+                SimpleNamespace(
+                    stdout="/sandbox/output/reports/monthly/summary.csv\n/sandbox/output/charts/revenue.png\n"
+                ),
+            )[1],
         )
         monkeypatch.setattr(session, "copy_from_runtime", lambda source, dest: copied.append((source, dest)))
 
         session.copy_dir_from_runtime("/sandbox/output", str(tmp_path))
 
+        assert len(executed_commands) == 1
+        assert executed_commands[0].startswith('sh -c "find ')
         assert copied == [
             ("/sandbox/output/reports/monthly/summary.csv", str(tmp_path / "reports" / "monthly" / "summary.csv")),
             ("/sandbox/output/charts/revenue.png", str(tmp_path / "charts" / "revenue.png")),

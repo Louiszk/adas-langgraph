@@ -247,7 +247,7 @@ class StreamingSandboxSession:
         os.makedirs(dest_dir, exist_ok=True)
 
         normalized_src_dir = src_dir.replace("\\", "/").rstrip("/")
-        command = f"find {shlex.quote(normalized_src_dir)} -type f -name {shlex.quote(pattern)} -print 2>/dev/null"
+        command = f'sh -c "find {shlex.quote(normalized_src_dir)} -type f -name {shlex.quote(pattern)} 2>/dev/null"'
         command_output = self.execute_command(command)
         file_list_str = str(command_output.stdout) if command_output and command_output.stdout else ""
 
