@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from http.client import HTTPConnection
 from pathlib import Path
 from typing import Any
 
@@ -58,21 +59,83 @@ def _failure_message(fixture_id: str, reason: str, stdout: Path, stderr: Path) -
     return "\n".join(sections)
 
 
+def _port_is_occupied(port: int) -> bool:
+    """Return whether another process is already listening on the fixture port.
+
+    This narrows the readiness race substantially, although it cannot reserve a
+    TCP port between this check and the child process binding it.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def _raise_if_exited(process: subprocess.Popen[bytes], fixture_id: str, stdout: Path, stderr: Path) -> None:
+    if (exit_code := process.poll()) is not None:
+        raise FixtureStartupError(_failure_message(fixture_id, f"process exited with code {exit_code}", stdout, stderr))
+
+
 def _wait_for_port(process: subprocess.Popen[bytes], port: int, fixture_id: str, stdout: Path, stderr: Path) -> None:
     deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        exit_code = process.poll()
-        if exit_code is not None:
-            raise FixtureStartupError(
-                _failure_message(fixture_id, f"process exited with code {exit_code}", stdout, stderr)
-            )
+        _raise_if_exited(process, fixture_id, stdout, stderr)
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                # A listener is not enough by itself: make sure it is still our
+                # child rather than a process that died during the connect race.
+                _raise_if_exited(process, fixture_id, stdout, stderr)
                 return
         except OSError:
             time.sleep(0.05)
     raise FixtureStartupError(
         _failure_message(fixture_id, f"port 127.0.0.1:{port} did not become ready", stdout, stderr)
+    )
+
+
+def _wait_for_mcp_endpoint(
+    process: subprocess.Popen[bytes], fixture: MCPFixtureSpec, stdout: Path, stderr: Path
+) -> None:
+    """Verify that the declared Streamable HTTP endpoint exists without using it.
+
+    OPTIONS is intentionally non-destructive.  FastMCP endpoints can be
+    POST-only, so 405 is a valid proof that the configured path exists.  A 404
+    is definitive evidence that the TaskSpec endpoint path is wrong.
+    """
+    deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        _raise_if_exited(process, fixture.id, stdout, stderr)
+        connection = HTTPConnection("127.0.0.1", fixture.port, timeout=0.2)
+        try:
+            connection.request("OPTIONS", fixture.endpoint_path)
+            status = connection.getresponse().status
+        except OSError:
+            time.sleep(0.05)
+            continue
+        finally:
+            connection.close()
+
+        if status == 404:
+            raise FixtureStartupError(
+                _failure_message(
+                    fixture.id,
+                    f"MCP endpoint {fixture.endpoint_path!r} returned HTTP 404",
+                    stdout,
+                    stderr,
+                )
+            )
+        if 200 <= status < 500:
+            _raise_if_exited(process, fixture.id, stdout, stderr)
+            return
+        time.sleep(0.05)
+    raise FixtureStartupError(
+        _failure_message(
+            fixture.id,
+            f"MCP endpoint {fixture.endpoint_path!r} did not become ready",
+            stdout,
+            stderr,
+        )
     )
 
 
@@ -96,6 +159,15 @@ def process_fixture_lifecycle(
             stdout = log_dir / f"{fixture.id}.stdout.log"
             stderr = log_dir / f"{fixture.id}.stderr.log"
             script = _script_path(setup_root, fixture)
+            if _port_is_occupied(fixture.port):
+                raise FixtureStartupError(
+                    _failure_message(
+                        fixture.id,
+                        f"port 127.0.0.1:{fixture.port} is already occupied before launch",
+                        stdout,
+                        stderr,
+                    )
+                )
             child_env = os.environ.copy()
             child_env.update(
                 {
@@ -117,6 +189,7 @@ def process_fixture_lifecycle(
             processes.append(process)
             _wait_for_port(process, fixture.port, fixture.id, stdout, stderr)
             if isinstance(fixture, MCPFixtureSpec):
+                _wait_for_mcp_endpoint(process, fixture, stdout, stderr)
                 env_name, url = fixture.url_env, f"http://127.0.0.1:{fixture.port}{fixture.endpoint_path}"
             else:
                 env_name, url = fixture.base_url_env, f"http://127.0.0.1:{fixture.port}"
