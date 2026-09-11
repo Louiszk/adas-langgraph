@@ -509,6 +509,8 @@ def _create_provider_runnable(
     kwargs: dict[str, Any] = {
         "model": model,
         "api_key": SecretStr(api_key),
+        "use_responses_api": True,
+        "output_version": "responses/v1",
     }
     if temperature is not None:
         kwargs["temperature"] = temperature
@@ -552,6 +554,31 @@ class _TokenCounterDescriptor:
         allowed = get_allowed_target_models()
         provider, model = _resolve_target_model(None, None, allowed)
         return _get_provider_token_counter(provider, model)
+
+
+def _normalize_ai_message(message: Any) -> Any:
+    """Normalize Responses API content blocks to standard string content when applicable."""
+    if isinstance(message, dict) and "raw" in message:
+        _normalize_ai_message(message["raw"])
+        return message
+    if not isinstance(message, AIMessage):
+        return message
+    if isinstance(message.content, list):
+        reasoning_blocks = [b for b in message.content if isinstance(b, dict) and b.get("type") == "reasoning"]
+        if reasoning_blocks and "reasoning" not in message.additional_kwargs:
+            message.additional_kwargs["reasoning"] = reasoning_blocks
+
+        text_blocks = [b for b in message.content if isinstance(b, dict) and b.get("type") == "text"]
+        non_text_blocks = [
+            b
+            for b in message.content
+            if isinstance(b, dict) and b.get("type") not in ("text", "reasoning", "function_call")
+        ]
+        if text_blocks and not non_text_blocks:
+            message.content = "".join(b.get("text", "") for b in text_blocks)
+        elif not non_text_blocks:
+            message.content = ""
+    return message
 
 
 # ============================================================================
@@ -791,6 +818,7 @@ class ChatModel:
         start_time = time.perf_counter()
         try:
             response = self._runnable.invoke(messages, config=config, **kwargs)
+            response = _normalize_ai_message(response)
             result = self._response_transformer(response) if self._response_transformer else response
             if count_metrics:
                 self._record_call(start_time, response)
@@ -816,6 +844,7 @@ class ChatModel:
         start_time = time.perf_counter()
         try:
             response = await self._runnable.ainvoke(messages, config=config, **kwargs)
+            response = _normalize_ai_message(response)
             result = self._response_transformer(response) if self._response_transformer else response
             if count_metrics:
                 self._record_call(start_time, response)
@@ -846,7 +875,7 @@ class ChatModel:
             for chunk in self._runnable.stream(messages, config=config, **kwargs):
                 if getattr(chunk, "usage_metadata", None):
                     accumulated_usage = chunk.usage_metadata
-                yield chunk
+                yield _normalize_ai_message(chunk)
         except Exception as e:
             interrupted = True
             error_encountered = e
@@ -884,7 +913,7 @@ class ChatModel:
             async for chunk in self._runnable.astream(messages, config=config, **kwargs):
                 if getattr(chunk, "usage_metadata", None):
                     accumulated_usage = chunk.usage_metadata
-                yield chunk
+                yield _normalize_ai_message(chunk)
         except Exception as e:
             interrupted = True
             error_encountered = e

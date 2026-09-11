@@ -149,6 +149,8 @@ class TestParameterCapabilities:
         call_kwargs = mock_chat_openai.call_args.kwargs
         assert call_kwargs["temperature"] == 0.7
         assert "reasoning_effort" not in call_kwargs
+        assert call_kwargs["use_responses_api"] is True
+        assert call_kwargs["output_version"] == "responses/v1"
 
     def test_standard_model_rejects_reasoning_effort(self):
         ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-4o"}]
@@ -168,6 +170,8 @@ class TestParameterCapabilities:
         assert llm.model == "gpt-5.6-luna"
         call_kwargs = mock_chat_openai.call_args.kwargs
         assert call_kwargs["reasoning_effort"] == "none"
+        assert call_kwargs["use_responses_api"] is True
+        assert call_kwargs["output_version"] == "responses/v1"
         assert "temperature" not in call_kwargs
 
     @patch("adas_core.chat_model.ChatOpenAI")
@@ -177,6 +181,8 @@ class TestParameterCapabilities:
         ChatModel(model="gpt-5.6-terra", reasoning_effort="medium")
         call_kwargs = mock_chat_openai.call_args.kwargs
         assert call_kwargs["reasoning_effort"] == "medium"
+        assert call_kwargs["use_responses_api"] is True
+        assert call_kwargs["output_version"] == "responses/v1"
 
     def test_reasoning_model_rejects_invalid_effort_level(self):
         ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "o1"}]
@@ -281,6 +287,115 @@ class TestCompositionAndToolBinding:
         assert record.success is True
         assert record.usage_incomplete is False
         assert record.total_tokens == 16
+
+    def test_normalize_ai_message_text_blocks(self):
+        from adas_core.chat_model import _normalize_ai_message
+
+        msg = AIMessage(content=[{"type": "text", "text": "Hello, world!", "index": 0}])
+        normalized = _normalize_ai_message(msg)
+        assert normalized.content == "Hello, world!"
+        assert isinstance(normalized.content, str)
+
+    def test_normalize_ai_message_tool_calls(self):
+        from adas_core.chat_model import _normalize_ai_message
+
+        msg = AIMessage(
+            content=[{"type": "function_call", "name": "calc", "arguments": "{}", "call_id": "c1"}],
+            tool_calls=[{"name": "calc", "args": {}, "id": "c1"}],
+        )
+        normalized = _normalize_ai_message(msg)
+        assert normalized.content == ""
+        assert isinstance(normalized.content, str)
+        assert len(normalized.tool_calls) == 1
+
+    def test_normalize_ai_message_empty_content(self):
+        from adas_core.chat_model import _normalize_ai_message
+
+        msg = AIMessage(content=[])
+        normalized = _normalize_ai_message(msg)
+        assert normalized.content == ""
+        assert isinstance(normalized.content, str)
+
+    def test_normalize_ai_message_preserves_multimodal(self):
+        from adas_core.chat_model import _normalize_ai_message
+
+        msg = AIMessage(content=[{"type": "image_url", "image_url": {"url": "http://img"}}])
+        normalized = _normalize_ai_message(msg)
+        assert isinstance(normalized.content, list)
+
+    def test_normalize_ai_message_preserves_reasoning_in_additional_kwargs(self):
+        from adas_core.chat_model import _normalize_ai_message
+
+        reasoning_block = {"type": "reasoning", "id": "rs_123", "summary": "Thinking about steps"}
+        func_block = {"type": "function_call", "name": "foo", "call_id": "c1"}
+        msg = AIMessage(
+            content=[reasoning_block, func_block],
+            tool_calls=[{"name": "foo", "args": {}, "id": "c1"}],
+        )
+        normalized = _normalize_ai_message(msg)
+        assert normalized.content == ""
+        assert isinstance(normalized.content, str)
+        assert normalized.additional_kwargs.get("reasoning") == [reasoning_block]
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_invoke_normalizes_responses_api_blocks_to_string(self, mock_chat_openai):
+        from adas_core.chat_model import ChatModel
+
+        mock_model = MagicMock()
+        mock_model.invoke.return_value = AIMessage(content=[{"type": "text", "text": "Normalized answer"}])
+        mock_chat_openai.return_value = mock_model
+        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-5.6-luna"}]
+
+        res = ChatModel().invoke("Hi")
+        assert isinstance(res.content, str)
+        assert res.content == "Normalized answer"
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_invoke_with_tool_calls_and_execute_tool_calls(self, mock_chat_openai):
+        from langchain_core.messages import HumanMessage
+        from langchain_core.tools import tool
+
+        from adas_core.chat_model import ChatModel
+        from adas_core.tool_calls import execute_tool_calls, validate_tool_history
+
+        @tool
+        def add(a: int, b: int) -> int:
+            """Add two numbers."""
+            return a + b
+
+        mock_model = MagicMock()
+        # Simulate Responses API raw output where content is empty list alongside tool_calls
+        raw_ai_msg = AIMessage(
+            content=[],
+            tool_calls=[{"name": "add", "args": {"a": 2, "b": 3}, "id": "call_123", "type": "tool_call"}],
+        )
+        mock_model.invoke.return_value = raw_ai_msg
+        mock_model.bind_tools.return_value = mock_model
+        mock_chat_openai.return_value = mock_model
+        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-5.6-luna"}]
+
+        model = ChatModel().bind_tools([add])
+        res = model.invoke("Add 2 and 3")
+
+        # 1. Content is normalized string
+        assert isinstance(res.content, str)
+        assert res.content == ""
+        # 2. Tool calls are intact
+        assert len(res.tool_calls) == 1
+        assert res.tool_calls[0]["name"] == "add"
+        assert res.tool_calls[0]["args"] == {"a": 2, "b": 3}
+        assert res.tool_calls[0]["id"] == "call_123"
+
+        # 3. execute_tool_calls from adas_core/tool_calls.py runs seamlessly
+        tool_msgs, results = execute_tool_calls(res, {"add": add})
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0].content == "5"
+        assert tool_msgs[0].tool_call_id == "call_123"
+        assert results["add"] == 5
+
+        # 4. Tool history passes validation
+        history = [HumanMessage(content="Add 2 and 3"), res, tool_msgs[0]]
+        validate_tool_history(history)
 
 
 # ============================================================================
