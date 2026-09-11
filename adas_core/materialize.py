@@ -3,8 +3,8 @@ import re
 
 from langgraph.graph import END, START
 
-from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from adas_core.exceptions import MaterializationError
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
 
 def get_function_name(func_source: str) -> str:

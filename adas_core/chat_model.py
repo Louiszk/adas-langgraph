@@ -190,11 +190,13 @@ class ScopeContext:
     node: str | None = None
 
 
-_active_scope: ContextVar[ScopeContext] = ContextVar("_active_scope", default=ScopeContext())
+_default_scope = ScopeContext()
+_active_scope: ContextVar[ScopeContext | None] = ContextVar("_active_scope", default=None)
 
 
 def get_current_scope() -> ScopeContext:
-    return _active_scope.get()
+    scope = _active_scope.get()
+    return scope if scope is not None else _default_scope
 
 
 @contextmanager
@@ -205,7 +207,7 @@ def usage_scope(
     node: str | None = None,
 ) -> Iterator[ScopeContext]:
     """Context manager setting scoped telemetry execution attributes."""
-    parent = _active_scope.get()
+    parent = get_current_scope()
     new_scope = ScopeContext(
         system=system if system is not None else parent.system,
         run_id=run_id if run_id is not None else parent.run_id,

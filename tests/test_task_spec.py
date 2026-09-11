@@ -603,7 +603,7 @@ class TestExampleSpecs:
         example_specs_dir = repo_root / "example_specs"
         assert example_specs_dir.is_dir(), "example_specs directory should exist"
 
-        spec_files = sorted(list(example_specs_dir.glob("*/task.json")))
+        spec_files = sorted(example_specs_dir.glob("*/task.json"))
         assert len(spec_files) >= 1, f"Expected at least 1 example spec, found {len(spec_files)}"
 
         expected_dirs = {"data_analyst"}
@@ -626,7 +626,7 @@ class TestBenchmarkSpecs:
         benchmark_dir = repo_root / "benchmark"
         assert benchmark_dir.is_dir(), "benchmark directory should exist"
 
-        spec_files = sorted(list(benchmark_dir.glob("*/spec/task.json")))
+        spec_files = sorted(benchmark_dir.glob("*/spec/task.json"))
         assert len(spec_files) == 3, f"Expected 3 benchmark specs, found {len(spec_files)}"
 
         expected_benchmarks = {"FEVER", "GSMHard", "MMLUPro"}
@@ -646,12 +646,12 @@ class TestBenchmarkSpecs:
     def test_benchmark_setup_manifests_are_current(self):
         from pathlib import Path
 
-        from create_setup import setup_manifest_is_current
         from adas_core.automatic_validation import is_validation_manifest_current
+        from create_setup import setup_manifest_is_current
 
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
-        spec_files = sorted(list(benchmark_dir.glob("*/spec/task.json")))
+        spec_files = sorted(benchmark_dir.glob("*/spec/task.json"))
         assert len(spec_files) == 3, f"Expected 3 benchmark specs, found {len(spec_files)}"
 
         for spec_path in spec_files:
@@ -677,6 +677,7 @@ class TestBenchmarkSpecs:
 
             # Compile preflight and validator scripts to ensure valid Python syntax
             import py_compile
+
             from adas_core.automatic_validation import load_validation_module
 
             py_compile.compile(str(preflight_file), doraise=True)

@@ -5,8 +5,6 @@ from typing import Any
 
 import dill as pickle
 
-from adas_core.task_spec import ArchitectureContract, TaskSpec, TestCaseSpec
-from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from adas_core.candidate_selection import (
     CandidateRecord,
     candidate_rank_key,
@@ -16,6 +14,8 @@ from adas_core.candidate_selection import (
     save_candidate_checkpoint,
     select_best_candidate,
 )
+from adas_core.task_spec import ArchitectureContract, TaskSpec, TestCaseSpec
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.graph import design_completed_condition
 from meta_system.tools import test_system as run_test_system
 

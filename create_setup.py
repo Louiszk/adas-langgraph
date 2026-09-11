@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR
 from adas_core.logging_config import get_logger, setup_logging

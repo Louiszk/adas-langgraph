@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
 from adas_core.exceptions import FeatureNotImplementedError
+from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
 
 
 class ToolRequirement(BaseModel):
@@ -648,7 +648,7 @@ class TaskSpec(BaseModel):
         target_path = Path(path)
         if not target_path.exists():
             raise FileNotFoundError(f"TaskSpec file not found: {target_path}")
-        with open(target_path, "r", encoding="utf-8") as f:
+        with open(target_path, encoding="utf-8") as f:
             data = json.load(f)
         return cls.from_dict(data)
 
@@ -715,6 +715,6 @@ class HoldoutSuiteSpec(BaseModel):
         target_path = Path(path)
         if not target_path.exists():
             raise FileNotFoundError(f"HoldoutSuite file not found: {target_path}")
-        with open(target_path, "r", encoding="utf-8") as f:
+        with open(target_path, encoding="utf-8") as f:
             data = json.load(f)
         return cls.from_dict(data)

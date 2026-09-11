@@ -4,11 +4,6 @@ A framework for the automated design, testing, and optimization of graph-structu
 
 Manual engineering of complex, multi-agent workflows is time-intensive and limits the exploration of effective architectures. This project provides a **meta-system** that iteratively builds, tests, and refines target agentic systems using the [LangGraph](https://github.com/langchain-ai/langgraph) library. By operating on a code-based search space, the meta-system can autonomously discover novel control flows, integrate custom tools, and install external dependencies.
 
-## Architecture
-
-![Enhanced Meta-System Architecture](assets/architecture.png)
-*The meta-system architecture: A feedback-driven refinement loop where the meta-agent generates targeted code modifications, evaluates them against an automatically generated test suite, and uses execution logs to debug and optimize its own designs.*
-
 ## Key Features & Findings
 
 * **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent uses `manage_node`, `manage_tool`, `manage_conditional_edge`, `manage_edge`, and `manage_utilities` to make targeted changes to a virtual system.
@@ -55,10 +50,10 @@ source adasvenv/bin/activate
 # OR on Windows
 # .\adasvenv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install runtime dependencies
 pip install -r requirements.txt
-# OR install minimal dependencies to run the sandbox
-# pip install -r requirements-min.txt
+# OR install development dependencies (testing, linting, formatting)
+# pip install -r requirements-dev.txt
 ```
 
 ### Docker Setup (for sandbox execution)

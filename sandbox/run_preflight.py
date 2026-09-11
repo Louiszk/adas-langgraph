@@ -7,10 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from adas_core.automatic_validation import extract_validation_requirements
+from adas_core.automatic_validation import extract_validation_requirements, is_validation_manifest_current
 from adas_core.environment import ensure_packages_installed, isolated_case_workspace, run_preflight_check
 from adas_core.task_spec import TaskSpec
-from adas_core.automatic_validation import is_validation_manifest_current
 
 
 def validation_requirements(task_dir: Path) -> list[str]:

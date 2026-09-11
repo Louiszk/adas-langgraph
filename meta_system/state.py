@@ -4,11 +4,9 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.graph.message import add_messages
 from langgraph.managed.is_last_step import RemainingSteps
 
+from adas_core.candidate_selection import CandidateRecord
 from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-
-
-from adas_core.candidate_selection import CandidateRecord
 
 
 class MetaState(TypedDict, total=False):

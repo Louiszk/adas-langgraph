@@ -197,8 +197,9 @@ class TestExecuteTestSuite:
 
     def test_test_system_catches_unhandled_exception(self, tmp_path):
         from unittest.mock import patch
+
+        from adas_core.task_spec import ArchitectureContract, TaskSpec
         from meta_system.tools import test_system
-        from adas_core.task_spec import TaskSpec, ArchitectureContract
 
         system = _create_dummy_system("CrashSystem")
         spec = TaskSpec(
@@ -260,8 +261,8 @@ class TestExecuteTestSuite:
         assert result.max_iterations == result.case_results[0].total_iterations
 
     def test_test_system_bases_averages_on_executed_count(self, tmp_path):
+        from adas_core.task_spec import ArchitectureContract, TaskSpec
         from meta_system.tools import test_system
-        from adas_core.task_spec import TaskSpec, ArchitectureContract
 
         system = _create_dummy_system("EarlyStopAveragesSystem")
         spec = TaskSpec(
@@ -298,6 +299,7 @@ class TestExecuteTestSuite:
 
     def test_incomplete_usage_marks_telemetry_none(self, tmp_path):
         from unittest.mock import patch
+
         from adas_core.chat_model import UsageRecorder
 
         system = _create_dummy_system("IncompleteUsageSystem")

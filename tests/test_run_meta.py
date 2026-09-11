@@ -159,6 +159,7 @@ def test_run_meta_exits_with_code_1_when_pickle_exists_but_design_incomplete(
 
     # Existing pickle and py from a prior run (e.g. optimization baseline)
     import dill
+
     from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
     old_pickle = sandbox_gen_dir / "OptimizedSystem.pkl"

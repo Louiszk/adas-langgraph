@@ -8,9 +8,9 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
+from adas_core.exceptions import FixtureExecutionError
 from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
 from adas_core.logging_config import get_logger
-from adas_core.exceptions import FixtureExecutionError
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
@@ -361,7 +361,7 @@ class AutomaticSetup:
             logger.info(f"Generated custom fixture script: {cust_dest}")
 
         # 6. Generate preflight.py
-        all_packages = sorted(list(discovered_packages))
+        all_packages = sorted(discovered_packages)
         preflight_code = self.generate_preflight_script(task_spec, all_packages)
         preflight_path = root / "preflight.py"
         safe_write_text(preflight_path, preflight_code, root_dir=root)

@@ -13,8 +13,8 @@ from adas_core.ast_parser import (
     extract_top_level_names,
     get_top_level_definitions,
 )
-from adas_core.helpers import escape_system_name, validate_node_conditional_edge_signature
 from adas_core.exceptions import GraphTopologyError
+from adas_core.helpers import escape_system_name, validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
 
@@ -644,4 +644,4 @@ class VirtualAgenticSystem:
                     )
                     break
 
-        return sorted(list(set(errors)))
+        return sorted(set(errors))

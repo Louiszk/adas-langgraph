@@ -20,7 +20,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m venv adasvenv
         source adasvenv/bin/activate
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; elif [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         
     - name: Run Ruff Format Check
       run: |
@@ -57,7 +57,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m venv adasvenv
         source adasvenv/bin/activate
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; elif [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
     - name: Run Pytest
       run: |

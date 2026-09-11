@@ -36,7 +36,7 @@ def run_benchmark_parallel(
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"Could not find {dataset_path}.")
 
-        with open(dataset_path, "r", encoding="utf-8") as f:
+        with open(dataset_path, encoding="utf-8") as f:
             dataset = json.load(f)
 
         logger.info(f"Loaded static dataset with {len(dataset)} problems")

@@ -7,7 +7,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-
 SAFE_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 

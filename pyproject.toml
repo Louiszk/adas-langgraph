@@ -13,6 +13,21 @@ exclude = [
     "benchmark/**/spec",
 ]
 
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+]
+ignore = [
+    "E402",  # Module level import not at top of file (needed for sys.path manipulation in scripts)
+    "E501",  # Line too long (handled by ruff format; prompts often exceed 120 chars)
+    "B904",  # Within an except clause, raise exceptions with raise ... from err or raise ... from None
+]
+
 [tool.pytest.ini_options]
 markers = [
     "container: requires a running Docker or Podman engine",

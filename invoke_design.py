@@ -7,6 +7,7 @@ import os
 import shlex
 from pathlib import Path
 
+from adas_core.automatic_validation import is_validation_manifest_current
 from adas_core.environment import (
     SANDBOX_FIXTURES_DIR,
     SANDBOX_GENERATED_SYSTEMS_DIR,
@@ -15,7 +16,6 @@ from adas_core.environment import (
 )
 from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
-from adas_core.automatic_validation import is_validation_manifest_current
 from adas_core.task_spec import TaskSpec
 from config import settings
 from create_setup import run_setup_for_task, setup_manifest_is_current

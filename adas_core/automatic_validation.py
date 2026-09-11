@@ -353,8 +353,8 @@ def assemble_validation_module(
 
         excluded_names = {"VALIDATION_REQUIREMENTS", "VALIDATORS", "validate", target_func_name}
 
-        def _is_excluded(name: str) -> bool:
-            if name in excluded_names:
+        def _is_excluded(name: str, excluded: set[str] = excluded_names) -> bool:
+            if name in excluded:
                 return True
             if name.startswith("__") and name.endswith("__"):
                 return True
@@ -589,8 +589,8 @@ class AutomaticValidation:
             all_reqs.update(reqs)
             case_snippets.append((case, code))
 
-        assembled_code = assemble_validation_module(task_spec, case_snippets, sorted(list(all_reqs)))
-        return assembled_code, sorted(list(all_reqs))
+        assembled_code = assemble_validation_module(task_spec, case_snippets, sorted(all_reqs))
+        return assembled_code, sorted(all_reqs)
 
     def generate_all(
         self,
