@@ -84,6 +84,26 @@ class TestRunBenchmarkInSandbox:
         )
         mock_session.execute_command_streaming.assert_not_called()
 
+    def test_accepts_dotted_system_module_and_copies_its_file(self):
+        mock_session = MagicMock()
+        mock_session.execute_command_streaming.return_value = ["\n__ADAS_BENCH_EXIT__0\n"]
+        mock_session.execute_command.return_value = "benchmark_results_generated_systems.TestSystem.json"
+
+        with patch("benchmark.benchmark_base.os.makedirs"):
+            assert run_benchmark_in_sandbox(
+                session=mock_session,
+                benchmark_name="gsm8k",
+                system_name="generated_systems.TestSystem",
+                runner_script="benchmark/gsm8k/run_gsm8k_bench.py",
+            )
+
+        from adas_core.environment import SANDBOX_WORKSPACE_DIR
+
+        mock_session.copy_to_runtime.assert_any_call(
+            "generated_systems/TestSystem.py",
+            f"{SANDBOX_WORKSPACE_DIR}/generated_systems/TestSystem.py",
+        )
+
 
 class TestBenchmarkCliMain:
     def test_returns_0_on_success(self, monkeypatch):
@@ -173,3 +193,14 @@ class TestBenchmarkCliMain:
             monkeypatch.setattr("sys.argv", ["main_gsm8k_bench.py", "--system", "Bad/System"])
             assert benchmark_cli_main("gsm8k", MagicMock()) == 1
         mock_session_cls.assert_not_called()
+
+    def test_accepts_dotted_system_module(self, monkeypatch):
+        mock_session = MagicMock()
+        mock_run_fn = MagicMock(return_value=True)
+        with (
+            patch("sandbox.sandbox.StreamingSandboxSession", return_value=mock_session),
+            patch("sandbox.sandbox.setup_sandbox_environment", return_value=True),
+        ):
+            monkeypatch.setattr("sys.argv", ["main_gsm8k_bench.py", "--system", "generated_systems.TestSystem"])
+            assert benchmark_cli_main("gsm8k", mock_run_fn) == 0
+        mock_run_fn.assert_called_once_with(mock_session, "generated_systems.TestSystem")

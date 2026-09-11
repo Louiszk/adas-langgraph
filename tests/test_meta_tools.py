@@ -174,6 +174,12 @@ class TestMetaToolsSpecification:
 
 
 class TestSecurityAndMalformedInputRejection:
+    @pytest.mark.parametrize("manager, name", [(manage_node, 'bad"node'), (manage_tool, "bad\nname")])
+    def test_manage_functions_reject_unsafe_names(self, manager, name, meta_state):
+        result = manager(action="delete", name=name, state=meta_state)
+        assert "ERROR" in result
+        assert "Invalid" in result
+
     @pytest.mark.parametrize(
         "malicious_pkg",
         [

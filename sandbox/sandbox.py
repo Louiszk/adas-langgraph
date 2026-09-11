@@ -2,6 +2,8 @@ import codecs
 import glob
 import hashlib
 import os
+import posixpath
+import shlex
 from pathlib import Path
 
 from llm_sandbox import SandboxBackend, create_session
@@ -239,13 +241,13 @@ class StreamingSandboxSession:
 
     def copy_dir_from_runtime(self, src_dir: str, dest_dir: str, pattern: str = "*"):
         """
-        Copies files matching a glob pattern from a source directory inside the sandbox
-        to a local destination directory.
+        Recursively copy matching files from a sandbox directory while preserving
+        their paths relative to ``src_dir``.
         """
         os.makedirs(dest_dir, exist_ok=True)
 
-        full_path_pattern = os.path.join(src_dir, pattern).replace("\\", "/")
-        command = f'sh -c "ls -d {full_path_pattern} 2>/dev/null"'
+        normalized_src_dir = src_dir.replace("\\", "/").rstrip("/")
+        command = f"find {shlex.quote(normalized_src_dir)} -type f -name {shlex.quote(pattern)} -print 2>/dev/null"
         command_output = self.execute_command(command)
         file_list_str = str(command_output.stdout) if command_output and command_output.stdout else ""
 
@@ -254,14 +256,18 @@ class StreamingSandboxSession:
                 logger.info(f"No files found in sandbox '{src_dir}' matching pattern '{pattern}'.")
             return
 
-        sandbox_paths = [path for path in file_list_str.strip().split("\n") if path]
+        sandbox_paths = [path for path in file_list_str.splitlines() if path]
 
         if self.verbose:
             logger.info(f"Copying {len(sandbox_paths)} files from sandbox '{src_dir}' to '{dest_dir}'...")
 
         for src_path_in_sandbox in sandbox_paths:
-            filename = os.path.basename(src_path_in_sandbox)
-            dest_path_on_host = os.path.join(dest_dir, filename)
+            relative_path = posixpath.relpath(src_path_in_sandbox, normalized_src_dir)
+            if relative_path == ".." or relative_path.startswith("../"):
+                logger.warning("Skipping sandbox artifact outside requested directory: %s", src_path_in_sandbox)
+                continue
+            dest_path_on_host = os.path.join(dest_dir, *relative_path.split("/"))
+            os.makedirs(os.path.dirname(dest_path_on_host), exist_ok=True)
             self.copy_from_runtime(src_path_in_sandbox, dest_path_on_host)
 
 

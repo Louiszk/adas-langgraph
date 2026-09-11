@@ -172,7 +172,8 @@ MANDATORY RULES:
    - Never instantiate external model APIs directly in validator code.
    - Usage:
      `from adas_core.judge import LLMJudge`
-     `judge = LLMJudge(model=judge_model_override, provider=judge_provider_override)`  # or LLMJudge()
+      `judge = LLMJudge(model=<Judge Model Override or None>, provider=<Judge Provider Override or None>)`
+      Use the literal overrides supplied in the case context whenever they are populated; otherwise pass None.
      `eval_result = judge.evaluate(prompt=f"Task: ... Criteria: ... Output: {final_state}")`
      `if not eval_result.is_pass: return False, f"LLM Judge rejected: {eval_result.reasoning}"`
    - Arbitrary Structured Extraction:
@@ -506,6 +507,8 @@ class AutomaticValidation:
             f"- Deterministic Criteria: {test_case.deterministic_criteria}",
             f"- LLM Judge Needed: {test_case.llm_judge_needed}",
             f"- Judge Criteria: {test_case.judge_criteria}",
+            f"- Judge Model Override: {test_case.judge_model}",
+            f"- Judge Provider Override: {test_case.judge_provider}",
             f"- Modalities: {test_case.modalities}",
             f"- Active Fixture IDs: {test_case.fixture_ids}",
         ]

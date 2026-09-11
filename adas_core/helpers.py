@@ -1,4 +1,5 @@
 import ast
+import copy
 import io
 import re
 import subprocess
@@ -18,6 +19,19 @@ def validate_identifier(name: str, field_name: str = "identifier") -> str:
     if not SAFE_IDENTIFIER_PATTERN.fullmatch(stripped):
         raise ValueError(
             f"Invalid {field_name} '{name}': must match pattern '^[a-zA-Z0-9_-]+$' with no traversal or special characters."
+        )
+    return stripped
+
+
+def validate_python_module_path(module_path: str, field_name: str = "Python module path") -> str:
+    """Validate a dotted import path whose individual components are safe identifiers."""
+    if not isinstance(module_path, str) or not module_path.strip():
+        raise ValueError(f"Invalid {field_name}: cannot be empty.")
+    stripped = module_path.strip()
+    components = stripped.split(".")
+    if any(not component or not component.isidentifier() for component in components):
+        raise ValueError(
+            f"Invalid {field_name} '{module_path}': must be a dotted Python module path with identifier components."
         )
     return stripped
 
@@ -218,8 +232,11 @@ def clean_messages(messages: list[Any]) -> list[Any]:
     allowed_attributes = {"type", "content", "tool_calls", "invalid_tool_calls"}
     allowed_tool_call_keys = {"name", "args"}
 
-    for message in messages:
-        for attr_name in list(vars(message).keys()):
+    cleaned_messages = []
+    for orig_message in messages:
+        message = copy.deepcopy(orig_message)
+
+        for attr_name in list(vars(message).keys()) if hasattr(message, "__dict__") else []:
             if attr_name not in allowed_attributes:
                 try:
                     delattr(message, attr_name)
@@ -240,7 +257,9 @@ def clean_messages(messages: list[Any]) -> list[Any]:
                             cleaned_calls.append(cleaned_call)
 
                     setattr(message, tool_call_list_name, cleaned_calls)
-    return messages
+
+        cleaned_messages.append(message)
+    return cleaned_messages
 
 
 def truncate_state(state: dict[str, Any], max_chars: int = 1200) -> dict[str, Any] | None:

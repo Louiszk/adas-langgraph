@@ -449,21 +449,27 @@ def _resolve_target_model(
         return p, model
 
     if model is not None and provider is not None:
-        matches = [m for m in allowed if m.get("provider", "openai") == provider and m.get("model_name") == model]
+        p_lower = provider.lower()
+        matches = [
+            m for m in allowed if m.get("provider", "openai").lower() == p_lower and m.get("model_name") == model
+        ]
         if not matches:
             raise ModelConfigurationError(
                 f"Model '{model}' with provider '{provider}' is not available. Allowed Models: {allowed}"
             )
-        return provider, model
+        matched_provider = matches[0].get("provider", provider)
+        return matched_provider, model
 
     # provider is given but model is None
     if provider is None:
         raise ModelConfigurationError("Provider cannot be None when resolving target model.")
-    provider_models = [m for m in allowed if m.get("provider", "openai") == provider]
+    p_lower = provider.lower()
+    provider_models = [m for m in allowed if m.get("provider", "openai").lower() == p_lower]
     if not provider_models:
         raise ModelConfigurationError(f"No allowed models found for provider '{provider}'. Allowed Models: {allowed}")
     first = provider_models[0]
-    return provider, first["model_name"]
+    matched_provider = first.get("provider", provider)
+    return matched_provider, first["model_name"]
 
 
 def _create_provider_runnable(

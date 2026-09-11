@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
-from adas_core.helpers import validate_identifier
+from adas_core.helpers import validate_python_module_path
 from adas_core.logging_config import get_logger
 
 logger = get_logger("benchmark_base")
@@ -169,7 +169,7 @@ def run_benchmark_in_sandbox(
 ) -> bool:
     """Shared implementation for executing benchmarks inside an isolated sandbox session."""
     try:
-        validate_identifier(system_name, field_name="benchmark system name")
+        validate_python_module_path(system_name, field_name="benchmark system module")
     except ValueError as exc:
         logger.error(str(exc))
         return False
@@ -270,7 +270,7 @@ def benchmark_cli_main(
     args = parser.parse_args()
 
     try:
-        validate_identifier(args.system, field_name="benchmark system name")
+        validate_python_module_path(args.system, field_name="benchmark system module")
     except ValueError as exc:
         logger.error(str(exc))
         return 1

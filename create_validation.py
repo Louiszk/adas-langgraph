@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
             force=args.force,
         )
-        return 0 if val_path is not None else 0
+        return 0 if val_path is not None else 1
     except Exception as exc:
         logger.error("Validation generation failed: %r", exc, exc_info=True)
         return 1

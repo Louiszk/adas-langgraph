@@ -63,6 +63,19 @@ class TestMessageSanitization:
         assert "id" not in call
         assert "type" not in call
 
+    def test_clean_messages_does_not_mutate_original(self):
+        """clean_messages should not mutate the original message objects."""
+        msg = AIMessage(
+            content="hello",
+            id="msg_id_123",
+            tool_calls=[{"name": "test_tool", "args": {"x": 1}, "id": "call_123", "type": "tool_call"}],
+        )
+        cleaned = clean_messages([msg])
+        assert cleaned[0] is not msg
+        assert hasattr(msg, "id")
+        assert msg.id == "msg_id_123"
+        assert msg.tool_calls[0]["id"] == "call_123"
+
 
 class TestStateTruncation:
     def test_truncate_state_shortens_large_strings_symmetrically(self):
@@ -74,6 +87,16 @@ class TestStateTruncation:
         assert "small_field" in truncated and truncated["small_field"] == "ok"
         assert "HAS BEEN TRUNCATED" in truncated["large_field"]
         assert len(truncated["large_field"]) < len(huge_text)
+
+    def test_truncate_state_does_not_mutate_original_messages(self):
+        """truncate_state should not mutate message objects in the input state."""
+        msg = AIMessage(content="A" * 2000, id="msg_id_123")
+        state = {"messages": [msg]}
+        truncated = truncate_state(state, max_chars=100)
+        assert truncated is not None
+        assert len(msg.content) == 2000
+        assert hasattr(msg, "id")
+        assert len(truncated["messages"][0].content) < 2000
 
 
 class TestNormalizeFutureImports:

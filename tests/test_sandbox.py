@@ -10,6 +10,30 @@ from sandbox.sandbox import StreamingSandboxSession
 
 
 class TestSandboxSessionSpecification:
+    def test_copy_dir_from_runtime_recursively_preserves_relative_paths(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from sandbox.sandbox import StreamingSandboxSession
+
+        session = object.__new__(StreamingSandboxSession)
+        session.verbose = False
+        copied = []
+        monkeypatch.setattr(
+            session,
+            "execute_command",
+            lambda command: SimpleNamespace(
+                stdout="/sandbox/output/reports/monthly/summary.csv\n/sandbox/output/charts/revenue.png\n"
+            ),
+        )
+        monkeypatch.setattr(session, "copy_from_runtime", lambda source, dest: copied.append((source, dest)))
+
+        session.copy_dir_from_runtime("/sandbox/output", str(tmp_path))
+
+        assert copied == [
+            ("/sandbox/output/reports/monthly/summary.csv", str(tmp_path / "reports" / "monthly" / "summary.csv")),
+            ("/sandbox/output/charts/revenue.png", str(tmp_path / "charts" / "revenue.png")),
+        ]
+
     def test_invalid_container_type_raises_value_error(self):
         """Contract: Must raise ValueError when passed an unknown container runtime type."""
         with pytest.raises(ValueError, match="Unknown container type: lxc"):

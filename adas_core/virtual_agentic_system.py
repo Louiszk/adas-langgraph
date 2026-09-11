@@ -14,7 +14,7 @@ from adas_core.ast_parser import (
     get_top_level_definitions,
 )
 from adas_core.exceptions import GraphTopologyError
-from adas_core.helpers import escape_system_name, validate_node_conditional_edge_signature
+from adas_core.helpers import escape_system_name, validate_identifier, validate_node_conditional_edge_signature
 
 ENDPOINTS = ["START", "__start__", START, "END", "__end__", END]
 
@@ -149,6 +149,7 @@ class VirtualAgenticSystem:
         func: Callable,
         func_source_code: str | None = None,
     ) -> bool:
+        name = validate_identifier(name, field_name="node name")
         if name in ENDPOINTS:
             raise GraphTopologyError("START and END are reserved names for the endpoints of the graph.")
 
@@ -169,6 +170,7 @@ class VirtualAgenticSystem:
         func_source_code: str | None = None,
     ) -> bool:
         """Create a tool function that can be used by nodes."""
+        name = validate_identifier(name, field_name="tool name")
         if func.__doc__ is None or func.__doc__.strip() == "":
             raise ValueError("Tool function must contain a detailed docstring.")
 
@@ -217,6 +219,7 @@ class VirtualAgenticSystem:
         path_map: Any = None,
     ) -> bool:
         """Create a conditional edge with a condition function and explicit path map."""
+        source = validate_identifier(source, field_name="conditional edge source")
         if source in ["END", "__end__", END]:
             raise GraphTopologyError("Invalid source node: Conditional edges from END are not allowed.")
         if source not in self.nodes:

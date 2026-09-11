@@ -19,6 +19,7 @@ from adas_core.automatic_validation import (
 from adas_core.task_spec import ArchitectureContract, TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.tools import test_system as run_test_system
+from sandbox.run_preflight import validation_requirements
 
 
 @pytest.fixture
@@ -56,6 +57,18 @@ class TestAutomaticValidation:
             "pandas",
             "pytest",
         ]
+
+    def test_case_context_includes_judge_overrides(self, sample_task_spec):
+        case = TestCaseSpec(
+            id="vision_case",
+            description="Evaluate a chart",
+            turns=[{"prompt": "make chart"}],
+            judge_model="gpt-4o",
+            judge_provider="openai",
+        )
+        context = AutomaticValidation._format_case_context(sample_task_spec, case)
+        assert "Judge Model Override: gpt-4o" in context
+        assert "Judge Provider Override: openai" in context
 
     def test_generates_loadable_llm_authored_module(self, sample_task_spec, tmp_path):
         llm = MagicMock()
@@ -419,3 +432,19 @@ class TestTaskSpecRunner:
             {"target_agentic_system": self._system(), "task_spec": self._spec(), "task_dir": str(tmp_path)}
         )
         assert "Overall: PASSED" in output
+
+
+class TestValidationRequirements:
+    def test_validation_requirements_uses_manifest_validator_file(self, tmp_path):
+        (tmp_path / "stale.validation.py").write_text("VALIDATION_REQUIREMENTS = ['stale']", encoding="utf-8")
+        validators = tmp_path / "validators"
+        validators.mkdir()
+        (validators / "current.validation.py").write_text("VALIDATION_REQUIREMENTS = ['current']", encoding="utf-8")
+
+        assert validation_requirements(
+            tmp_path, {"validation": {"validator_file": "validators/current.validation.py"}}
+        ) == ["current"]
+
+    def test_validation_requirements_rejects_manifest_path_outside_task(self, tmp_path):
+        with pytest.raises(ValueError, match="outside"):
+            validation_requirements(tmp_path, {"validation": {"validator_file": "../outside.validation.py"}})

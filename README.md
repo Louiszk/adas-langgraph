@@ -11,8 +11,6 @@ Manual engineering of complex, multi-agent workflows is time-intensive and limit
 * **Safe Graph and Utility Changes:** Deleting a node also removes standard edges connected to it and conditional edges that route to it. Utility deletion identifies the exact top-level `function`, `class`, or `assignment`, so same-named definitions can be removed unambiguously.
 * **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends, invalid path-map destinations, or infinite loops), and improves target system accuracy.
 
-* **Example Design Session Trace:** View a complete, step-by-step design log of an automatic Data Analyst agent in [assets/example_trace.md](assets/example_trace.md).
-
 ## Repository Structure
 
 * `adas_core/`: The core logic, including the `VirtualAgenticSystem` representation, AST-based materialization, task specification schemas, and custom LLM wrappers.

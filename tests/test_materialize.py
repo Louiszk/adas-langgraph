@@ -112,3 +112,12 @@ class TestMaterializeSystemSpecification:
         exec(code_content, namespace)
         result = namespace["workflow"].invoke({"messages": []})
         assert result is not None
+
+    def test_virtual_system_rejects_unsafe_graph_labels(self):
+        system = VirtualAgenticSystem("SafeNames")
+        with pytest.raises(ValueError, match="node name"):
+            system.create_node('bad"node', "bad", lambda state: state, "def node(state): return state")
+        with pytest.raises(ValueError, match="tool name"):
+            system.create_tool(
+                "bad\nname", "bad", lambda state: state, 'def tool_fn(state):\n    """doc"""\n    return state'
+            )

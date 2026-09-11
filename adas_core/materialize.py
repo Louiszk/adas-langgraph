@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -81,7 +82,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
                     f"# Description: {description}",
                     func_source,
                     "",
-                    f'tools["{tool_name}"] = tool(runnable={original_name}, name_or_callable="{tool_name}")',
+                    f"tools[{json.dumps(tool_name)}] = tool(runnable={original_name}, name_or_callable={json.dumps(tool_name)})",
                     "",
                 ]
             )
@@ -101,7 +102,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
                     f"# Description: {description}",
                     func_source,
                     "",
-                    f'agentic_system_graph.add_node("{node_name}", {original_name})',
+                    f"agentic_system_graph.add_node({json.dumps(node_name)}, {original_name})",
                     "",
                 ]
             )
@@ -111,8 +112,8 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
         code_lines.append("# ===== Standard Edges =====")
 
         for source, target in system.edges:
-            source_name = "START" if source in ["START", START, "__start__"] else f'"{source}"'
-            target_name = "END" if target in ["END", END, "__end__"] else f'"{target}"'
+            source_name = "START" if source in ["START", START, "__start__"] else json.dumps(source)
+            target_name = "END" if target in ["END", END, "__end__"] else json.dumps(target)
 
             code_lines.extend([f"agentic_system_graph.add_edge({source_name}, {target_name})", ""])
 
@@ -121,7 +122,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
         code_lines.append("# ===== Conditional Edges =====")
 
         for source, edge_info in system.conditional_edges.items():
-            source_name = "START" if source in ["START", START, "__start__"] else f'"{source}"'
+            source_name = "START" if source in ["START", START, "__start__"] else json.dumps(source)
             func_source = edge_info["condition_code"]
             original_name = get_function_name(func_source)
             path_map = format_path_map(edge_info["path_map"])

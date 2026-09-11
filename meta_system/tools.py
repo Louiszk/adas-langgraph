@@ -26,6 +26,7 @@ from adas_core.helpers import (
     get_filtered_packages,
     sanitize_identifier,
     truncate_state,
+    validate_identifier,
 )
 from adas_core.logging_config import get_logger
 from adas_core.task_spec import TaskSpec, TestCaseSpec
@@ -236,6 +237,10 @@ def _manage_function(
         return error
     if state is None:
         return "ERROR: state is required"
+    try:
+        name = validate_identifier(name, field_name=f"{component_type} name")
+    except ValueError as exc:
+        return f"ERROR: {exc}"
 
     target_agentic_system: VirtualAgenticSystem = state["target_agentic_system"]
     if component_type == "conditional edge":
