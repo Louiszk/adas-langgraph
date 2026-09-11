@@ -97,6 +97,12 @@ Materialize deterministic sandbox fixtures (files, sqlite tables, mock endpoints
 python create_setup.py --task-spec example_specs/data_analyst/task.json
 ```
 
+### Resources versus Fixtures
+
+Use `resource_manifest` for user-owned resources: files, directories, HTTP APIs, Streamable HTTP MCP servers, and external databases. Declare paths or connection details as resources and required credentials as API keys; the preflight step verifies availability, while ADAS does not start or mock them.
+
+Use `test_fixtures` for deterministic, harness-owned evaluation inputs. ADAS can generate file data, create and seed embedded SQLite/DuckDB database files, and run mock HTTP or Streamable HTTP MCP services for a test case. External databases such as Postgres, Neo4j, Redis, and Qdrant cannot be mocked by this fixture mechanism; they must be available beforehand. Their test data may only be seeded into an explicitly isolated user-provided test instance, schema, or namespace with defined cleanup expectations.
+
 ### 3. Generate Frozen Validation Module (`create_validation.py`)
 Synthesize standalone, frozen evaluation code (`<task>.validation.py`) implementing deterministic checks and LLM-as-a-judge rubrics:
 ```bash

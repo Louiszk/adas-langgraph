@@ -9,6 +9,7 @@ from pathlib import Path
 
 from adas_core.automatic_setup import AutomaticSetup
 from adas_core.environment import _PACKAGE_PATTERN, ensure_packages_installed, validate_package_requirement
+from adas_core.fixture_lifecycle import FIXTURE_LIFECYCLE_VERSION
 from adas_core.task_spec import TaskSpec
 
 __all__ = ["_PACKAGE_PATTERN", "install_packages", "validate_package_requirement", "write_manifest"]
@@ -34,6 +35,7 @@ def write_manifest(task_spec: TaskSpec, task_dir: Path, packages: list[str]) -> 
         "schema_version": "1.0",
         "task_name": task_spec.name,
         "task_schema_version": task_spec.schema_version,
+        "fixture_lifecycle_version": FIXTURE_LIFECYCLE_VERSION,
         "required_packages": packages,
         "files": files,
     }

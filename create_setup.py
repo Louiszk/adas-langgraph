@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR
+from adas_core.fixture_lifecycle import FIXTURE_LIFECYCLE_VERSION
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
@@ -34,6 +35,8 @@ def setup_manifest_is_current(task_spec_path: Path) -> bool:
     manifest_path = task_dir / "setup_manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("fixture_lifecycle_version") != FIXTURE_LIFECYCLE_VERSION:
+            return False
         files = manifest.get("files")
         if not isinstance(files, dict) or not files:
             return False

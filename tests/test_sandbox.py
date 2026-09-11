@@ -204,7 +204,9 @@ class TestSetupSandboxUtilities:
         task_spec = tmp_path / "task.json"
         task_spec.write_text('{"name": "first"}', encoding="utf-8")
         digest = hashlib.sha256(task_spec.read_bytes()).hexdigest()
-        (tmp_path / "setup_manifest.json").write_text(json.dumps({"files": {"task.json": digest}}), encoding="utf-8")
+        (tmp_path / "setup_manifest.json").write_text(
+            json.dumps({"fixture_lifecycle_version": 1, "files": {"task.json": digest}}), encoding="utf-8"
+        )
         assert setup_manifest_is_current(task_spec)
 
         task_spec.write_text('{"name": "changed"}', encoding="utf-8")
@@ -222,7 +224,9 @@ class TestSetupSandboxUtilities:
         lf_hash = hashlib.sha256(lf_content).hexdigest()
 
         manifest_path = tmp_path / "setup_manifest.json"
-        manifest_path.write_text(json.dumps({"files": {"task.json": lf_hash}}), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps({"fixture_lifecycle_version": 1, "files": {"task.json": lf_hash}}), encoding="utf-8"
+        )
 
         # When file on disk has CRLF (typical Windows checkout)
         task_spec.write_bytes(crlf_content)
@@ -247,7 +251,9 @@ class TestSetupSandboxUtilities:
             "task.json": hashlib.sha256(task_spec.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
             "fixtures/input.csv": hashlib.sha256(fixture.read_bytes()).hexdigest(),
         }
-        (tmp_path / "setup_manifest.json").write_text(json.dumps({"files": hashes}), encoding="utf-8")
+        (tmp_path / "setup_manifest.json").write_text(
+            json.dumps({"fixture_lifecycle_version": 1, "files": hashes}), encoding="utf-8"
+        )
         assert setup_manifest_is_current(task_spec)
 
         fixture.unlink()

@@ -115,6 +115,7 @@ Your mission is to collaborate with the user to design a robust, production-grad
      * Execution Mode: Does this need a single-turn input -> output pipeline, or a multi-turn conversational loop with stateful memory and checkpointer?
      * LangGraph State Schema: What are the input keys, intermediate scratchpad keys, and output keys?
      * Tools & Dependencies: What external libraries (e.g. pandas, requests) and API keys (e.g. SERPER_API_KEY) will it require?
+     * Resource ownership: Ask whether required MCP servers, HTTP APIs, or databases already run under the user's control, or whether the evaluation needs a controlled fixture.
      * Available Models: Which models from the catalog are needed? (Check vision/reasoning constraints).
    - Present trade-offs and options clearly (e.g. "Option A: single-turn pipeline vs Option B: multi-turn agent with memory") to help the user choose.
    - Do NOT quiz or consult internal ADAS schema plumbing to the user (e.g. how sandbox workspace directories map or relative fixture paths). Handle all such architectural plumbing silently and automatically according to the mandatory rules.
@@ -162,6 +163,9 @@ Your output JSON must strictly conform to the following JSON Schema generated di
      * Tier 2 tests should provision the relational/multi-fixture subset needed for core logic.
      * Tier 3 tests should provision dirty or edge-case fixtures to ensure robustness.
    - In `resource_manifest.available_resources`, declare input and output directories generically (e.g. "data/input/" or "input/") and specify in descriptions that systems should inspect files dynamically or use standard environment variables (`ADAS_INPUT_DIR`, `ADAS_OUTPUT_DIR`) rather than assuming static host paths.
+   - Keep user-owned resources in `resource_manifest`, including files, directories, running services, and their connection URL/URI. Put required credentials in `available_api_keys`; preflight verifies those resources rather than starting or mocking them.
+   - Use `test_fixtures` only for harness-owned, deterministic evaluation resources. The harness can mock Streamable HTTP MCP servers and HTTP services, and can create and seed embedded SQLite or DuckDB database files.
+   - Do NOT represent an external database service (for example Postgres, Neo4j, Redis, or Qdrant) as a mock fixture: it must already be running and be declared in `resource_manifest`. Fixture setup may seed its test data only when the user has explicitly provided an isolated test instance/namespace and cleanup expectations.
 
 5. DEV SUITE 3-TIER PROGRESSION:
    - The test cases in `dev_suite` must follow a strictly progressive difficulty gradient:

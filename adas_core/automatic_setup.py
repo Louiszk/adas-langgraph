@@ -182,12 +182,13 @@ class AutomaticSetup:
             "TASK: Mock FastMCP Server\n"
             "Write a complete, executable mock MCP server script using the FastMCP framework (`from mcp.server.fastmcp import FastMCP`).\n"
             "Implement realistic mock tools using `@mcp.tool()` based on the fixture requirements.\n"
+            "The script must bind exactly to host `127.0.0.1`, the declared port, and the declared endpoint path.\n"
+            "It must stay in the foreground and run directly with `python fixtures/mock_<name>.py` without interactive setup.\n"
             "Include `if __name__ == '__main__': mcp.run(...)` configured for the specified Streamable HTTP port and endpoint path."
         )
         system_prompt = self._build_system_prompt(instructions)
         transport_info = f"Transport: {fixture.transport}"
-        if fixture.port:
-            transport_info += f", Port: {fixture.port}, Endpoint Path: {fixture.endpoint_path}"
+        transport_info += f", Host: 127.0.0.1, Port: {fixture.port}, Endpoint Path: {fixture.endpoint_path}"
 
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
@@ -212,7 +213,8 @@ class AutomaticSetup:
             "TASK: Mock REST HTTP Service\n"
             "Write a self-contained FastAPI mock server script.\n"
             "Implement realistic endpoints and mock data according to the description.\n"
-            "Include `if __name__ == '__main__': uvicorn.run(app, port=...)`."
+            "Include `if __name__ == '__main__': uvicorn.run(app, host='127.0.0.1', port=...)`.\n"
+            "Use exactly the declared port, stay in the foreground, and run directly with `python fixtures/mock_<name>.py` without interactive setup."
         )
         system_prompt = self._build_system_prompt(instructions)
         user_prompt = (
@@ -335,18 +337,18 @@ class AutomaticSetup:
 
         # 3. Generate MCP mock server scripts
         for mcp_fix in task_spec.test_fixtures.mcps:
-            mcp_script_dest = setup_scripts_dir / f"mock_{mcp_fix.name}.py"
+            mcp_script_dest = fixtures_dir / f"mock_{mcp_fix.name}.py"
             code, reqs = self.generate_mcp_server_script(task_spec, mcp_fix)
-            safe_write_text(mcp_script_dest, code, root_dir=setup_scripts_dir)
+            safe_write_text(mcp_script_dest, code, root_dir=fixtures_dir)
             created_files.append(mcp_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated MCP server script: {mcp_script_dest}")
 
         # 4. Generate mock service scripts
         for mock_fix in task_spec.test_fixtures.mock_services:
-            mock_dest = setup_scripts_dir / f"mock_{mock_fix.name}.py"
+            mock_dest = fixtures_dir / f"mock_{mock_fix.name}.py"
             code, reqs = self.generate_mock_service_script(task_spec, mock_fix)
-            safe_write_text(mock_dest, code, root_dir=setup_scripts_dir)
+            safe_write_text(mock_dest, code, root_dir=fixtures_dir)
             created_files.append(mock_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated mock service script: {mock_dest}")

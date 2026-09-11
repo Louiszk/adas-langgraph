@@ -5,7 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from adas_core.task_spec import ArchitectureContract, FileFixtureSpec, TaskSpec, TestCaseSpec, TestFixturesSpec
+from adas_core.task_spec import (
+    ArchitectureContract,
+    FileFixtureSpec,
+    MockServiceFixtureSpec,
+    TaskSpec,
+    TestCaseSpec,
+    TestFixturesSpec,
+)
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
@@ -26,6 +33,61 @@ def _create_dummy_system(name: str = "TestSystem") -> VirtualAgenticSystem:
 
 
 class TestExecuteTestSuite:
+    def test_execute_test_suite_runs_selected_process_fixture(self, tmp_path):
+        import socket
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir()
+        (fixtures_dir / "mock_weather.py").write_text(
+            "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+            "class Handler(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self): self.send_response(200); self.end_headers()\n"
+            "    def log_message(self, *args): pass\n"
+            f"HTTPServer(('127.0.0.1', {port}), Handler).serve_forever()\n",
+            encoding="utf-8",
+        )
+        system = VirtualAgenticSystem("ProcessFixtureSystem")
+        system.set_state_attributes({"query": "str", "result": "str"})
+        func, parsed = system.get_function(
+            "import os\n"
+            "def processor(state: dict[str, Any]) -> dict[str, Any]:\n"
+            "    return {'result': os.environ.get('WEATHER_URL', '')}\n",
+            "node",
+        )
+        assert func is not None
+        system.create_node("processor", "Reads fixture URL", func, parsed)
+        system.create_edge("__start__", "processor")
+        system.create_edge("processor", "__end__")
+        spec = TaskSpec(
+            name="ProcessFixtureTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"query": "str"}),
+            test_fixtures=TestFixturesSpec(
+                mock_services=[MockServiceFixtureSpec(name="weather", port=port, base_url_env="WEATHER_URL")]
+            ),
+            dev_suite=[
+                TestCaseSpec(id="selected", description="desc", fixture_ids=["weather"], turns=[{"query": "q"}])
+            ],
+        )
+
+        class Validator:
+            @staticmethod
+            def validate_selected(final_state, workspace_dirs):
+                return final_state["result"] == f"http://127.0.0.1:{port}", "fixture URL was injected"
+
+        result = execute_test_suite(
+            system,
+            spec.dev_suite,
+            Validator(),
+            workspace_root=tmp_path / "workspace",
+            fixtures_dir=fixtures_dir,
+            task_spec=spec,
+        )
+        assert result.all_passed
+
     def test_all_passing(self, tmp_path):
         system = _create_dummy_system("PassSystem")
         test_cases = [

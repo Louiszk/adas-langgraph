@@ -14,6 +14,8 @@ from adas_core.task_spec import (
     CustomFixtureSpec,
     DatabaseFixtureSpec,
     FileFixtureSpec,
+    MCPFixtureSpec,
+    MockServiceFixtureSpec,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -37,6 +39,34 @@ def seed():
 
 
 class TestAutomaticSetup:
+    def test_generate_all_writes_process_scripts_to_fixtures(self, tmp_path):
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = [
+            AIMessage(content="SETUP_REQUIREMENTS = []\n"),
+            AIMessage(content="SETUP_REQUIREMENTS = []\n"),
+            AIMessage(
+                content=(
+                    "def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:\n"
+                    "    return True, 'ok'\n"
+                )
+            ),
+        ]
+        spec = TaskSpec(
+            name="ProcessFixtureTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            test_fixtures=TestFixturesSpec(
+                mcps=[MCPFixtureSpec(name="tools", port=8101)],
+                mock_services=[MockServiceFixtureSpec(name="weather", port=8102)],
+            ),
+            dev_suite=[TestCaseSpec(id="c1", description="desc", turns=[{"q": "value"}])],
+        )
+
+        AutomaticSetup(llm=mock_llm).generate_all(spec, tmp_path, execute_generated_code=False)
+
+        assert (tmp_path / "fixtures" / "mock_tools.py").is_file()
+        assert (tmp_path / "fixtures" / "mock_weather.py").is_file()
+
     def test_generate_all_fixtures_and_preflight(self, tmp_path):
         mock_llm = MagicMock()
 

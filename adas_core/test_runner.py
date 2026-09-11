@@ -20,6 +20,7 @@ from adas_core.exceptions import (
     ValidatorContractError,
     ValidatorDispatchError,
 )
+from adas_core.fixture_lifecycle import process_fixture_lifecycle
 from adas_core.helpers import TruncatingStringIO, sanitize_test_id
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
@@ -285,37 +286,48 @@ def execute_test_suite(
 
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     try:
-                        with usage_scope(system=system_role, run_id=test_run_id, case_id=test_case_id):
-                            stream_modes = ["values", "debug"] if capture_debug_flow else ["values"]
-                            for stream_mode, update in target_workflow.stream(
-                                test_input_state,
-                                config={"recursion_limit": recursion_limit},
-                                stream_mode=stream_modes,
-                            ):
-                                if stream_mode == "values":
-                                    current_final_state = update
-                                elif stream_mode == "debug" and update.get("type") == "task_result":
-                                    step = update.get("step", 0)
-                                    node_name = update.get("payload", {}).get("name", "node")
-                                    if step >= len(execution_flow):
-                                        execution_flow.append([node_name])
-                                    else:
-                                        execution_flow[step].append(node_name)
-                                    case_iterations = step + 1
-
-                        execution_flow.append("END")
-
-                        # Validate results using validation module
-                        try:
-                            is_pass, case_msg = _dispatch_validator(
-                                validation_module, test_case, current_final_state, workspace_dirs
+                        fixture_context = (
+                            process_fixture_lifecycle(
+                                task_spec.test_fixtures,
+                                test_case.fixture_ids,
+                                active_fixtures_dir.parent if active_fixtures_dir else Path.cwd(),
+                                workspace_dirs,
                             )
-                        except Exception as e_val:
-                            is_pass = False
-                            case_msg = (
-                                f"EVALUATOR_ERROR: Validator failed unexpectedly for {test_case_id}: {e_val!r}\n"
-                                f"{traceback.format_exc(chain=False)}"
-                            )
+                            if task_spec is not None
+                            else contextlib.nullcontext()
+                        )
+                        with fixture_context:
+                            with usage_scope(system=system_role, run_id=test_run_id, case_id=test_case_id):
+                                stream_modes = ["values", "debug"] if capture_debug_flow else ["values"]
+                                for stream_mode, update in target_workflow.stream(
+                                    test_input_state,
+                                    config={"recursion_limit": recursion_limit},
+                                    stream_mode=stream_modes,
+                                ):
+                                    if stream_mode == "values":
+                                        current_final_state = update
+                                    elif stream_mode == "debug" and update.get("type") == "task_result":
+                                        step = update.get("step", 0)
+                                        node_name = update.get("payload", {}).get("name", "node")
+                                        if step >= len(execution_flow):
+                                            execution_flow.append([node_name])
+                                        else:
+                                            execution_flow[step].append(node_name)
+                                        case_iterations = step + 1
+
+                            execution_flow.append("END")
+
+                            # Validate results while process fixtures remain available.
+                            try:
+                                is_pass, case_msg = _dispatch_validator(
+                                    validation_module, test_case, current_final_state, workspace_dirs
+                                )
+                            except Exception as e_val:
+                                is_pass = False
+                                case_msg = (
+                                    f"EVALUATOR_ERROR: Validator failed unexpectedly for {test_case_id}: {e_val!r}\n"
+                                    f"{traceback.format_exc(chain=False)}"
+                                )
 
                     except Exception as e_run:
                         execution_flow.append("... -> FAILED_DURING_EXECUTION")

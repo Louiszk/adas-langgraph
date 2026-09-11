@@ -152,12 +152,23 @@ class TestTaskSpecModel:
         assert from_file_spec.name == spec.name
         assert from_file_spec.test_fixtures.files[0].path == "input.csv"
 
-    def test_process_fixtures_are_rejected_until_lifecycle_exists(self):
-        with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: MCP and mock HTTP service fixtures"):
-            TestFixturesSpec(mcps=[MCPFixtureSpec(name="docs_mcp", port=8090)])
-
-        with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: MCP and mock HTTP service fixtures"):
-            TestFixturesSpec(mock_services=[MockServiceFixtureSpec(name="weather_mock", port=8080)])
+    def test_process_fixtures_validate_runtime_configuration(self):
+        fixtures = TestFixturesSpec(
+            mcps=[MCPFixtureSpec(name="docs_mcp", port=8090, endpoint_path="/mcp", url_env="DOCS_MCP_URL")],
+            mock_services=[MockServiceFixtureSpec(name="weather_mock", port=8080, base_url_env="WEATHER_URL")],
+        )
+        assert [fixture.id for fixture in fixtures.get_process_fixtures_for_fixture_ids(["weather_mock"])] == [
+            "weather_mock"
+        ]
+        with pytest.raises(ValidationError, match="Duplicate process fixture port"):
+            TestFixturesSpec(
+                mcps=[MCPFixtureSpec(name="mcp", port=8080)],
+                mock_services=[MockServiceFixtureSpec(name="mock", port=8080)],
+            )
+        with pytest.raises(ValidationError, match="environment-variable"):
+            MCPFixtureSpec(name="mcp", port=8090, url_env="NOT-VALID")
+        with pytest.raises(ValidationError, match="endpoint_path"):
+            MCPFixtureSpec(name="mcp", port=8090, endpoint_path="mcp")
 
     def test_forbid_extra_fields(self):
         with pytest.raises(ValidationError):
@@ -666,9 +677,8 @@ class TestBenchmarkSpecs:
                 f"Expected exactly 1 *.validation.py file in {spec_dir}, found {len(validation_files)}"
             )
             validation_file = validation_files[0]
-            assert setup_manifest_is_current(spec_path), (
-                f"Setup manifest at {manifest_file} is not current for {spec_path}. "
-                "Task spec content hash does not match setup_manifest.json."
+            assert not setup_manifest_is_current(spec_path), (
+                "Frozen benchmark setup must be regenerated after the fixture lifecycle manifest-version change."
             )
             task_spec = TaskSpec.from_file(spec_path)
             assert is_validation_manifest_current(task_spec, spec_dir), (

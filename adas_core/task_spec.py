@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -200,7 +202,7 @@ class MCPFixtureSpec(BaseModel):
         default="streamable-http",
         description="MCP transport protocol. Streamable HTTP is the only supported protocol.",
     )
-    port: int | None = Field(default=None, description="Port number for the Streamable HTTP MCP server")
+    port: int = Field(..., ge=1, le=65535, description="Port number for the Streamable HTTP MCP server")
     endpoint_path: str = Field(
         default="/mcp", description="HTTP endpoint path for Streamable HTTP (defaults to '/mcp')"
     )
@@ -215,6 +217,21 @@ class MCPFixtureSpec(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         return validate_identifier(v, field_name="mcp fixture name")
+
+    @field_validator("endpoint_path")
+    @classmethod
+    def validate_endpoint_path(cls, v: str) -> str:
+        parsed = urlsplit(v)
+        if not v.startswith("/") or parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or "//" in v:
+            raise ValueError("MCP endpoint_path must be an absolute HTTP path without query, fragment, or host.")
+        return v
+
+    @field_validator("url_env")
+    @classmethod
+    def validate_url_env(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("MCP url_env must be a valid environment-variable name.")
+        return v
 
     @model_validator(mode="after")
     def set_default_id(self) -> MCPFixtureSpec:
@@ -232,7 +249,7 @@ class MockServiceFixtureSpec(BaseModel):
 
     id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Service name (e.g. 'mock_weather_api')")
-    port: int = Field(default=8000, description="Local port for the mock server")
+    port: int = Field(default=8000, ge=1, le=65535, description="Local port for the mock server")
     base_url_env: str = Field(
         default="MOCK_API_BASE_URL", description="Env var exposing the mock server URL to the agent"
     )
@@ -242,6 +259,13 @@ class MockServiceFixtureSpec(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         return validate_identifier(v, field_name="mock service fixture name")
+
+    @field_validator("base_url_env")
+    @classmethod
+    def validate_base_url_env(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("Mock service base_url_env must be a valid environment-variable name.")
+        return v
 
     @model_validator(mode="after")
     def set_default_id(self) -> MockServiceFixtureSpec:
@@ -323,15 +347,18 @@ class TestFixturesSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def reject_unimplemented_process_fixtures(self) -> TestFixturesSpec:
-        # TODO(proper-fixtures): Add per-case process lifecycle management for
-        # Streamable HTTP MCP servers and mock HTTP services before enabling them.
-        # Until then, accepting either kind would produce misleading test results.
-        if self.mcps or self.mock_services:
-            raise FeatureNotImplementedError(
-                "NOT_IMPLEMENTED: MCP and mock HTTP service fixtures require process lifecycle management "
-                "and are not supported by the current runtime."
-            )
+    def validate_process_fixture_configuration(self) -> TestFixturesSpec:
+        """Reject port and target-environment collisions before a case is started."""
+        ports: set[int] = set()
+        env_names: set[str] = set()
+        for fixture in [*self.mcps, *self.mock_services]:
+            if fixture.port in ports:
+                raise ValueError(f"Duplicate process fixture port '{fixture.port}'.")
+            ports.add(fixture.port)
+            env_name = fixture.url_env if isinstance(fixture, MCPFixtureSpec) else fixture.base_url_env
+            if env_name in env_names:
+                raise ValueError(f"Duplicate process fixture environment variable '{env_name}'.")
+            env_names.add(env_name)
         return self
 
     def all_fixture_ids(self) -> set[str]:
@@ -377,6 +404,14 @@ class TestFixturesSpec(BaseModel):
                 paths.append(normalize_fixture_path(cf.path))
 
         return list(dict.fromkeys(paths))
+
+    def get_process_fixtures_for_fixture_ids(
+        self, fixture_ids: list[str] | None
+    ) -> list[MCPFixtureSpec | MockServiceFixtureSpec]:
+        """Return process fixtures selected for a case; ``None`` selects all."""
+        selected = None if fixture_ids is None else set(fixture_ids)
+        fixtures: list[MCPFixtureSpec | MockServiceFixtureSpec] = [*self.mcps, *self.mock_services]
+        return fixtures if selected is None else [fixture for fixture in fixtures if fixture.id in selected]
 
     def get_all_file_paths(self) -> list[str]:
         """Return the relative file paths of all declared filesystem artifacts."""
