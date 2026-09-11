@@ -62,6 +62,16 @@ The system uses Docker or Podman to create a sandbox environment for secure code
 docker --version
 ```
 
+### Security & Sandboxing Disclaimer
+
+> [!WARNING]
+> While execution occurs inside Docker/Podman containers, the sandbox is a cooperative boundary:
+> - **Unrestricted Network Egress:** Outbound internet access is enabled by default.
+> - **Credential Exposure:** The `.env` file and environment variables are readable by sandboxed code.
+> - **Model Restrictions:** `ChatModel` allowlists and token budgets operate at the application layer and can be bypassed if generated code accesses `os.environ` or external SDKs directly.
+>
+> **Best Practice:** Use dedicated evaluation-only API keys with strict spend caps, keep `.env` minimal, and never store production credentials.
+
 ## Running the System
 
 ADAS provides a 5-stage lifecycle for defining, provisioning, validating, designing, and executing agentic systems.
