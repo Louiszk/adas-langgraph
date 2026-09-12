@@ -14,12 +14,22 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from dotenv import find_dotenv, load_dotenv
 from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
 from adas_core.logging_config import get_logger
 
 logger = get_logger("adas_core.environment")
+
+
+def load_environment() -> None:
+    """Load environment variables from project and sandbox .env files."""
+    load_dotenv(find_dotenv(usecwd=True))
+    sandbox_env = Path(SANDBOX_WORKSPACE_DIR) / ".env"
+    if sandbox_env.is_file():
+        load_dotenv(sandbox_env)
+
 
 ADAS_WORKSPACE_DIR_ENV = "ADAS_WORKSPACE_DIR"
 ADAS_INPUT_DIR_ENV = "ADAS_INPUT_DIR"

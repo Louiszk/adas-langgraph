@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR
+from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR, load_environment
 from adas_core.fixture_lifecycle import FIXTURE_LIFECYCLE_VERSION
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
@@ -137,6 +137,7 @@ def run_setup_for_task(
 
 
 def main() -> None:
+    load_environment()
     setup_logging()
     parser = argparse.ArgumentParser(description="Generate a TaskSpec's fixtures and preflight script in a sandbox.")
     parser.add_argument("--task-spec", required=True, type=Path)

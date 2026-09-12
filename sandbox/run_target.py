@@ -16,6 +16,7 @@ from adas_core.environment import (
     SANDBOX_TARGET_METRICS_DIR,
     SANDBOX_WORKSPACE_DIR,
     isolated_case_workspace,
+    load_environment,
 )
 from adas_core.fixture_lifecycle import process_fixture_lifecycle
 from adas_core.helpers import escape_system_name, validate_identifier
@@ -37,6 +38,7 @@ def main() -> int:
     Main entry point for running a compiled agentic system inside the sandbox.
     Captures execution metrics and the full final state.
     """
+    load_environment()
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run a compiled agentic system and record metrics.")

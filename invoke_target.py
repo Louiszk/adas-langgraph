@@ -13,6 +13,7 @@ from typing import Any
 from adas_core.environment import (
     SANDBOX_TARGET_METRICS_DIR,
     SANDBOX_WORKSPACE_DIR,
+    load_environment,
 )
 from adas_core.helpers import validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
@@ -106,6 +107,7 @@ def stage_runtime_profile_sources(
 
 def main() -> int:
     """Main function to set up and run a target agentic system in a sandboxed environment."""
+    load_environment()
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run a target agentic system in a sandboxed environment.")

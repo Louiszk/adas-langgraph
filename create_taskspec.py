@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from adas_core.automatic_taskspec import run_interactive_wizard
+from adas_core.environment import load_environment
 from adas_core.logging_config import get_logger, setup_logging
 
 logger = get_logger("create_taskspec")
@@ -48,6 +49,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """Main execution function for the create_taskspec CLI."""
+    load_environment()
     setup_logging()
     args = parse_args(argv)
 

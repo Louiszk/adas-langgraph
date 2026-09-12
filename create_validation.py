@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from adas_core.automatic_validation import ensure_automatic_validation
+from adas_core.environment import load_environment
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 
@@ -67,6 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_environment()
     setup_logging()
     args = parse_args(argv)
     try:

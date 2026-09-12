@@ -13,6 +13,7 @@ from adas_core.environment import (
     SANDBOX_GENERATED_SYSTEMS_DIR,
     SANDBOX_TASK_SPEC_PATH,
     SANDBOX_WORKSPACE_DIR,
+    load_environment,
 )
 from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
@@ -105,6 +106,7 @@ def run_meta_system_in_sandbox(
 
 
 def main() -> int:
+    load_environment()
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run agentic systems in a sandboxed environment")

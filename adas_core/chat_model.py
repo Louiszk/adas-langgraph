@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -32,7 +31,6 @@ from adas_core.logging_config import get_logger
 from adas_core.tool_calls import execute_tool_calls, validate_tool_history
 
 logger = get_logger("chat_model")
-load_dotenv()
 
 
 # ============================================================================

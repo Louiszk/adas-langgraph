@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 from adas_core.automatic_validation import extract_validation_requirements, is_validation_manifest_current
-from adas_core.environment import ensure_packages_installed, isolated_case_workspace, run_preflight_check
+from adas_core.environment import (
+    ensure_packages_installed,
+    isolated_case_workspace,
+    load_environment,
+    run_preflight_check,
+)
 from adas_core.fixture_lifecycle import process_fixture_lifecycle
 from adas_core.runtime_resources import (
     RuntimeResourceProfile,
@@ -42,6 +47,8 @@ def validation_requirements(task_dir: Path, manifest: dict | None = None) -> lis
 
 
 def main() -> int:
+    load_environment()
+
     parser = argparse.ArgumentParser(description="Run a task setup's preflight check inside the sandbox.")
     parser.add_argument("--task-dir", required=True, type=Path)
     parser.add_argument(

@@ -13,6 +13,7 @@ from adas_core.environment import (
     SANDBOX_TASK_SETUP_DIR,
     SANDBOX_TASK_SPEC_PATH,
     SANDBOX_WORKSPACE_DIR,
+    load_environment,
 )
 from adas_core.helpers import escape_system_name, validate_identifier
 
@@ -46,6 +47,7 @@ def load_visible_task_context(task_spec: TaskSpec) -> str:
 
 
 def main() -> int:
+    load_environment()
     setup_logging()
     start_time = time.time()
 

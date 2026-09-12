@@ -8,7 +8,12 @@ import json
 from pathlib import Path
 
 from adas_core.automatic_setup import AutomaticSetup
-from adas_core.environment import _PACKAGE_PATTERN, ensure_packages_installed, validate_package_requirement
+from adas_core.environment import (
+    _PACKAGE_PATTERN,
+    ensure_packages_installed,
+    load_environment,
+    validate_package_requirement,
+)
 from adas_core.fixture_lifecycle import FIXTURE_LIFECYCLE_VERSION
 from adas_core.task_spec import TaskSpec
 
@@ -45,6 +50,7 @@ def write_manifest(task_spec: TaskSpec, task_dir: Path, packages: list[str]) -> 
 
 
 def main() -> None:
+    load_environment()
     parser = argparse.ArgumentParser(description="Generate and materialize a TaskSpec's setup inside the sandbox.")
     parser.add_argument("--task-spec", required=True, type=Path)
     parser.add_argument("--task-dir", required=True, type=Path)
