@@ -858,7 +858,14 @@ class TestExampleSpecs:
         spec_files = sorted(example_specs_dir.glob("*/task.json"))
         assert len(spec_files) >= 1, f"Expected at least 1 example spec, found {len(spec_files)}"
 
-        expected_dirs = {"data_analyst"}
+        expected_dirs = {
+            "botanical_agent",
+            "data_analyst_agent",
+            "mcp_agent",
+            "movie_agent",
+            "neo4j_agent",
+            "social_agent",
+        }
         found_dirs = {p.parent.name for p in spec_files}
         assert expected_dirs.issubset(found_dirs), f"Missing expected example specs: {expected_dirs - found_dirs}"
 
