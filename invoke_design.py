@@ -215,7 +215,12 @@ def main() -> int:
     try:
         session.open()
         if setup_sandbox_environment(session, args.reinstall):
-            runtime_task_dir = copy_task_setup_to_sandbox(session, task_dir, args.task_spec.resolve())
+            runtime_task_dir = copy_task_setup_to_sandbox(
+                session,
+                task_dir,
+                args.task_spec.resolve(),
+                task_spec.additional_documentation,
+            )
             if run_sandbox_preflight(session, runtime_task_dir):
                 success = run_meta_system_in_sandbox(
                     session=session,

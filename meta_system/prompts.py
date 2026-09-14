@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 agentic_system_documentation = """
 # LangGraph + ADAS Core Reference
 
@@ -17,48 +19,6 @@ agentic_system_documentation = """
 
 3. **Graph Endpoint Markers**:
    - Use `START` and `END` from `langgraph.graph` as workflow entry/exit markers.
-
----
-
-## Runtime Filesystem Contract
-
-Every evaluation case receives its own filesystem. Resolve these variables **inside nodes or tools when they run**; never resolve them as module-level constants because their values differ per test case.
-
-- `ADAS_INPUT_DIR` is the only root for reading supplied task files and frozen fixtures.
-- `ADAS_OUTPUT_DIR` is the only root for required output artifacts. Create parent directories before writing.
-- `ADAS_WORKSPACE_DIR` is only for temporary, case-local scratch data.
-- Never use hard-coded paths such as `/sandbox/workspace/data/input`, `data/input`, `data/output`, or host paths.
-- Any filename supplied by state or the task is a relative path. Reject absolute paths and traversal that escapes its assigned root. Return logical artifact names or metadata in state, not host/container paths.
-
-Use this pattern when a task accepts a caller-specified filename:
-```python
-from pathlib import Path
-import os
-
-def resolve_under(root: Path, relative_name: str) -> Path:
-    candidate = (root / relative_name).resolve()
-    candidate.relative_to(root.resolve())
-    return candidate
-
-input_dir = Path(os.environ["ADAS_INPUT_DIR"])
-output_dir = Path(os.environ["ADAS_OUTPUT_DIR"])
-source = resolve_under(input_dir, state["input_filename"])
-target = resolve_under(output_dir, state["output_filename"])
-target.parent.mkdir(parents=True, exist_ok=True)
-```
-
-For a fixed-file task, use the declared fixture's relative path beneath `ADAS_INPUT_DIR` and write the declared artifact path beneath `ADAS_OUTPUT_DIR`.
-
----
-
-## Runtime Service Contract
-
-HTTP APIs, Streamable HTTP MCP servers, and external database connections are runtime-provided resources. Read their addresses and connection settings from the environment-variable names declared by the TaskSpec; resolve them inside nodes or tools when they run.
-
-- Never hardcode a service URL, hostname, localhost port, MCP endpoint path, or database connection string.
-- A fixture run supplies the declared URL environment variable for its mock HTTP/MCP service. A direct invocation may supply a user-owned replacement through a runtime resource profile. Both use the same environment-variable name.
-- Do not start or manage service processes from generated target code. The ADAS harness owns fixture lifecycles; user-owned services already run independently.
-- Treat a missing required service environment variable as a clear configuration error, rather than silently falling back to a fixture-specific address.
 
 ---
 
@@ -175,6 +135,68 @@ trimmed_messages = trim_messages(
     token_counter=ChatModel.token_counter,
 )
 ```
+
+---
+
+## Understanding the TaskSpec Contract
+
+Your task statement provides the TaskSpec design contract (`--- TaskSpec Design Contract ---`):
+
+1. **`system_goal`**:
+   The primary problem statement, behavioral rules, and constraints. Your synthesized target system must satisfy this overarching goal.
+
+2. **`architecture_contract`**:
+   - **`state_schema`**: The mandatory state fields and typing. Your `AgentState` must include these fields alongside standard `messages: Annotated[List[AnyMessage], add_messages]`. You may define additional internal state keys (e.g. scratchpads, step counters, intermediate data) if needed.
+   - **`required_tools`**: The **mandatory baseline tools** your target system must provide. This is not an exclusive ceiling. You are fully permitted to create additional helper tools, utility functions, or sub-components via `@@manage_tool` and `@@manage_utilities` whenever beneficial for modularity, accuracy, or reasoning.
+
+3. **`available_models`**:
+   The allowed LLM models your target system may instantiate via `ChatModel(model=...)`. Calling `ChatModel()` without arguments automatically defaults to the primary model declared in `available_models`. Instantiating any unlisted model raises an authorization error.
+
+4. **`resource_manifest` & `test_fixtures`**:
+   Declare the external services (HTTP APIs, Streamable HTTP MCP servers, databases) and test fixtures. Access them dynamically at runtime via the declared environment variables (`ADAS_INPUT_DIR`, `*_URL`, etc.); never hardcode hostnames, ports, URLs, or local paths.
+
+---
+
+## Runtime Filesystem Contract
+
+Every evaluation case receives its own filesystem. Resolve these variables **inside nodes or tools when they run**; never resolve them as module-level constants because their values differ per test case.
+
+- `ADAS_INPUT_DIR` is the only root for reading supplied task files and frozen fixtures.
+- `ADAS_OUTPUT_DIR` is the only root for required output artifacts. Create parent directories before writing.
+- `ADAS_WORKSPACE_DIR` is only for temporary, case-local scratch data.
+- Never use hard-coded paths such as `/sandbox/workspace/data/input`, `data/input`, `data/output`, or host paths.
+- Any filename supplied by state or the task is a relative path. Reject absolute paths and traversal that escapes its assigned root. Return logical artifact names or metadata in state, not host/container paths.
+
+Use this pattern when a task accepts a caller-specified filename:
+```python
+from pathlib import Path
+import os
+
+def resolve_under(root: Path, relative_name: str) -> Path:
+    candidate = (root / relative_name).resolve()
+    candidate.relative_to(root.resolve())
+    return candidate
+
+input_dir = Path(os.environ["ADAS_INPUT_DIR"])
+output_dir = Path(os.environ["ADAS_OUTPUT_DIR"])
+source = resolve_under(input_dir, state["input_filename"])
+target = resolve_under(output_dir, state["output_filename"])
+target.parent.mkdir(parents=True, exist_ok=True)
+```
+
+For a fixed-file task, use the declared fixture's relative path beneath `ADAS_INPUT_DIR` and write the declared artifact path beneath `ADAS_OUTPUT_DIR`.
+
+---
+
+## Runtime Service Contract
+
+HTTP APIs, Streamable HTTP MCP servers, and external database connections are runtime-provided resources. Read their addresses and connection settings from the environment-variable names declared by the TaskSpec; resolve them inside nodes or tools when they run.
+
+- Never hardcode a service URL, hostname, localhost port, MCP endpoint path, or database connection string.
+- A fixture run supplies the declared URL environment variable for its mock HTTP/MCP service. A direct invocation may supply a user-owned replacement through a runtime resource profile. Both use the same environment-variable name.
+- Do not start or manage service processes from generated target code. The ADAS harness owns fixture lifecycles; user-owned services already run independently.
+- Treat a missing required service environment variable as a clear configuration error, rather than silently falling back to a fixture-specific address.
+
 """
 
 test_reminder = """
@@ -195,21 +217,19 @@ These comments serve as both documentation and reminders. Please review the curr
 """
 
 decorator_reminder = """
-In your previous response, you did not execute any decorators. Please continue with the design process.
+In your previous response, you did not generate any valid decorator code blocks. Please continue with the design process.
 Remember to always structure your output according to the required format and execute at least one decorator:
-## Observation
-...
-## Reasoning
-...
+## Plan & Diagnosis
+- [Up to 5 concise bullet points covering Current Goal, Diagnosis/Findings, and Plan]
+
 ## Actions
-...
 ```
 @@decorator_name(...)
 ```
 """
 
 decorator_tool_prompt = """
-Using these decorators is the only way to design the system. Always enclose them in triple backticks to execute them, e.g.:
+Using these decorators is the only way to design the system. Always enclose them in triple backticks, with opening and closing backticks each on a separate line, e.g.:
 ```
 @@test_system()
 ```
@@ -277,7 +297,11 @@ Use `START` and `END` as special markers for `@@manage_edge` entry and exit poin
 """
 
 
-def build_meta_agent_prompt(function_signatures: str) -> str:
+def build_meta_agent_prompt(function_signatures: str, additional_documentation: str = "") -> str:
+    docs = agentic_system_documentation
+    if additional_documentation.strip():
+        docs = docs.strip() + "\n\n" + additional_documentation.strip() + "\n"
+
     return (
         """
 You are an expert AI software engineer specializing in the design and implementation of agentic systems using LangGraph.
@@ -286,7 +310,7 @@ You reason about implementation decisions methodically and follow instructions w
 You are deeply familiar with advanced prompting techniques and Python programming.
 
 """
-        + agentic_system_documentation
+        + docs
         + """
 
 # Implementation Phase
@@ -323,17 +347,14 @@ Only conclude the design process after you have confirmed that the system is com
 
 # Your output must be structured as follows:
 
-## Observation
-- Review the implemented code and existing code comments.
-- Summarize your progress and previous actions briefly.
-
-## Reasoning
-- Reflect on your previous actions and any feedback from the system.
-- Determine the next logical step based on your analysis and the overall goal.
+## Plan & Diagnosis
+Provide up to 5 concise bullet points to maintain continuity across iterations:
+- **Current Goal**: The concrete objective or capability currently being targeted.
+- **Diagnosis / Findings**: Key observations from test results, errors, or prior changes.
+- **Plan**: The immediate next steps you plan to take now and in upcoming turns.
 
 ## Actions
-- Describe your intended actions in plain text.
-- Execute the necessary decorators:
+Execute the necessary decorator code blocks:
 ```
 @@decorator_name(...)
 # ... other decorators

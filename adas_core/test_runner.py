@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from adas_core.chat_model import UsageRecorder, usage_scope
-from adas_core.environment import SANDBOX_FIXTURES_DIR, isolated_case_workspace
+from adas_core.environment import SANDBOX_FIXTURES_DIR, SANDBOX_TASK_SETUP_DIR, isolated_case_workspace
 from adas_core.exceptions import (
     MissingWorkflowError,
     ValidatorContractError,
@@ -231,6 +231,17 @@ def execute_test_suite(
             if default_fp.exists():
                 active_fixtures_dir = default_fp
 
+    active_setup_dir: Path
+    if active_fixtures_dir:
+        active_setup_dir = active_fixtures_dir.parent if active_fixtures_dir.name == "fixtures" else active_fixtures_dir
+    elif os.environ.get("ADAS_FIXTURES_DIR"):
+        env_fp = Path(os.environ["ADAS_FIXTURES_DIR"])
+        active_setup_dir = env_fp.parent if env_fp.name == "fixtures" else env_fp
+    elif Path(SANDBOX_TASK_SETUP_DIR).exists():
+        active_setup_dir = Path(SANDBOX_TASK_SETUP_DIR)
+    else:
+        active_setup_dir = Path.cwd()
+
     active_workspace_root = workspace_root or os.environ.get("ADAS_WORKSPACE_ROOT")
 
     # 4. Execute test cases
@@ -290,7 +301,7 @@ def execute_test_suite(
                             process_fixture_lifecycle(
                                 task_spec.test_fixtures,
                                 test_case.fixture_ids,
-                                active_fixtures_dir if active_fixtures_dir else Path.cwd(),
+                                active_setup_dir,
                                 workspace_dirs,
                             )
                             if task_spec is not None
@@ -300,7 +311,7 @@ def execute_test_suite(
                             external_database_seed_lifecycle(
                                 task_spec,
                                 test_case.fixture_ids,
-                                active_fixtures_dir if active_fixtures_dir else Path.cwd(),
+                                active_setup_dir,
                             )
                             if task_spec is not None
                             else contextlib.nullcontext()

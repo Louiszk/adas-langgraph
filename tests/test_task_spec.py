@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,6 +21,7 @@ from adas_core.task_spec import (
     TestFixturesSpec,
     ToolRequirement,
 )
+from config import settings
 
 
 class TestTaskSpecModel:
@@ -50,6 +53,104 @@ class TestTaskSpecModel:
         assert '"dev_suite"' not in context
         assert "case_1_addition" not in context
         assert '"holdout_suite"' not in context
+
+    def test_fixtures_private_description_defaults_and_design_context_stripping(self):
+        file_fix = FileFixtureSpec(
+            path="data.csv",
+            description="PUBLIC_FILE_SCHEMA",
+            private_description="PRIVATE_FILE_SEED",
+        )
+        db_fix = DatabaseFixtureSpec(
+            name="test_db",
+            db_type="sqlite",
+            description="PUBLIC_DB_SCHEMA",
+            private_description="PRIVATE_DB_SEED",
+        )
+        mcp_fix = MCPFixtureSpec(
+            name="test_mcp",
+            port=8010,
+            description="PUBLIC_MCP_SCHEMA",
+            private_description="PRIVATE_MCP_SEED",
+        )
+        mock_fix = MockServiceFixtureSpec(
+            name="test_mock",
+            port=8020,
+            description="PUBLIC_MOCK_SCHEMA",
+            private_description="PRIVATE_MOCK_SEED",
+        )
+        custom_fix = CustomFixtureSpec(
+            name="test_custom",
+            path="custom.txt",
+            description="PUBLIC_CUSTOM_SCHEMA",
+            private_description="PRIVATE_CUSTOM_SEED",
+        )
+        seed_fix = ExternalDatabaseSeedSpec(
+            name="test_seed",
+            resource_name="ext_db",
+            db_type="neo4j",
+            driver="neo4j",
+            connection_env={"uri": "URI"},
+            namespace_kind="database",
+            namespace="adas-test-ns",
+            description="PUBLIC_SEED_SCHEMA",
+            private_description="PRIVATE_SEED_DATA",
+        )
+
+        assert file_fix.private_description == "PRIVATE_FILE_SEED"
+        assert db_fix.private_description == "PRIVATE_DB_SEED"
+        assert mcp_fix.private_description == "PRIVATE_MCP_SEED"
+        assert mock_fix.private_description == "PRIVATE_MOCK_SEED"
+        assert custom_fix.private_description == "PRIVATE_CUSTOM_SEED"
+        assert seed_fix.private_description == "PRIVATE_SEED_DATA"
+
+        default_file = FileFixtureSpec(path="default.csv")
+        assert default_file.private_description == ""
+
+        spec = TaskSpec(
+            name="PrivacyAgent",
+            system_goal="Test privacy separation.",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str"},
+            ),
+            resource_manifest=ResourceManifest(
+                available_resources=[ResourceEntry(name="ext_db", type="database", description="External DB")]
+            ),
+            test_fixtures=TestFixturesSpec(
+                files=[file_fix],
+                databases=[db_fix],
+                mcps=[mcp_fix],
+                mock_services=[mock_fix],
+                custom_fixtures=[custom_fix],
+                external_database_seeds=[seed_fix],
+            ),
+            dev_suite=[TestCaseSpec(id="c1", description="d", turns=[{"query": "q"}])],
+        )
+
+        full_dict = spec.to_dict()
+        assert full_dict["test_fixtures"]["files"][0]["private_description"] == "PRIVATE_FILE_SEED"
+        assert full_dict["test_fixtures"]["databases"][0]["private_description"] == "PRIVATE_DB_SEED"
+        assert full_dict["test_fixtures"]["external_database_seeds"][0]["private_description"] == "PRIVATE_SEED_DATA"
+
+        context = spec.to_design_context()
+        context_data = json.loads(context)
+
+        assert "dev_suite" not in context_data
+
+        assert "PUBLIC_FILE_SCHEMA" in context
+        assert "PUBLIC_DB_SCHEMA" in context
+        assert "PUBLIC_MCP_SCHEMA" in context
+        assert "PUBLIC_MOCK_SCHEMA" in context
+        assert "PUBLIC_CUSTOM_SCHEMA" in context
+        assert "PUBLIC_SEED_SCHEMA" in context
+
+        assert "private_description" not in context
+        assert "PRIVATE_FILE_SEED" not in context
+        assert "PRIVATE_DB_SEED" not in context
+        assert "PRIVATE_MCP_SEED" not in context
+        assert "PRIVATE_MOCK_SEED" not in context
+        assert "PRIVATE_CUSTOM_SEED" not in context
+        assert "PRIVATE_SEED_DATA" not in context
 
     def test_multi_turn_is_rejected_until_execution_is_implemented(self):
         with pytest.raises(ValidationError, match="NOT_IMPLEMENTED: Execution mode 'multi_turn'"):
@@ -546,7 +647,7 @@ class TestHoldoutSuiteSpecModel:
                 architecture_contract=ArchitectureContract(state_schema={"q": "str"}),
                 test_fixtures=TestFixturesSpec(external_database_seeds=[seed]),
             )
-        with pytest.raises(ValidationError, match="beginning with 'adas_test_'"):
+        with pytest.raises(ValidationError, match="adas_test_"):
             ExternalDatabaseSeedSpec(
                 name="unsafe_seed",
                 resource_name="evaluation_db",
@@ -557,7 +658,7 @@ class TestHoldoutSuiteSpecModel:
                 namespace="public",
                 description="Unsafe shared schema.",
             )
-        with pytest.raises(ValidationError, match="isolated identifier"):
+        with pytest.raises(ValidationError, match="adas_test_"):
             ExternalDatabaseSeedSpec(
                 name="escaping_seed",
                 resource_name="evaluation_db",
@@ -567,6 +668,105 @@ class TestHoldoutSuiteSpecModel:
                 namespace_kind="schema",
                 namespace="adas_test_orders/../../public",
                 description="Must not escape its cleanup namespace.",
+            )
+        with pytest.raises(ValidationError, match="adas_test_"):
+            ExternalDatabaseSeedSpec(
+                name="underscore_seed",
+                resource_name="evaluation_db",
+                db_type="postgres",
+                driver="psycopg",
+                connection_env={"uri": "EVALUATION_DB_URI"},
+                namespace_kind="schema",
+                namespace="adas-test-orders",
+                description="Hyphens in PostgreSQL namespaces must be rejected.",
+            )
+
+        with pytest.raises(ValidationError, match="adas-test-"):
+            ExternalDatabaseSeedSpec(
+                name="neo4j_seed",
+                resource_name="evaluation_db",
+                db_type="neo4j",
+                driver="neo4j",
+                connection_env={"uri": "NEO4J_URI"},
+                namespace_kind="database",
+                namespace="adas_test_graph",
+                description="Underscores in Neo4j database names must be rejected.",
+            )
+
+    def test_external_database_seed_validates_namespace_env(self):
+        seed = ExternalDatabaseSeedSpec(
+            name="valid_env_seed",
+            resource_name="evaluation_db",
+            db_type="postgres",
+            driver="psycopg",
+            connection_env={"uri": "EVALUATION_DB_URI"},
+            namespace_kind="schema",
+            namespace="adas_test_orders",
+            namespace_env="PGDATABASE",
+            description="Valid env.",
+        )
+        assert seed.namespace_env == "PGDATABASE"
+
+        with pytest.raises(ValidationError, match="valid environment-variable name"):
+            ExternalDatabaseSeedSpec(
+                name="invalid_env_seed",
+                resource_name="evaluation_db",
+                db_type="postgres",
+                driver="psycopg",
+                connection_env={"uri": "EVALUATION_DB_URI"},
+                namespace_kind="schema",
+                namespace="adas_test_orders",
+                namespace_env="123-bad-env",
+                description="Invalid env.",
+            )
+
+        with pytest.raises(ValidationError, match="must not overwrite"):
+            TaskSpec(
+                name="SeedEnvConflict",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(state_schema={"q": "str"}),
+                resource_manifest=ResourceManifest(
+                    available_resources=[ResourceEntry(name="evaluation_db", type="database")]
+                ),
+                test_fixtures=TestFixturesSpec(
+                    external_database_seeds=[
+                        ExternalDatabaseSeedSpec(
+                            name="conflicting_seed",
+                            resource_name="evaluation_db",
+                            db_type="postgres",
+                            driver="psycopg",
+                            connection_env={"uri": "EVALUATION_DB_URI"},
+                            namespace_kind="schema",
+                            namespace="adas_test_orders",
+                            namespace_env="EVALUATION_DB_URI",
+                            description="Conflict.",
+                        )
+                    ]
+                ),
+            )
+
+        with pytest.raises(ValidationError, match="cannot use reserved"):
+            TaskSpec(
+                name="ReservedSeedEnv",
+                system_goal="Goal",
+                architecture_contract=ArchitectureContract(state_schema={"q": "str"}),
+                resource_manifest=ResourceManifest(
+                    available_resources=[ResourceEntry(name="evaluation_db", type="database")]
+                ),
+                test_fixtures=TestFixturesSpec(
+                    external_database_seeds=[
+                        ExternalDatabaseSeedSpec(
+                            name="reserved_seed",
+                            resource_name="evaluation_db",
+                            db_type="postgres",
+                            driver="psycopg",
+                            connection_env={"uri": "ADAS_TEST_NAMESPACE"},
+                            namespace_kind="schema",
+                            namespace="adas_test_orders",
+                            description="Conflict.",
+                        )
+                    ]
+                ),
             )
 
     def test_custom_fixture_requires_artifact_path(self):
@@ -748,3 +948,115 @@ class TestBenchmarkSpecs:
                 assert callable(module.VALIDATORS[test_case.id]), (
                     f"Validator for '{test_case.id}' in {validation_file} must be callable"
                 )
+
+    def test_additional_documentation_validation(self):
+        valid_paths = [
+            "docs/reference.md",
+            "example_docs/mcp-documentation.md",
+            "./docs/guide.md",
+            "notes.txt",
+        ]
+        spec = TaskSpec(
+            name="DocAgent",
+            system_goal="Test documentation loading.",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str", "answer": "str"},
+            ),
+            additional_documentation=valid_paths,
+            dev_suite=[
+                TestCaseSpec(
+                    id="case_1",
+                    description="Case 1",
+                    turns=[{"query": "hello"}],
+                    expected_outputs=["answer"],
+                )
+            ],
+        )
+        assert spec.additional_documentation == [
+            "docs/reference.md",
+            "example_docs/mcp-documentation.md",
+            "docs/guide.md",
+            "notes.txt",
+        ]
+
+        invalid_paths = [
+            "/etc/passwd",
+            "C:\\secret.txt",
+            "C:/secret.txt",
+            "\\windows\\system32",
+            "\\\\server\\share\\doc.md",
+            "../secret.txt",
+            "docs/../../etc/passwd",
+            "",
+            "   ",
+            "docs/image.png",
+        ]
+        for invalid in invalid_paths:
+            with pytest.raises(ValidationError):
+                TaskSpec(
+                    name="DocAgent",
+                    system_goal="Test documentation loading.",
+                    architecture_contract=ArchitectureContract(
+                        execution_mode="single_turn",
+                        state_schema={"query": "str", "answer": "str"},
+                    ),
+                    additional_documentation=[invalid],
+                    dev_suite=[
+                        TestCaseSpec(
+                            id="case_1",
+                            description="Case 1",
+                            turns=[{"query": "hello"}],
+                            expected_outputs=["answer"],
+                        )
+                    ],
+                )
+
+    def test_additional_documentation_loading_and_confinement(self, tmp_path):
+        doc_file = tmp_path / "docs" / "api.md"
+        doc_file.parent.mkdir(parents=True, exist_ok=True)
+        doc_file.write_text("# API Reference\nEndpoint details.", encoding="utf-8")
+
+        spec = TaskSpec(
+            name="DocAgent",
+            system_goal="Test documentation loading.",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str", "answer": "str"},
+            ),
+            additional_documentation=["docs/api.md"],
+            dev_suite=[
+                TestCaseSpec(
+                    id="case_1",
+                    description="Case 1",
+                    turns=[{"query": "hello"}],
+                    expected_outputs=["answer"],
+                )
+            ],
+        )
+
+        loaded = spec.load_additional_documentation(task_dir=tmp_path)
+        assert "## Additional Reference Documentation" in loaded
+        assert "### Reference: api.md" in loaded
+        assert "# API Reference\nEndpoint details." in loaded
+
+    def test_additional_documentation_skips_invalid_utf8_and_respects_token_budget(self, tmp_path, monkeypatch):
+        import tiktoken
+
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "invalid.txt").write_bytes(b"\xff\xfe")
+        (docs_dir / "first.md").write_text("first document " * 20, encoding="utf-8")
+        (docs_dir / "second.md").write_text("second document " * 20, encoding="utf-8")
+        monkeypatch.setattr(settings, "additional_documentation_max_tokens", 15)
+
+        spec = TaskSpec(
+            name="BoundedDocs",
+            system_goal="Test bounded documentation loading.",
+            architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+            additional_documentation=["docs/invalid.txt", "docs/first.md", "docs/second.md"],
+        )
+
+        loaded = spec.load_additional_documentation(task_dir=tmp_path)
+        assert "invalid.txt" not in loaded
+        assert len(tiktoken.get_encoding(settings.additional_documentation_token_encoding).encode(loaded)) <= 15

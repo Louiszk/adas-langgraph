@@ -24,5 +24,5 @@ class MetaState(TypedDict, total=False):
     remaining_steps: RemainingSteps
     max_iterations: int
     optimize: bool
-    task_spec: TaskSpec | dict[str, Any]
+    task_spec: TaskSpec
     task_dir: str

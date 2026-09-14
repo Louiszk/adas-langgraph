@@ -10,6 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from adas_core.exceptions import FeatureNotImplementedError
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
+from adas_core.logging_config import get_logger
+from config import settings
+
+logger = get_logger("adas_core.task_spec")
+
+_DOCUMENTATION_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst", ".yaml", ".yml", ".json", ".toml"})
 
 
 class ToolRequirement(BaseModel):
@@ -144,6 +150,10 @@ class FileFixtureSpec(BaseModel):
         default=1, ge=1, description="Number of files to generate (1 for single file, N for batch/folder)"
     )
     description: str = Field(default="", description="Purpose, schema, or content requirements for this file")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
     content_type: Literal["text", "csv", "json", "binary"] = Field(default="text", description="File format")
 
     @field_validator("path")
@@ -177,6 +187,10 @@ class DatabaseFixtureSpec(BaseModel):
     )
     count: int | None = Field(default=None, ge=1, description="Target number of records, rows, or nodes to seed")
     description: str = Field(default="", description="Schema, entities, tables, or graph structure to populate")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -224,6 +238,10 @@ class MCPFixtureSpec(BaseModel):
     description: str = Field(
         default="", description="Tools, resources, and simulated behaviors this MCP server provides"
     )
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -266,6 +284,10 @@ class MockServiceFixtureSpec(BaseModel):
         default="MOCK_API_BASE_URL", description="Env var exposing the mock server URL to the agent"
     )
     description: str = Field(default="", description="Endpoints, routes, and response behavior to mock")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -306,6 +328,10 @@ class CustomFixtureSpec(BaseModel):
         description="Relative file or directory artifact produced by custom setup (e.g. 'repo/' or 'config.yaml')",
     )
     description: str = Field(..., min_length=1, description="Description of the custom setup requirements")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -351,11 +377,23 @@ class ExternalDatabaseSeedSpec(BaseModel):
     namespace_kind: Literal["schema", "database", "namespace", "collection"] = Field(
         ..., description="The isolated unit that setup owns and cleanup drops"
     )
-    namespace: str = Field(..., min_length=1, description="Dedicated ADAS test namespace, beginning with 'adas_test_'")
+    namespace: str = Field(
+        ...,
+        min_length=1,
+        description="Dedicated ADAS test namespace using the database engine's safe naming convention",
+    )
+    namespace_env: str = Field(
+        default="",
+        description="Environment variable name used to expose the active isolated namespace to the target system during test execution (e.g. 'NEO4J_DATABASE' or 'PGDATABASE')",
+    )
     cleanup_policy: Literal["drop_namespace"] = Field(
         default="drop_namespace", description="Required conservative cleanup action after every case"
     )
     description: str = Field(..., min_length=1, description="Schema and deterministic seed-data requirements")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name", "resource_name")
     @classmethod
@@ -378,13 +416,11 @@ class ExternalDatabaseSeedSpec(BaseModel):
                 raise ValueError("external database seed connection_env values must be environment-variable names.")
         return v
 
-    @field_validator("namespace")
+    @field_validator("namespace_env")
     @classmethod
-    def validate_isolated_namespace(cls, v: str) -> str:
-        if not re.fullmatch(r"adas_test_[A-Za-z0-9_]{1,52}", v):
-            raise ValueError(
-                "external database seed namespace must be an isolated identifier beginning with 'adas_test_'."
-            )
+    def validate_namespace_env(cls, v: str) -> str:
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("external database seed namespace_env must be a valid environment-variable name.")
         return v
 
     @model_validator(mode="after")
@@ -392,6 +428,22 @@ class ExternalDatabaseSeedSpec(BaseModel):
         if not self.id:
             self.id = self.name
         validate_identifier(self.id, field_name="external database seed id")
+        return self
+
+    @model_validator(mode="after")
+    def validate_engine_safe_namespace(self) -> ExternalDatabaseSeedSpec:
+        if self.db_type == "postgres" and not re.fullmatch(r"adas_test_[a-z0-9_]{1,52}", self.namespace):
+            raise ValueError(
+                "PostgreSQL external database seed namespaces must use lowercase letters, digits, and underscores "
+                "with the 'adas_test_' prefix. PostgreSQL rejects unquoted hyphens in identifiers."
+            )
+        if self.db_type == "neo4j" and not re.fullmatch(
+            r"adas-test-[a-z0-9](?:[a-z0-9.-]{0,51}[a-z0-9])?", self.namespace
+        ):
+            raise ValueError(
+                "Neo4j external database seed namespaces must use lowercase letters, digits, and dashes "
+                "with the 'adas-test-' prefix. Neo4j database names reject underscores."
+            )
         return self
 
 
@@ -686,9 +738,25 @@ class TaskSpec(BaseModel):
     test_fixtures: TestFixturesSpec = Field(
         default_factory=TestFixturesSpec, description="Data fixtures required for tests"
     )
+    additional_documentation: list[str] = Field(
+        default_factory=list,
+        description="Optional list of documentation file paths relative to workspace or task directory to inject into the meta-agent context.",
+    )
     dev_suite: list[TestCaseSpec] = Field(
         default_factory=list, description="Visible test cases used for iterative refinement"
     )
+
+    @field_validator("additional_documentation")
+    @classmethod
+    def validate_additional_documentation(cls, v: list[str]) -> list[str]:
+        normalized_paths = [
+            normalize_fixture_path(doc_path, field_name="additional_documentation path") for doc_path in v
+        ]
+        unsupported = [path for path in normalized_paths if Path(path).suffix.lower() not in _DOCUMENTATION_SUFFIXES]
+        if unsupported:
+            allowed = ", ".join(sorted(_DOCUMENTATION_SUFFIXES))
+            raise ValueError(f"additional_documentation files must use one of: {allowed}. Unsupported: {unsupported}")
+        return normalized_paths
 
     @field_validator("required_packages")
     @classmethod
@@ -762,6 +830,11 @@ class TaskSpec(BaseModel):
         """Ensure a seed explicitly targets a declared external database resource."""
         resources = {resource.name: resource for resource in self.resource_manifest.available_resources}
         for seed in self.test_fixtures.external_database_seeds:
+            if "ADAS_TEST_NAMESPACE" in seed.connection_env.values():
+                raise ValueError(
+                    f"External database seed '{seed.id}' cannot use reserved connection environment variable "
+                    "'ADAS_TEST_NAMESPACE'."
+                )
             resource = resources.get(seed.resource_name)
             if resource is None:
                 raise ValueError(
@@ -770,6 +843,11 @@ class TaskSpec(BaseModel):
             if resource.type != "database":
                 raise ValueError(
                     f"External database seed '{seed.id}' references resource '{seed.resource_name}', which is not a database."
+                )
+            if seed.namespace_env and seed.namespace_env in seed.connection_env.values():
+                raise ValueError(
+                    f"External database seed '{seed.id}' namespace_env '{seed.namespace_env}' "
+                    "must not overwrite one of its connection environment variables."
                 )
         return self
 
@@ -780,12 +858,87 @@ class TaskSpec(BaseModel):
     def to_design_context(self) -> str:
         """Render the generalization-focused task contract supplied to the meta-agent.
 
-        This intentionally excludes the concrete development cases.
-        TaskSpec also has no holdout fields, so this representation cannot expose a private evaluation suite.
+        This intentionally excludes concrete development cases and any private fixture
+        seeding descriptions (private_description), exposing only public schemas and contracts.
         """
         context = self.to_dict()
         context.pop("dev_suite", None)
+        test_fixtures = context.get("test_fixtures")
+        if isinstance(test_fixtures, dict):
+            for fixture_list in test_fixtures.values():
+                if isinstance(fixture_list, list):
+                    for fixture in fixture_list:
+                        if isinstance(fixture, dict):
+                            fixture.pop("private_description", None)
         return json.dumps(context, indent=2, sort_keys=True)
+
+    def load_additional_documentation(self, task_dir: Path | str | None = None) -> str:
+        """Load and format referenced documentation files into markdown sections."""
+        if not self.additional_documentation:
+            return ""
+
+        try:
+            import tiktoken
+
+            encoding = tiktoken.get_encoding(settings.additional_documentation_token_encoding)
+            prefix = "\n\n---\n\n## Additional Reference Documentation\n\n"
+            remaining_tokens = settings.additional_documentation_max_tokens - len(encoding.encode(prefix))
+        except (ImportError, ValueError) as exc:
+            logger.warning("Could not initialize the additional-documentation token counter: %s", exc)
+            return ""
+        if remaining_tokens <= 0:
+            logger.warning("The configured additional-documentation token budget is too small to include a document.")
+            return ""
+
+        search_roots = [Path(".")]
+        if task_dir:
+            search_roots.insert(0, Path(task_dir))
+        search_roots.append(Path("/sandbox/workspace"))
+
+        doc_blocks: list[str] = []
+        for doc_path_str in self.additional_documentation:
+            rel_path = Path(doc_path_str)
+            found_file: Path | None = None
+            for root in search_roots:
+                resolved_root = root.resolve()
+                candidate = (root / rel_path).resolve()
+                try:
+                    candidate.relative_to(resolved_root)
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    found_file = candidate
+                    break
+
+            if found_file:
+                try:
+                    if found_file.stat().st_size > remaining_tokens * 8:
+                        logger.warning(
+                            "Referenced documentation file '%s' exceeds the configured size limit.", doc_path_str
+                        )
+                        continue
+                    content = found_file.read_text(encoding="utf-8").strip()
+                except (OSError, UnicodeError) as exc:
+                    logger.warning("Could not read referenced documentation file '%s': %s", doc_path_str, exc)
+                    continue
+                separator = "" if not doc_blocks else "\n\n"
+                block = f"{separator}### Reference: {rel_path.name}\n\n{content}"
+                token_count = len(encoding.encode(block))
+                if token_count > remaining_tokens:
+                    logger.warning(
+                        "Referenced documentation file '%s' exceeds the remaining %d-token budget.",
+                        doc_path_str,
+                        remaining_tokens,
+                    )
+                    continue
+                doc_blocks.append(block.removeprefix("\n\n"))
+                remaining_tokens -= token_count
+            else:
+                logger.warning("Referenced documentation file '%s' not found.", doc_path_str)
+
+        if not doc_blocks:
+            return ""
+        return prefix + "\n\n".join(doc_blocks)
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize to formatted JSON string."""

@@ -28,12 +28,12 @@ def find_markdown_fences(markdown: str) -> list[dict[str, Any]]:
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not in_block:
-            if stripped.startswith("```"):
+            if line.count("```") == 1 and re.search(r"```[a-zA-Z0-9_-]*\s*$", line):
                 in_block = True
                 current_lines = []
                 start_line = i + 1
         else:
-            if stripped == "```" or stripped.startswith("```"):
+            if stripped == "```" or re.fullmatch(r"```\s*", stripped):
                 in_block = False
                 blocks.append(
                     {
@@ -68,12 +68,12 @@ def find_code_blocks(markdown: str) -> list[dict[str, Any]]:
         stripped = line.strip()
 
         if not in_code_block:
-            if stripped.startswith("```"):
+            if line.count("```") == 1 and re.search(r"```[a-zA-Z0-9_-]*\s*$", line):
                 in_code_block = True
                 current_block_content = []
                 current_block_start_line = i + 1
         else:
-            if stripped == "```":
+            if stripped == "```" or re.fullmatch(r"```\s*", stripped):
                 block_so_far = "\n".join(current_block_content)
 
                 try:

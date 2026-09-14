@@ -94,18 +94,36 @@ def is_package_excluded(
 
 
 def is_package_installed(package_name: str) -> bool:
-    """Check if a package distribution is installed in the current environment."""
-    canonical = normalize_package_name(package_name)
+    """Check if a package distribution is installed in the current environment and satisfies any version constraints."""
     try:
-        importlib.metadata.version(canonical)
-        return True
-    except (importlib.metadata.PackageNotFoundError, ValueError):
-        # Fallback for packages where distribution name differs or standard library modules
+        from packaging.requirements import Requirement
+
+        req = Requirement(package_name)
+        canonical = canonicalize_name(req.name)
         try:
-            importlib.import_module(canonical.replace("-", "_"))
+            installed_ver = importlib.metadata.version(canonical)
+            if req.specifier and installed_ver not in req.specifier:
+                return False
             return True
-        except (ImportError, ValueError):
-            return False
+        except (importlib.metadata.PackageNotFoundError, ValueError):
+            if req.specifier:
+                return False
+            try:
+                importlib.import_module(canonical.replace("-", "_"))
+                return True
+            except (ImportError, ValueError):
+                return False
+    except Exception:
+        canonical = normalize_package_name(package_name)
+        try:
+            importlib.metadata.version(canonical)
+            return True
+        except (importlib.metadata.PackageNotFoundError, ValueError):
+            try:
+                importlib.import_module(canonical.replace("-", "_"))
+                return True
+            except (ImportError, ValueError):
+                return False
 
 
 def ensure_packages_installed(

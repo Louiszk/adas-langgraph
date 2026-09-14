@@ -99,9 +99,9 @@ def _wait_for_mcp_endpoint(
 ) -> None:
     """Verify that the declared Streamable HTTP endpoint exists without using it.
 
-    OPTIONS is intentionally non-destructive.  FastMCP endpoints can be
-    POST-only, so 405 is a valid proof that the configured path exists.  A 404
-    is definitive evidence that the TaskSpec endpoint path is wrong.
+    OPTIONS is intentionally non-destructive. MCP endpoints can be
+    POST-only, so 405 is a valid proof that the configured path exists.
+    A 404 is definitive evidence that the TaskSpec endpoint path is wrong.
     """
     deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -275,6 +275,65 @@ def _load_seed_functions(script: Path, seed: ExternalDatabaseSeedSpec) -> tuple[
     return seed_fn, cleanup_fn
 
 
+def _validate_selected_seed_environment_contract(
+    task_spec: TaskSpec,
+    fixture_ids: list[str] | None,
+    selected_seeds: list[ExternalDatabaseSeedSpec],
+) -> None:
+    """Reject environment collisions before any seed can read or alter configuration."""
+    connection_owners: dict[str, list[str]] = {}
+    for seed in selected_seeds:
+        for env_name in seed.connection_env.values():
+            connection_owners.setdefault(env_name, []).append(seed.id)
+
+    if len(selected_seeds) > 1:
+        missing_namespace_env = [seed.id for seed in selected_seeds if not seed.namespace_env]
+        if missing_namespace_env:
+            raise FixtureExecutionError(
+                "Multiple external database seeds require an explicit namespace_env for every selected seed. "
+                f"Missing for: {', '.join(missing_namespace_env)}."
+            )
+        namespace_envs: dict[str, str] = {}
+        for seed in selected_seeds:
+            if existing_seed_id := namespace_envs.get(seed.namespace_env):
+                raise FixtureExecutionError(
+                    f"External database seeds '{existing_seed_id}' and '{seed.id}' cannot run together because both "
+                    f"set namespace environment variable '{seed.namespace_env}'."
+                )
+            namespace_envs[seed.namespace_env] = seed.id
+
+    if "ADAS_TEST_NAMESPACE" in connection_owners:
+        owners = ", ".join(connection_owners["ADAS_TEST_NAMESPACE"])
+        raise FixtureExecutionError(
+            "ADAS_TEST_NAMESPACE is reserved for the active external database namespace and cannot be used "
+            f"as a connection environment variable (seed(s): {owners})."
+        )
+
+    namespace_exports: dict[str, list[str]] = {}
+    if len(selected_seeds) == 1:
+        namespace_exports["ADAS_TEST_NAMESPACE"] = [selected_seeds[0].id]
+    for seed in selected_seeds:
+        if seed.namespace_env:
+            namespace_exports.setdefault(seed.namespace_env, []).append(seed.id)
+
+    selected_process_fixtures = task_spec.test_fixtures.get_process_fixtures_for_fixture_ids(fixture_ids)
+    process_envs = {
+        fixture.url_env if isinstance(fixture, MCPFixtureSpec) else fixture.base_url_env
+        for fixture in selected_process_fixtures
+    }
+    for env_name, seed_ids in namespace_exports.items():
+        if connection_seed_ids := connection_owners.get(env_name):
+            raise FixtureExecutionError(
+                f"Namespace environment variable '{env_name}' exported by seed(s) {', '.join(seed_ids)} "
+                f"collides with connection configuration for seed(s) {', '.join(connection_seed_ids)}."
+            )
+        if env_name in process_envs:
+            raise FixtureExecutionError(
+                f"Namespace environment variable '{env_name}' exported by seed(s) {', '.join(seed_ids)} "
+                "collides with a selected process-fixture URL environment variable."
+            )
+
+
 @contextmanager
 def external_database_seed_lifecycle(
     task_spec: TaskSpec,
@@ -288,8 +347,14 @@ def external_database_seed_lifecycle(
     """
     prepared: list[tuple[ExternalDatabaseSeedSpec, dict[str, str], Any]] = []
     primary_error: BaseException | None = None
+    previous_env: dict[str, str | None] = {}
+    selected_seeds = task_spec.test_fixtures.get_external_database_seeds_for_fixture_ids(fixture_ids)
+    _validate_selected_seed_environment_contract(task_spec, fixture_ids, selected_seeds)
     try:
-        for seed in task_spec.test_fixtures.get_external_database_seeds_for_fixture_ids(fixture_ids):
+        if len(selected_seeds) > 1:
+            previous_env["ADAS_TEST_NAMESPACE"] = os.environ.get("ADAS_TEST_NAMESPACE")
+            os.environ.pop("ADAS_TEST_NAMESPACE", None)
+        for seed in selected_seeds:
             config = _connection_config(seed)
             seed_fn, cleanup_fn = _load_seed_functions(_seed_script_path(Path(setup_dir), seed), seed)
             # Register before mutation: a seed function may partially populate a namespace before failing.
@@ -297,18 +362,32 @@ def external_database_seed_lifecycle(
             try:
                 seed_fn(config, seed.namespace)
             except Exception as exc:
-                raise FixtureExecutionError(f"External database seed '{seed.id}' failed during setup.") from exc
+                raise FixtureExecutionError(
+                    f"External database seed '{seed.id}' failed during setup ({type(exc).__name__})."
+                ) from exc
+            if len(selected_seeds) == 1 and "ADAS_TEST_NAMESPACE" not in previous_env:
+                previous_env["ADAS_TEST_NAMESPACE"] = os.environ.get("ADAS_TEST_NAMESPACE")
+                os.environ["ADAS_TEST_NAMESPACE"] = seed.namespace
+            if seed.namespace_env:
+                if seed.namespace_env not in previous_env:
+                    previous_env[seed.namespace_env] = os.environ.get(seed.namespace_env)
+                os.environ[seed.namespace_env] = seed.namespace
         yield
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         cleanup_failures: list[str] = []
         for seed, config, cleanup_fn in reversed(prepared):
             try:
                 cleanup_fn(config, seed.namespace)
-            except Exception:
-                cleanup_failures.append(seed.id)
+            except Exception as cleanup_exc:
+                cleanup_failures.append(f"{seed.id} ({type(cleanup_exc).__name__})")
         if cleanup_failures and primary_error is None:
             raise FixtureExecutionError(
                 "External database cleanup failed for seed(s): " + ", ".join(cleanup_failures) + "."

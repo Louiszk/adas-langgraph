@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from adas_core.fixture_lifecycle import external_database_seed_lifecycle
 from adas_core.task_spec import (
     ArchitectureContract,
     ExternalDatabaseSeedSpec,
+    MCPFixtureSpec,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -131,4 +133,114 @@ def test_lifecycle_requires_cleanup_contract_before_seeding(tmp_path, monkeypatc
 
     with pytest.raises(FixtureExecutionError, match="must define both"):
         with external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path):
+            pass
+
+
+def test_lifecycle_exports_and_restores_namespace_environment(tmp_path, monkeypatch):
+    events = tmp_path / "events.txt"
+    _write_script(tmp_path, _script(events))
+    monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+    monkeypatch.delenv("ADAS_TEST_NAMESPACE", raising=False)
+    monkeypatch.delenv("CUSTOM_NAMESPACE_ENV", raising=False)
+
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds[0].namespace_env = "CUSTOM_NAMESPACE_ENV"
+
+    assert "ADAS_TEST_NAMESPACE" not in os.environ
+    assert "CUSTOM_NAMESPACE_ENV" not in os.environ
+
+    with external_database_seed_lifecycle(spec, ["orders_seed"], tmp_path):
+        assert os.environ["ADAS_TEST_NAMESPACE"] == "adas_test_orders"
+        assert os.environ["CUSTOM_NAMESPACE_ENV"] == "adas_test_orders"
+
+    assert "ADAS_TEST_NAMESPACE" not in os.environ
+    assert "CUSTOM_NAMESPACE_ENV" not in os.environ
+
+
+def test_lifecycle_rejects_multiple_seeds_without_explicit_namespace_environments(tmp_path, monkeypatch):
+    _write_script(tmp_path, _script(tmp_path / "events.txt"))
+    monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds.append(
+        ExternalDatabaseSeedSpec(
+            name="other_seed",
+            resource_name="evaluation_db",
+            db_type="postgres",
+            driver="psycopg",
+            connection_env={"uri": "EVALUATION_DB_URI"},
+            namespace_kind="schema",
+            namespace="adas_test_other",
+            description="Another isolated schema.",
+        )
+    )
+
+    with pytest.raises(FixtureExecutionError, match="require an explicit namespace_env"):
+        with external_database_seed_lifecycle(spec, None, tmp_path):
+            pass
+
+
+def test_lifecycle_exports_only_explicit_namespace_environments_for_multiple_seeds(tmp_path, monkeypatch):
+    events = tmp_path / "events.txt"
+    _write_script(tmp_path, _script(events))
+    script_dir = tmp_path / "setup_scripts"
+    (script_dir / "seed_external_other_seed.py").write_text(_script(events), encoding="utf-8")
+    monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+    monkeypatch.setenv("ADAS_TEST_NAMESPACE", "inherited-namespace")
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds[0].namespace_env = "PRIMARY_NAMESPACE"
+    spec.test_fixtures.external_database_seeds.append(
+        ExternalDatabaseSeedSpec(
+            name="other_seed",
+            resource_name="evaluation_db",
+            db_type="postgres",
+            driver="psycopg",
+            connection_env={"uri": "EVALUATION_DB_URI"},
+            namespace_kind="schema",
+            namespace="adas_test_other",
+            namespace_env="SECONDARY_NAMESPACE",
+            description="Another isolated schema.",
+        )
+    )
+
+    with external_database_seed_lifecycle(spec, ["orders_seed", "other_seed"], tmp_path):
+        assert "ADAS_TEST_NAMESPACE" not in os.environ
+        assert os.environ["PRIMARY_NAMESPACE"] == "adas_test_orders"
+        assert os.environ["SECONDARY_NAMESPACE"] == "adas_test_other"
+
+    assert os.environ["ADAS_TEST_NAMESPACE"] == "inherited-namespace"
+    assert "PRIMARY_NAMESPACE" not in os.environ
+    assert "SECONDARY_NAMESPACE" not in os.environ
+
+
+def test_lifecycle_rejects_namespace_export_collision_with_selected_seed_connection(tmp_path, monkeypatch):
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds[0].namespace_env = "SECONDARY_DB_URI"
+    spec.test_fixtures.external_database_seeds.append(
+        ExternalDatabaseSeedSpec(
+            name="other_seed",
+            resource_name="evaluation_db",
+            db_type="postgres",
+            driver="psycopg",
+            connection_env={"uri": "SECONDARY_DB_URI"},
+            namespace_kind="schema",
+            namespace="adas_test_other",
+            namespace_env="OTHER_NAMESPACE",
+            description="Another isolated schema.",
+        )
+    )
+    monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+    monkeypatch.setenv("SECONDARY_DB_URI", "postgres://other@example/test")
+
+    with pytest.raises(FixtureExecutionError, match="collides with connection configuration"):
+        with external_database_seed_lifecycle(spec, ["orders_seed", "other_seed"], tmp_path):
+            pass
+
+
+def test_lifecycle_rejects_namespace_export_collision_with_process_fixture(tmp_path):
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds[0].namespace_env = "MCP_URL"
+    spec.test_fixtures.mcps.append(MCPFixtureSpec(name="tools", port=8090, url_env="MCP_URL"))
+
+    with pytest.raises(FixtureExecutionError, match="process-fixture URL"):
+        with external_database_seed_lifecycle(spec, ["orders_seed", "tools"], tmp_path):
             pass

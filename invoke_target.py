@@ -238,7 +238,12 @@ def main() -> int:
             runtime_task_dir: str | None = None
             if args.task_spec:
                 task_dir = args.task_spec.resolve().parent
-                runtime_task_dir = copy_task_setup_to_sandbox(session, task_dir, args.task_spec.resolve())
+                runtime_task_dir = copy_task_setup_to_sandbox(
+                    session,
+                    task_dir,
+                    args.task_spec.resolve(),
+                    task_spec.additional_documentation if task_spec else None,
+                )
                 if runtime_profile:
                     runtime_profile = stage_runtime_profile_sources(session, runtime_profile)
                 preflight_ok = (

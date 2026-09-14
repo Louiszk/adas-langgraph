@@ -361,6 +361,26 @@ class TestSetupSandboxUtilities:
         assert f"{SANDBOX_TASK_SETUP_DIR}/task.json" in copied_destinations
         assert not any("__pycache__" in dest for dest in copied_destinations)
 
+    def test_copy_task_setup_to_sandbox_stages_declared_documentation(self, tmp_path):
+        from adas_core.environment import SANDBOX_WORKSPACE_DIR
+        from sandbox.sandbox import copy_task_setup_to_sandbox
+
+        task_dir = tmp_path / "task"
+        task_dir.mkdir()
+        docs_dir = task_dir / "docs"
+        docs_dir.mkdir()
+        doc_path = docs_dir / "reference.md"
+        doc_path.write_text("# Reference", encoding="utf-8")
+        spec_path = task_dir / "task.json"
+        spec_path.write_text("{}", encoding="utf-8")
+        mock_session = MagicMock()
+
+        copy_task_setup_to_sandbox(mock_session, task_dir, spec_path, ["docs/reference.md"])
+
+        assert (str(doc_path), f"{SANDBOX_WORKSPACE_DIR}/docs/reference.md") in [
+            call.args for call in mock_session.copy_to_runtime.call_args_list
+        ]
+
     def test_run_sandbox_preflight_success(self):
         from adas_core.environment import SANDBOX_TASK_SETUP_DIR
         from sandbox.sandbox import run_sandbox_preflight
