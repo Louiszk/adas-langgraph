@@ -36,7 +36,10 @@ def _normalized_sha256(path: Path) -> str:
 
 def _task_spec_sha256(task_spec: TaskSpec) -> str:
     """Hash the semantic TaskSpec content used to generate a validation module."""
-    payload = json.dumps(task_spec.to_dict(), sort_keys=True, separators=(",", ":"))
+    data = task_spec.to_dict()
+    if not data.get("additional_documentation"):
+        data.pop("additional_documentation", None)
+    payload = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -80,32 +83,61 @@ def write_validation_manifest(task_spec: TaskSpec, root: Path, validation_file: 
     return manifest_path
 
 
-def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) -> bool:
-    """Return whether the frozen validator and all its generation inputs still match."""
+def verify_validation_manifest(task_spec: TaskSpec, task_dir: Path | str) -> tuple[bool, list[str]]:
+    """Return whether the frozen validator and all its generation inputs match, plus diagnostic issues."""
     root = Path(task_dir).resolve()
     manifest_path = root / _SETUP_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return False, ["Missing setup_manifest.json"]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        validation = manifest.get("validation")
-        if not isinstance(validation, dict):
-            return False
-        validator_name = validation.get("validator_file")
-        validator_hash = validation.get("validator_hash")
-        if not isinstance(validator_name, str) or not isinstance(validator_hash, str):
-            return False
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return False, [f"Unreadable setup_manifest.json: {exc}"]
+
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict):
+        return False, ["Missing 'validation' section in setup_manifest.json"]
+
+    issues: list[str] = []
+    if validation.get("schema_version") != "1.0":
+        issues.append(f"Validation schema version mismatch: {validation.get('schema_version')}")
+    if validation.get("task_name") != task_spec.name:
+        issues.append(f"Task name mismatch: manifest={validation.get('task_name')!r}, spec={task_spec.name!r}")
+    if validation.get("generator_version") != VALIDATION_GENERATOR_VERSION:
+        issues.append(
+            f"Generator version mismatch: manifest={validation.get('generator_version')}, current={VALIDATION_GENERATOR_VERSION}"
+        )
+
+    expected_spec_hash = validation.get("task_spec_hash")
+    actual_spec_hash = _task_spec_sha256(task_spec)
+    if expected_spec_hash != actual_spec_hash:
+        issues.append(
+            f"TaskSpec hash mismatch (expected: {str(expected_spec_hash)[:12]}..., actual: {actual_spec_hash[:12]}...)"
+        )
+
+    expected_gen_hashes = validation.get("fixture_generator_hashes")
+    actual_gen_hashes = _fixture_generator_hashes(root)
+    if expected_gen_hashes != actual_gen_hashes:
+        issues.append("Fixture generator scripts hash mismatch")
+
+    validator_name = validation.get("validator_file")
+    validator_hash = validation.get("validator_hash")
+    if not isinstance(validator_name, str) or not isinstance(validator_hash, str):
+        issues.append("Missing validator_file or validator_hash in manifest")
+    else:
         validator_file = (root / validator_name).resolve()
         if not validator_file.is_relative_to(root) or not validator_file.is_file():
-            return False
-        return (
-            validation.get("schema_version") == "1.0"
-            and validation.get("task_name") == task_spec.name
-            and validation.get("task_spec_hash") == _task_spec_sha256(task_spec)
-            and validation.get("fixture_generator_hashes") == _fixture_generator_hashes(root)
-            and validation.get("generator_version") == VALIDATION_GENERATOR_VERSION
-            and validator_hash == _normalized_sha256(validator_file)
-        )
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
+            issues.append(f"Missing validator file: {validator_name}")
+        elif validator_hash != _normalized_sha256(validator_file):
+            issues.append(f"Hash mismatch for validator file: {validator_name}")
+
+    return len(issues) == 0, issues
+
+
+def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) -> bool:
+    """Return whether the frozen validator and all its generation inputs still match."""
+    is_current, _ = verify_validation_manifest(task_spec, task_dir)
+    return is_current
 
 
 @dataclass
@@ -176,6 +208,8 @@ MANDATORY RULES:
       Use the literal overrides supplied in the case context whenever they are populated; otherwise pass None.
      `eval_result = judge.evaluate(prompt=f"Task: ... Criteria: ... Output: {final_state}")`
      `if not eval_result.is_pass: return False, f"LLM Judge rejected: {eval_result.reasoning}"`
+   - State Serialization:
+     When formatting or serializing `final_state` to JSON (e.g. for LLMJudge prompts or inspection), always use `default=str` in `json.dumps(final_state, default=str)` so LangChain message objects (`AIMessage`, `ToolMessage`) and other non-JSON types are handled safely.
    - Arbitrary Structured Extraction:
      If you need domain-specific structured metrics, scores, or flags to pass into downstream assertions:
      define a Pydantic model (e.g. `class ExtractedMetrics(BaseModel): ...`) and pass `schema=ExtractedMetrics`
@@ -186,9 +220,10 @@ MANDATORY RULES:
      LLMJudge automatically encodes images and inspects them using vision capabilities.
 
 5. SCOPE ASSERTIONS STRICTLY TO DECLARED OUTPUTS & GROUND TRUTH:
+   - Use deterministic assertions strictly for hard operational boundaries (e.g., state schema types, file existence/creation, side-effect counts, structural constraints like character limits, API audit logs).
+   - Never use deterministic assertions for natural language phrasing, reasoning nuances, or qualitative tone. Avoid brittle text matching, substring searches, or arbitrary synonym searching. Delegate all semantic and qualitative verification to `LLMJudge`.
    - Only check outputs declared in `expected_outputs` or explicitly requested by the test case turns.
    - Ground assertions strictly in the exact columns, schemas, and planted values revealed by the fixture generator code.
-   - Avoid brittle text matching or arbitrary synonym searching. Use `LLMJudge` for qualitative aspects.
 
 6. CODE FORMAT:
    - Output valid, complete, runnable Python code only inside a single ```python code block.
@@ -513,6 +548,22 @@ class AutomaticValidation:
             f"- Active Fixture IDs: {test_case.fixture_ids}",
         ]
 
+        active_fids = (
+            test_case.fixture_ids
+            if test_case.fixture_ids is not None
+            else sorted(task_spec.test_fixtures.all_fixture_ids())
+        )
+        fixture_details: list[str] = []
+        for fid in active_fids:
+            fix = task_spec.test_fixtures.get_fixture_by_id(fid)
+            if fix is not None:
+                entry = f"- Fixture '{fid}': {fix.description}"
+                if getattr(fix, "private_description", None):
+                    entry += f"\n  Private Seed / Requirements: {fix.private_description}"
+                fixture_details.append(entry)
+        if fixture_details:
+            context_parts.extend(["", "MOUNTED FIXTURE CONTRACTS & SEED SPECIFICATIONS:", *fixture_details])
+
         if case_fixture_generators:
             generator_blocks = [
                 f"### Fixture Generator Script: {name}\n```python\n{code.strip()}\n```"
@@ -687,5 +738,6 @@ __all__ = [
     "is_validation_manifest_current",
     "load_validation_module",
     "sanitize_test_id",
+    "verify_validation_manifest",
     "write_validation_manifest",
 ]

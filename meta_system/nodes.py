@@ -20,9 +20,6 @@ from meta_system.config import (
     meta_agent_reasoning_effort,
     meta_agent_wrapper,
 )
-from meta_system.helpers import (
-    normalize_response_content,
-)
 from meta_system.prompts import (
     build_meta_agent_prompt,
     decorator_reminder,
@@ -34,7 +31,18 @@ from meta_system.tools import code_related_tools, function_signatures, tools
 
 logger = get_logger("meta_system.nodes")
 
-meta_agent_system_prompt = build_meta_agent_prompt(function_signatures)
+
+def normalize_response_content(content: Any) -> str:
+    """Normalize string or list of content dicts from LLM response into a single string."""
+    if isinstance(content, list):
+        content_parts = []
+        for item in content:
+            if isinstance(item, dict) and "text" in item:
+                content_parts.append(str(item.get("text", "")))
+            else:
+                content_parts.append(str(item))
+        return " ".join(content_parts)
+    return str(content or "")
 
 
 def formatting_function(state: MetaState) -> dict[str, Any]:
@@ -154,8 +162,13 @@ def meta_agent_function(state: MetaState) -> dict[str, Any]:
             f"\n\n**You are now in Iteration {iteration}**\n--- Current Code of the TargetSystem ---\n```\n{code}\n```"
         )
 
+        task_spec = state.get("task_spec")
+        task_dir = state.get("task_dir")
+        additional_docs = task_spec.load_additional_documentation(task_dir) if task_spec else ""
+        system_prompt = build_meta_agent_prompt(function_signatures, additional_documentation=additional_docs)
+
         full_messages = (
-            [SystemMessage(content=meta_agent_system_prompt)]
+            [SystemMessage(content=system_prompt)]
             + initial_messages
             + trimmed_messages
             + [HumanMessage(content=code_message)]

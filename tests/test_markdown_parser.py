@@ -106,3 +106,60 @@ def test_extract_json_block_optional():
     assert extract_json_block_optional("plain text") is None
     res = extract_json_block_optional('```json\n{"status": "ok"}\n```')
     assert res == {"status": "ok"}
+
+
+def test_find_code_blocks_opening_fence_attached_to_text():
+    text = (
+        "## Actions\n"
+        "Create the movie expert node.```python\n"
+        '@manage_node(action="create")\n'
+        "def movie_expert_node(state):\n"
+        "    return state\n"
+        "```"
+    )
+    blocks = find_code_blocks(text)
+    assert len(blocks) == 1
+    assert "Create the movie expert node" not in blocks[0]["content"]
+    assert "```" not in blocks[0]["content"]
+    assert blocks[0]["content"] == '@manage_node(action="create")\ndef movie_expert_node(state):\n    return state'
+
+
+def test_find_markdown_fences_opening_fence_attached_to_text():
+    text = 'Some prefix text.```json\n{\n  "key": "value"\n}\n```'
+    fences = find_markdown_fences(text)
+    assert len(fences) == 1
+    assert "Some prefix text" not in fences[0]["content"]
+    assert fences[0]["content"] == '{\n  "key": "value"\n}'
+
+
+def test_find_code_blocks_ignores_inline_triple_backticks_in_text():
+    text = "You should use ```code``` as an inline example.\nNow here is real code:\n```python\nx = 42\n```"
+    blocks = find_code_blocks(text)
+    assert len(blocks) == 1
+    assert blocks[0]["content"] == "x = 42"
+
+
+def test_find_code_blocks_ignores_single_line_triple_backticks_and_does_not_invert():
+    text = (
+        "## Plan & Diagnosis\n"
+        "```foo```\n"
+        "Here is some text describing the plan.\n"
+        "## Actions\n"
+        "```python\n"
+        "def my_func():\n"
+        "    return 100\n"
+        "```\n"
+        "End of response."
+    )
+    blocks = find_code_blocks(text)
+    assert len(blocks) == 1
+    assert "Here is some text" not in blocks[0]["content"]
+    assert "## Actions" not in blocks[0]["content"]
+    assert blocks[0]["content"] == "def my_func():\n    return 100"
+
+
+def test_find_markdown_fences_ignores_single_line_triple_backticks():
+    text = 'Prefix\n```foo```\nMiddle text\n```json\n{"valid": true}\n```\nSuffix'
+    fences = find_markdown_fences(text)
+    assert len(fences) == 1
+    assert fences[0]["content"] == '{"valid": true}'

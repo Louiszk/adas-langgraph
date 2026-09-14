@@ -6,7 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from adas_core.automatic_validation import ensure_automatic_validation
+from adas_core.automatic_validation import ensure_automatic_validation, verify_validation_manifest
+from adas_core.environment import load_environment
 from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 
@@ -59,6 +60,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Target directory for the validation module (defaults to task_spec's parent directory).",
     )
     parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify whether the validation module and manifest are current and exit without making changes.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Regenerate the validation module even if one already exists.",
@@ -67,8 +73,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_environment()
     setup_logging()
     args = parse_args(argv)
+
+    if args.verify:
+        spec_path = Path(args.task_spec).resolve()
+        try:
+            task_spec = TaskSpec.from_file(spec_path)
+        except Exception as exc:
+            logger.error("TaskSpec validation failed for '%s': %s", args.task_spec, exc)
+            return 1
+
+        target_dir = Path(args.output_dir).resolve() if args.output_dir else spec_path.parent
+        is_current, issues = verify_validation_manifest(task_spec, target_dir)
+        if is_current:
+            logger.info("Frozen validation module is current for '%s'.", args.task_spec)
+            return 0
+        logger.error(
+            "Frozen validation module is stale or missing for '%s':\n  - %s\nRun 'python create_validation.py --task-spec %s --force' to regenerate.",
+            args.task_spec,
+            "\n  - ".join(issues),
+            args.task_spec,
+        )
+        return 1
+
     try:
         val_path = run_validation_for_task(
             args.task_spec,

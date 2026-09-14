@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "name": "botanical_agent",
+  "system_goal": "Build a single-turn botanical expert and companion planting assistant that answers horticultural inquiries by querying an embedded SQLite database (data/botanical_garden.db). The agent inspects database schemas, runs read-only SQL queries to retrieve plant species, botanical facts, and ecological companion relationships (beneficial and antagonistic pairings), and synthesizes grounded, well-structured horticultural advice citing scientific names, companion mechanisms, and care guidance.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "sql_queries": "list[str]",
+      "retrieved_records": "list[dict[str, Any]]",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "get_database_schema",
+        "description": "Inspect tables, column definitions, and foreign keys in the SQLite database located at Path(os.environ['ADAS_INPUT_DIR']) / 'data/botanical_garden.db'."
+      },
+      {
+        "name": "execute_sql_query",
+        "description": "Execute a read-only SQL SELECT query against the SQLite database located at Path(os.environ['ADAS_INPUT_DIR']) / 'data/botanical_garden.db' and return matching rows as a list of dictionaries."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [
+      {
+        "name": "botanical_database",
+        "type": "database",
+        "path_or_uri": "data/botanical_garden.db",
+        "description": "Embedded SQLite database located at Path(os.environ['ADAS_INPUT_DIR']) / 'data/botanical_garden.db' containing tables 'plants', 'companion_relationships', and 'botanical_facts'."
+      }
+    ],
+    "available_api_keys": []
+  },
+  "required_packages": [],
+  "test_fixtures": {
+    "files": [],
+    "databases": [
+      {
+        "id": "botanical_db",
+        "name": "botanical_garden",
+        "db_type": "sqlite",
+        "file_path": "data/botanical_garden.db",
+        "count": 50,
+        "description": "Embedded SQLite database containing botanical knowledge across 3 tables: 'plants', 'companion_relationships', and 'botanical_facts'. Populated with realistic botanical taxa, care requirements, companion pairings (beneficial and antagonistic), and ecological facts.",
+        "private_description": "Populate the database with at least 12 distinct plant species spanning Solanaceae, Lamiaceae, Asteraceae, Fabaceae, Apiaceae, and Ranunculaceae. Include: Tomato (Solanum lycopersicum, Solanaceae, annual, full_sun, moderate, 6.0, 6.8, toxic_to_cats_and_dogs), Sweet Basil (Ocimum basilicum, Lamiaceae, annual, full_sun, moderate, 6.0, 7.5, non-toxic), French Marigold (Tagetes patula, Asteraceae, annual, full_sun, moderate, 6.0, 7.5, non-toxic), Bush Bean (Phaseolus vulgaris, Fabaceae, annual, full_sun, moderate, 6.0, 7.0, non-toxic), Fennel (Foeniculum vulgare, Apiaceae, herbaceous perennial, full_sun, low, 6.5, 7.5, toxic_to_cats_and_dogs), Catmint (Nepeta cataria, Lamiaceae, herbaceous perennial, partial_shade, low, 6.0, 7.5, non-toxic), Wild Columbine (Aquilegia canadensis, Ranunculaceae, herbaceous perennial, partial_shade, moderate, 6.0, 7.0, non-toxic), Woodland Fern (Dryopteris dilatata, Dryopteridaceae, fern, full_shade, high, 5.5, 6.5, non-toxic), Nasturtium (Tropaeolum majus, Tropaeolaceae, annual, full_sun, moderate, 6.0, 7.5, non-toxic), Sweet Alyssum (Lobularia maritima, Brassicaceae, annual, full_sun, moderate, 6.0, 7.0, non-toxic), Rosemary (Salvia rosmarinus, Lamiaceae, shrub, full_sun, low, 6.0, 7.0, non-toxic), and Hostas (Hosta plantaginea, Asparagaceae, herbaceous perennial, full_shade, moderate, 6.5, 7.5, toxic_to_cats_and_dogs). Ensure companion pairings record both beneficial and antagonistic interactions: Tomato + Basil (beneficial, pest_repellent - repels hornworms), Tomato + Marigold (beneficial, pest_repellent - suppresses root-knot nematodes), Bush Bean + Marigold (beneficial, pest_repellent), Basil + Marigold (beneficial, pollinator_attractor), Bush Bean + Basil (beneficial, growth_enhancer), Fennel + Tomato (antagonistic, growth_inhibitor - allelopathic umbelliferone suppresses growth), Fennel + Bush Bean (antagonistic, growth_inhibitor). Record ecological and care facts in botanical_facts for species including Catmint, Wild Columbine, Marigold, and Basil."
+      }
+    ],
+    "mock_services": [],
+    "mcps": [],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "smoke_species_lookup",
+      "description": "Tier 1 smoke test: Simple single-table lookup. The agent queries the database for Sweet Basil ('Ocimum basilicum'), returning its scientific name, plant family, sunlight requirements, watering needs, and pet toxicity status.",
+      "fixture_ids": [
+        "botanical_db"
+      ],
+      "turns": [
+        {
+          "user_request": "Can you look up Sweet Basil in the botanical database and tell me its scientific name, plant family, sunlight requirements, watering needs, and whether it is safe for pets?"
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent queried the database for Sweet Basil and accurately reported its scientific name (Ocimum basilicum), family (Lamiaceae), sunlight requirement (full sun), watering needs (moderate), and non-toxic status for pets, grounded in database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "pet_safe_shade_pollinators",
+      "description": "Tier 2 intermediate test: Attribute filtering with joined botanical facts. The agent identifies non-toxic plants suitable for partial or full shade, reporting their scientific names, soil pH tolerance, and ecological roles or care tips from the botanical facts table.",
+      "fixture_ids": [
+        "botanical_db"
+      ],
+      "turns": [
+        {
+          "user_request": "I have a shaded garden and two curious cats. Which non-toxic plants suited for partial shade or full shade are in the database? Please list their scientific names, suitable soil pH ranges, and any recorded ecological roles or care facts."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent queried plants filtered by non-toxic pet toxicity and shade sunlight (partial_shade or full_shade), joined with botanical_facts, correctly identifying qualifying species (such as Catmint, Wild Columbine, or Woodland Fern) with their scientific names, pH ranges, and ecological or care facts grounded in database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tomato_companion_matrix",
+      "description": "Tier 3 advanced test: Bi-directional companion relationship analysis. The agent identifies both beneficial companions and antagonistic plants for Tomato ('Solanum lycopersicum'), explaining the biological mechanisms (e.g. pest repelling vs growth inhibition).",
+      "fixture_ids": [
+        "botanical_db"
+      ],
+      "turns": [
+        {
+          "user_request": "I'm planting tomatoes (Solanum lycopersicum) in full sun. Which beneficial companion plants in the database can I pair them with to help repel pests or improve growth? Also check if there are any antagonistic plants I must avoid planting near them, and cite their specific interaction mechanisms."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent identified beneficial companion pairings for Tomato (such as Sweet Basil and French Marigold) explaining mechanisms like pest repellency or nematode suppression, and identified antagonistic plants to avoid (such as Fennel) citing its growth-inhibiting allelopathic effect, all grounded in database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "permaculture_guild_triad",
+      "description": "Tier 4 complex test: Permaculture guild synthesis with mutual compatibility constraints. The agent designs a 3-plant polyculture guild for full sun and moderate watering where every pair is mutually compatible (no antagonistic relationships) and provides at least two distinct beneficial ecological mechanisms.",
+      "fixture_ids": [
+        "botanical_db"
+      ],
+      "turns": [
+        {
+          "user_request": "I want to design a 3-plant polyculture guild for a full sun garden with moderate watering needs. Find a combination of 3 distinct plants from the database where every pair in the group is mutually compatible (meaning none of the three plants have an antagonistic relationship with any of the others), and the combination provides at least two distinct beneficial companion mechanisms (such as pest repellent, pollinator attraction, or nitrogen/growth support). List the three plants, confirm their shared growing requirements, and explain the beneficial mechanisms."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent selected a valid 3-plant combination matching full sun and moderate watering (e.g. Tomato, Sweet Basil, French Marigold; or Bush Bean, Sweet Basil, French Marigold), verified mutual compatibility without any antagonistic pairs, and correctly explained at least two distinct beneficial companion mechanisms grounded in database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

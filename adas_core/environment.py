@@ -14,12 +14,22 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from dotenv import find_dotenv, load_dotenv
 from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
 from adas_core.logging_config import get_logger
 
 logger = get_logger("adas_core.environment")
+
+
+def load_environment() -> None:
+    """Load environment variables from project and sandbox .env files."""
+    load_dotenv(find_dotenv(usecwd=True))
+    sandbox_env = Path(SANDBOX_WORKSPACE_DIR) / ".env"
+    if sandbox_env.is_file():
+        load_dotenv(sandbox_env)
+
 
 ADAS_WORKSPACE_DIR_ENV = "ADAS_WORKSPACE_DIR"
 ADAS_INPUT_DIR_ENV = "ADAS_INPUT_DIR"
@@ -84,18 +94,36 @@ def is_package_excluded(
 
 
 def is_package_installed(package_name: str) -> bool:
-    """Check if a package distribution is installed in the current environment."""
-    canonical = normalize_package_name(package_name)
+    """Check if a package distribution is installed in the current environment and satisfies any version constraints."""
     try:
-        importlib.metadata.version(canonical)
-        return True
-    except (importlib.metadata.PackageNotFoundError, ValueError):
-        # Fallback for packages where distribution name differs or standard library modules
+        from packaging.requirements import Requirement
+
+        req = Requirement(package_name)
+        canonical = canonicalize_name(req.name)
         try:
-            importlib.import_module(canonical.replace("-", "_"))
+            installed_ver = importlib.metadata.version(canonical)
+            if req.specifier and installed_ver not in req.specifier:
+                return False
             return True
-        except (ImportError, ValueError):
-            return False
+        except (importlib.metadata.PackageNotFoundError, ValueError):
+            if req.specifier:
+                return False
+            try:
+                importlib.import_module(canonical.replace("-", "_"))
+                return True
+            except (ImportError, ValueError):
+                return False
+    except Exception:
+        canonical = normalize_package_name(package_name)
+        try:
+            importlib.metadata.version(canonical)
+            return True
+        except (importlib.metadata.PackageNotFoundError, ValueError):
+            try:
+                importlib.import_module(canonical.replace("-", "_"))
+                return True
+            except (ImportError, ValueError):
+                return False
 
 
 def ensure_packages_installed(

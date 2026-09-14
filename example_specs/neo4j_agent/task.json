@@ -1,0 +1,161 @@
+{
+  "schema_version": "1.0",
+  "name": "neo4j_agent",
+  "system_goal": "Build a general-purpose, read-only Graph Exploration and Text-to-Cypher agent that connects to any Neo4j graph database declared via runtime environment variables (NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, and optionally NEO4J_DATABASE). The agent receives a natural-language query in the state key user_request. It must dynamically inspect the active graph schema (discovering node labels, relationship types, and property keys) via read-only introspection without assuming a pre-baked domain schema. Using this schema, it must formulate and execute valid read-only Cypher queries (strictly prohibiting mutating clauses such as CREATE, MERGE, DELETE, SET, REMOVE, or DROP) to traverse nodes, multi-hop paths, and relationship properties. It must record the discovered schema in discovered_schema, maintain an audit of executed queries in query_history, and return a grounded, clear final answer in final_answer.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "discovered_schema": "dict[str, Any]",
+      "query_history": "list[dict[str, Any]]",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "get_graph_schema",
+        "description": "Inspect the Neo4j database to dynamically discover available node labels, relationship types, and their associated property keys. Returns a dictionary summarizing the graph schema."
+      },
+      {
+        "name": "run_read_query",
+        "description": "Execute a parameterized read-only Cypher query against the connected Neo4j database and return the query results as a list of records (dictionaries). Strictly validates that the query does not contain write or modification statements (e.g., CREATE, MERGE, SET, DELETE, REMOVE, DROP)."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [
+      {
+        "name": "neo4j_db",
+        "type": "database",
+        "description": "Running Neo4j instance hosting target graph namespaces."
+      }
+    ],
+    "available_api_keys": [
+      {
+        "env_var": "NEO4J_URI",
+        "description": "Neo4j connection URI (e.g. bolt://host.docker.internal:7687)",
+        "optional": false
+      },
+      {
+        "env_var": "NEO4J_USERNAME",
+        "description": "Neo4j authentication username",
+        "optional": false
+      },
+      {
+        "env_var": "NEO4J_PASSWORD",
+        "description": "Neo4j authentication password",
+        "optional": false
+      },
+      {
+        "env_var": "NEO4J_DATABASE",
+        "description": "Target Neo4j database name (dynamically provisioned during tests, or default if unset)",
+        "optional": true
+      }
+    ]
+  },
+  "required_packages": [
+    "neo4j>=5.0.0"
+  ],
+  "additional_documentation": [],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": [],
+    "external_database_seeds": [
+      {
+        "name": "seed_company_network",
+        "resource_name": "neo4j_db",
+        "db_type": "neo4j",
+        "driver": "neo4j",
+        "connection_env": {
+          "uri": "NEO4J_URI",
+          "username": "NEO4J_USERNAME",
+          "password": "NEO4J_PASSWORD"
+        },
+        "namespace_kind": "database",
+        "namespace": "adas-test-company-network",
+        "namespace_env": "NEO4J_DATABASE",
+        "cleanup_policy": "drop_namespace",
+        "description": "Enterprise organization graph in namespace 'adas-test-company-network'. Nodes: Person (properties: id, name, role, department), Project (properties: id, name, status, budget), Skill (properties: id, name, category). Relationships: (:Person)-[:MANAGES]->(:Person), (:Person)-[:ASSIGNED_TO {role_in_project: str, hours_per_week: int}]->(:Project), (:Person)-[:HAS_SKILL {proficiency: str}]->(:Skill).",
+        "private_description": "Seed data: Sarah (Director, Engineering) MANAGES Alex (Staff Engineer), Elena (Senior Data Scientist), and Marcus (Backend Dev). Alex and Elena are ASSIGNED_TO 'Project Titan' (status: 'active', budget: 150000). Alex HAS_SKILL 'Distributed Systems' (proficiency: 'expert'). Marcus HAS_SKILL 'Neo4j' (proficiency: 'advanced')."
+      },
+      {
+        "name": "seed_dependency_graph",
+        "resource_name": "neo4j_db",
+        "db_type": "neo4j",
+        "driver": "neo4j",
+        "connection_env": {
+          "uri": "NEO4J_URI",
+          "username": "NEO4J_USERNAME",
+          "password": "NEO4J_PASSWORD"
+        },
+        "namespace_kind": "database",
+        "namespace": "adas-test-dependency-graph",
+        "namespace_env": "NEO4J_DATABASE",
+        "cleanup_policy": "drop_namespace",
+        "description": "Package and microservice dependency graph in namespace 'adas-test-dependency-graph'. Nodes: Service (properties: id, name, language, tier), Package (properties: id, name, version, license). Relationships: (:Service)-[:USES]->(:Package), (:Package)-[:DEPENDS_ON {scope: str}]->(:Package), (:Service)-[:CALLS {protocol: str, timeout_ms: int}]->(:Service).",
+        "private_description": "Seed data: Service 'gateway-service' (tier 1) CALLS 'auth-service' (tier 1) and 'billing-service' (tier 2). 'billing-service' USES Package 'stripe-client' (v3.2). 'stripe-client' DEPENDS_ON 'crypto-core' (v1.8, scope: 'runtime'). 'crypto-core' DEPENDS_ON 'base-encoding' (v0.9, scope: 'runtime')."
+      }
+    ]
+  },
+  "dev_suite": [
+    {
+      "id": "company_hierarchy_and_assignment",
+      "description": "Multi-hop path exploration in an organizational graph. The agent dynamically discovers the schema, finds which staff engineer reporting to Sarah is assigned to Project Titan, and extracts their expert skill.",
+      "fixture_ids": [
+        "seed_company_network"
+      ],
+      "turns": [
+        {
+          "user_request": "Inspect the graph schema and find which engineer who directly reports to Director Sarah is assigned to 'Project Titan'. State their name, their project assignment, and their expert skill."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "discovered_schema",
+        "query_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string containing 'Alex' and 'Distributed Systems'. discovered_schema contains 'Person' and 'Project' labels. query_history records at least one read-only Cypher query containing 'MATCH' and no mutating clauses.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent correctly identifies Alex as the engineer reporting to Sarah who is assigned to Project Titan, possessing the expert skill in Distributed Systems. The answer must be grounded in the retrieved graph data.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "transitive_dependency_traversal",
+      "description": "Transitive dependency path finding in a software dependency graph. The agent dynamically discovers the schema, navigates dependencies from 'billing-service' down to 'base-encoding', and reports the complete traversal path.",
+      "fixture_ids": [
+        "seed_dependency_graph"
+      ],
+      "turns": [
+        {
+          "user_request": "Query the graph to find the full downstream dependency chain starting from 'billing-service' down to 'base-encoding'. List all intermediate nodes and relationships in order."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "discovered_schema",
+        "query_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string referencing 'billing-service', 'stripe-client', 'crypto-core', and 'base-encoding'. query_history records at least one read-only Cypher query containing 'MATCH' and no mutating clauses.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent correctly identifies the complete 3-hop dependency chain from billing-service through stripe-client and crypto-core to base-encoding. The path must be factually grounded in the graph query results.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

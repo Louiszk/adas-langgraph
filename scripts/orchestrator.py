@@ -18,6 +18,7 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from adas_core.environment import load_environment  # noqa: E402
 from adas_core.logging_config import get_logger, setup_logging  # noqa: E402
 from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
 
@@ -643,6 +644,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """Entrypoint for the orchestrator."""
+    load_environment()
     setup_logging()
     args = parse_args(argv)
     orchestrator = Orchestrator(args)

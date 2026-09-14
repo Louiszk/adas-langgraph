@@ -360,6 +360,7 @@ def copy_task_setup_to_sandbox(
     session: StreamingSandboxSession,
     task_dir: Path | str,
     task_spec_path: Path | str,
+    additional_documentation: list[str] | None = None,
 ) -> str:
     """Copy the visible, frozen setup artifacts into a design sandbox."""
     task_dir_path = Path(task_dir)
@@ -385,15 +386,29 @@ def copy_task_setup_to_sandbox(
     # The sandbox entry point always loads the explicit, visible TaskSpec from
     # this stable path, regardless of the host file's chosen name.
     session.copy_to_runtime(str(spec_path), f"{runtime_task_dir}/task.json")
+
+    for doc_path in additional_documentation or []:
+        relative_path = Path(doc_path)
+        source_candidates = (task_dir_path / relative_path, Path.cwd() / relative_path)
+        source_path = next((path for path in source_candidates if path.is_file()), None)
+        if source_path is None:
+            logger.warning("Referenced documentation file '%s' was not found for sandbox staging.", doc_path)
+            continue
+        destination = f"{SANDBOX_WORKSPACE_DIR}/{relative_path.as_posix()}"
+        session.copy_to_runtime(str(source_path), destination)
     return runtime_task_dir
 
 
 def run_sandbox_preflight(
     session: StreamingSandboxSession,
     runtime_task_dir: str = SANDBOX_TASK_SETUP_DIR,
+    runtime_profile_json: str | None = None,
 ) -> bool:
     """Install frozen setup requirements and validate them inside the sandbox."""
-    result = session.execute_command(f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}")
+    command = f"python3 {SANDBOX_WORKSPACE_DIR}/run_preflight.py --task-dir {runtime_task_dir}"
+    if runtime_profile_json:
+        command += f" --runtime-profile {shlex.quote(runtime_profile_json)}"
+    result = session.execute_command(command)
     exit_code = getattr(result, "exit_code", None)
     output_str = str(getattr(result, "stdout", "") or "")
     stderr_str = str(getattr(result, "stderr", "") or "")

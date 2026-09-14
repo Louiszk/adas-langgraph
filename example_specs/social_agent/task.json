@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "name": "social_intelligence_agent",
+  "system_goal": "Build a single-turn social intelligence agent that receives a natural-language question in the state key user_request and returns a concise, evidence-grounded answer under final_answer. The agent uses the fictional X-style social-index HTTP service identified only by the SOCIAL_INDEX_BASE_URL environment variable; it must not hardcode a host, port, endpoint URL, or fixture data. It should retrieve current trends, account details, chronological posts, event context, and search results as appropriate. It must distinguish reported facts and official statements from opinions, jokes, unverified claims, reposts, and engagement signals; mention uncertainty when the available posts do not establish a fact. Include the relevant @handles and timestamps or post IDs in answers so claims are traceable. The agent may call POST /posts only when the user explicitly asks it to publish, post, tweet, or reply. A published post must be short, neutral, factually grounded in retrieved service data, and must not imply that a rumour is confirmed. For read-only questions, do not publish anything. Return an honest explanation if the requested information cannot be found rather than inventing posts or context.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "retrieved_evidence": "list[dict[str, Any]]",
+      "publication_result": "dict[str, Any] | None",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "get_social_index",
+        "description": "Perform HTTP GET requests against SOCIAL_INDEX_BASE_URL to retrieve trends, user profiles, chronological posts, authoritative event context, and the publication audit log. Build request URLs from the environment-provided base URL and validate successful JSON responses."
+      },
+      {
+        "name": "search_social_posts",
+        "description": "Perform POST /search/posts against SOCIAL_INDEX_BASE_URL with a structured JSON search query. Use the returned post records as evidence and do not fabricate search results."
+      },
+      {
+        "name": "publish_social_post",
+        "description": "Perform POST /posts against SOCIAL_INDEX_BASE_URL only after an explicit user request to publish. Submit a JSON body with text, evidence_post_ids, and optionally reply_to_post_id; return the service-confirmed published post."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [
+    "requests"
+  ],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [
+      {
+        "id": "social_index_service",
+        "name": "social_index_service",
+        "port": 8765,
+        "base_url_env": "SOCIAL_INDEX_BASE_URL",
+        "description": "Run a local JSON HTTP service for a fictional X-style social network. Bind to 127.0.0.1 on the declared port and expose the following contract beneath the base URL. All successful responses use application/json and all timestamps are ISO-8601 UTC. GET /trends (with optional ?date=YYYY-MM-DD parameter, defaulting to the latest active trends if date is omitted or matches current date) returns ranked trends where each trend has rank, topic, summary, post_count, and representative_post_ids. GET /users/{handle} returns handle, display_name, verified, bio, and follower_count (accepts handles with or without leading @); unknown accounts return JSON 404. GET /users/{handle}/posts?limit=N returns that account's posts in descending created_at order (max 20), where each post has id, handle, text, created_at, like_count, repost_count, reply_count, is_repost, and optional quoted_post_id. GET /events/{event_id} returns authoritative event context: status, cause, official_source, and timestamps. POST /search/posts accepts JSON with required query string and optional handles array, event_id string, since timestamp, until timestamp, and limit integer 1-20, returning matching posts ordered by relevance then newest created_at, plus total_matches. POST /posts accepts JSON with required text string (1-280 characters), required evidence_post_ids array of seeded post IDs, and optional reply_to_post_id (rejects malformed bodies, unknown evidence IDs, or text > 280 with JSON 400); on success, appends a record with an incrementing published ID, text, evidence_post_ids, reply_to_post_id, created_at, and published_by @adas_social_agent, returning HTTP 201. GET /audit/published-posts returns {posts: [...]} containing every successful POST /posts in creation order. The service starts with no published posts. Do not require authentication, internet access, external files, or external packages.",
+        "private_description": "Seed deterministic evaluation data:\n- GET /trends (date=2026-03-19) returns exactly three ranked trends: Harbor Bridge closure, Aurora Studios game-patch outage, and Riverlight Festival opening.\n- Supported accounts: @citydesk, @mara_chen, @aurora_status, @pixelpilot, @riverlightfest, and @northstarnews.\n- @mara_chen posts: newest post at 2026-03-19T09:42:00Z says she is taking the ferry because the Harbor Bridge is closed; an older post says she has not seen an official reopening time. Include a clearly marked repost, sarcasm about bridge traffic, and an unverified claim that the bridge will reopen at noon.\n- GET /events/harbor_bridge: status closed, closure_started_at 2026-03-19T08:10:00Z, cause safety inspection, official_source @citydesk, reopening_time null.\n- GET /events/aurora_patch: status degraded, official_source @aurora_status, no estimated resolution time.\n- POST /search/posts: Searches for Harbor Bridge/bridge must return official @citydesk closure reporting, @mara_chen's ferry post, the unverified noon-reopening claim, sarcastic traffic commentary, and a repost; event_id harbor_bridge narrows to that discussion. Searches for Aurora/patch/outage must return @aurora_status's degraded-status post, player reactions from @pixelpilot and others, and at least one speculative claim that is contradicted by official context."
+      }
+    ],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "daily_news_briefing",
+      "description": "Read-only daily news request. The agent must retrieve the declared trend data and enough supporting social or authoritative context to give a calibrated briefing. It must not publish a post.",
+      "fixture_ids": [
+        "social_index_service"
+      ],
+      "turns": [
+        {
+          "user_request": "What are the biggest stories on the network today? Give me a short, reliable briefing and separate confirmed updates from social-media reaction. Do not post anything."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "retrieved_evidence",
+        "publication_result"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str and retrieved_evidence list. The mock audit endpoint contains no published posts and publication_result is absent or null.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the briefing is concise, useful, and grounded in the retrieved service data. The answer must cover the three trends (Harbor Bridge closure, Aurora Studios patch outage, and Riverlight Festival opening), identify the bridge closure as confirmed without treating an unverified reopening claim as fact, and include traceable source handles, timestamps, or post IDs. Social reaction must be separated from confirmed updates. Obey the instruction not to publish. Do not require exact wording or a fixed ordering of the three trends.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "latest_account_posts",
+      "description": "Read-only account lookup. The agent must use the profile and chronological-post endpoints to answer what the named person said most recently about the bridge disruption, including the distinction between their current travel plan and the absence of an official reopening time.",
+      "fixture_ids": [
+        "social_index_service"
+      ],
+      "turns": [
+        {
+          "user_request": "What did @mara_chen say most recently about the Harbor Bridge disruption? Include when she posted and do not publish or reply."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "retrieved_evidence",
+        "publication_result"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str and retrieved_evidence list. The mock audit endpoint contains no published posts and publication_result is absent or null.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge factual precision, chronological correctness, and restraint. The answer must identify @mara_chen's newest relevant post at 2026-03-19T09:42:00Z (post p1006), explain that she is taking the ferry because the bridge is closed, and note that no official reopening time has been announced. It must directly attribute the statement to @mara_chen, include traceable references (handle, timestamp, or post ID), not promote older, reposted, sarcastic, or unverified material to confirmed fact, and not claim to have posted or replied.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grounded_public_status_post",
+      "description": "Read-and-act workflow. The agent must search discussion and retrieve official event context before publishing one neutral status post about the Aurora patch outage. The user explicitly authorizes publication, so the POST /posts action is required.",
+      "fixture_ids": [
+        "social_index_service"
+      ],
+      "turns": [
+        {
+          "user_request": "Check what people are saying about the Aurora Studios patch outage. Then publish one short, calm update for our followers: say what is officially known, acknowledge player reports without treating them as confirmed, and do not promise a resolution time."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "retrieved_evidence",
+        "publication_result"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str and a publication_result dict describing a service-confirmed publication. The mock GET /audit/published-posts endpoint contains exactly one post published by @adas_social_agent, its text length is between 1 and 280 characters, and it contains one or more valid seeded evidence_post_ids.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent first established an authoritative basis, gave a balanced summary of player reaction, and published exactly one concise, neutral, non-speculative update. The published post and final answer must describe the Aurora patch service as degraded or experiencing an outage, attribute the official status to @aurora_status or equivalent official context, acknowledge player reports without asserting speculation as fact, and not state or imply an estimated resolution time. Penalize invented causes, unsupported certainty, a promised repair time, or failure to perform the requested publication. Do not require a particular post ID or exact prose.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import datetime
 import importlib
 import json
@@ -15,9 +16,19 @@ from adas_core.environment import (
     SANDBOX_TARGET_METRICS_DIR,
     SANDBOX_WORKSPACE_DIR,
     isolated_case_workspace,
+    load_environment,
 )
+from adas_core.fixture_lifecycle import process_fixture_lifecycle
 from adas_core.helpers import escape_system_name, validate_identifier
 from adas_core.logging_config import get_logger, setup_logging
+from adas_core.runtime_resources import (
+    RuntimeResourceProfile,
+    external_url_overrides,
+    fixture_paths_for_profile,
+    fixture_process_ids_for_profile,
+    stage_local_overrides,
+)
+from adas_core.task_spec import TaskSpec
 
 logger = get_logger("run_target")
 
@@ -27,6 +38,7 @@ def main() -> int:
     Main entry point for running a compiled agentic system inside the sandbox.
     Captures execution metrics and the full final state.
     """
+    load_environment()
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run a compiled agentic system and record metrics.")
@@ -49,6 +61,9 @@ def main() -> int:
         "--task-dir",
         default=None,
         help="Path to sandbox task setup directory containing fixtures and task.json.",
+    )
+    parser.add_argument(
+        "--runtime-profile", default=None, help="Runtime resource profile JSON supplied by invoke_target."
     )
     args = parser.parse_args()
 
@@ -107,17 +122,29 @@ def main() -> int:
         logger.info(json.dumps(initial_state, indent=2))
 
         fixtures_dir: Path | None = None
+        task_spec: TaskSpec | None = None
+        runtime_profile: RuntimeResourceProfile | None = None
+        if args.runtime_profile:
+            runtime_profile = RuntimeResourceProfile.model_validate_json(args.runtime_profile)
         if args.task_dir:
-            candidate = Path(args.task_dir) / "fixtures"
+            task_dir = Path(args.task_dir)
+            task_spec_path = task_dir / "task.json"
+            if task_spec_path.is_file():
+                task_spec = TaskSpec.from_file(task_spec_path)
+                if runtime_profile:
+                    runtime_profile.validate_for_task(task_spec)
+            candidate = task_dir / "fixtures"
             if candidate.is_dir():
                 fixtures_dir = candidate
 
         target_runs_dir = Path(SANDBOX_WORKSPACE_DIR) / "target_runs"
+        allowed_files = fixture_paths_for_profile(task_spec, runtime_profile) if task_spec else None
         with isolated_case_workspace(
             base_dir=target_runs_dir,
             run_id=run_id,
             case_id="invocation",
             fixtures_dir=fixtures_dir,
+            allowed_files=allowed_files,
             clean_up=False,
         ) as workspace_dirs:
             metrics["workspace"] = str(workspace_dirs["workspace"])
@@ -128,20 +155,34 @@ def main() -> int:
             logger.info("ADAS_INPUT_DIR: %s", os.environ.get("ADAS_INPUT_DIR"))
             logger.info("ADAS_OUTPUT_DIR: %s", os.environ.get("ADAS_OUTPUT_DIR"))
 
-            with usage_scope(system="target", run_id=run_id):
-                for mode, payload in workflow.stream(
-                    initial_state,
-                    config={"recursion_limit": 20},
-                    stream_mode=["updates", "values"],
-                ):
-                    if mode == "updates" and isinstance(payload, dict):
-                        step_counter += 1
-                        logger.info(f"[Step {step_counter}]")
-                        for node_name, state_update in payload.items():
-                            logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
+            if task_spec and runtime_profile:
+                stage_local_overrides(task_spec, runtime_profile, workspace_dirs)
+            fixture_context = (
+                process_fixture_lifecycle(
+                    task_spec.test_fixtures,
+                    fixture_process_ids_for_profile(task_spec, runtime_profile),
+                    Path(args.task_dir),
+                    workspace_dirs,
+                )
+                if task_spec is not None
+                else contextlib.nullcontext()
+            )
+            url_context = external_url_overrides(task_spec, runtime_profile) if task_spec else contextlib.nullcontext()
+            with fixture_context, url_context:
+                with usage_scope(system="target", run_id=run_id):
+                    for mode, payload in workflow.stream(
+                        initial_state,
+                        config={"recursion_limit": 20},
+                        stream_mode=["updates", "values"],
+                    ):
+                        if mode == "updates" and isinstance(payload, dict):
+                            step_counter += 1
+                            logger.info(f"[Step {step_counter}]")
+                            for node_name, state_update in payload.items():
+                                logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
 
-                    elif mode == "values":
-                        final_state_snapshot = payload
+                        elif mode == "values":
+                            final_state_snapshot = payload
 
         metrics["status"] = "completed"
         logger.info("System execution finished successfully")

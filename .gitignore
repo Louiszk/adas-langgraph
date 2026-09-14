@@ -31,3 +31,8 @@ CLAUDE.md
 /scratch
 *plan.md
 *log.md
+
+# Example specs generated artifacts
+/example_specs/*/*
+!/example_specs/*/task.json
+!/example_specs/*/README.md

@@ -13,8 +13,11 @@ from meta_system.graph import (
     design_completed_condition,
     workflow,
 )
-from meta_system.helpers import ignored_nodes_message, normalize_response_content
-from meta_system.nodes import formatting_function, initial_test_runner_function
+from meta_system.nodes import (
+    formatting_function,
+    initial_test_runner_function,
+    normalize_response_content,
+)
 from meta_system.prompts import (
     agentic_system_documentation,
     build_meta_agent_prompt,
@@ -24,7 +27,7 @@ from meta_system.prompts import (
     trimming_message,
 )
 from meta_system.state import MetaState
-from meta_system.tools import function_signatures, tools
+from meta_system.tools import function_signatures, ignored_nodes_message, tools
 
 
 class TestMetaSystemWorkflow:
@@ -69,6 +72,7 @@ class TestMetaSystemPromptsAndSignatures:
         assert "LangGraph + ADAS Core Reference" in agentic_system_documentation
         assert "ADAS_INPUT_DIR" in agentic_system_documentation
         assert "@@decorator_name" in decorator_reminder
+        assert "## Plan & Diagnosis" in decorator_reminder
         assert "Analyze these test result logs" in test_reminder
         assert "{trimmed_iterations}" in trimming_message
         assert "@@test_system()" in decorator_tool_prompt
@@ -79,6 +83,8 @@ class TestMetaSystemPromptsAndSignatures:
         assert "You are an expert AI software engineer" in prompt
         assert "@@manage_node" in prompt
         assert "LangGraph + ADAS Core Reference" in prompt
+        assert "## Plan & Diagnosis" in prompt
+        assert "Understanding the TaskSpec Contract" in prompt
 
 
 class TestMetaSystemHelpers:

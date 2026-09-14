@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
+from adas_core.environment import normalize_package_name
 from adas_core.exceptions import FixtureExecutionError
 from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
 from adas_core.logging_config import get_logger
@@ -15,6 +16,7 @@ from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
     DatabaseFixtureSpec,
+    ExternalDatabaseSeedSpec,
     FileFixtureSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
@@ -70,16 +72,30 @@ SETUP_REQUIREMENTS = []
 CODE CONSTRAINTS:
 - Output valid, complete, runnable Python code only.
 - Do not use conversational filler, markdown explanations, or commentary outside the code.
+- Never hardcode absolute host paths, sandbox paths, service URLs, or connection strings. Use the function arguments and declared environment variables supplied at runtime.
 """
 
 
 def _has_declared_fixtures(task_spec: TaskSpec) -> bool:
     """Return True if the TaskSpec declares any test fixtures."""
     tf = task_spec.test_fixtures
-    return bool(tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures)
+    return bool(
+        tf.files or tf.databases or tf.mcps or tf.mock_services or tf.custom_fixtures or tf.external_database_seeds
+    )
 
 
 # normalize_fixture_path is imported from adas_core.helpers and re-exported
+
+
+def _format_fixture_instructions(description: str, private_description: str = "") -> str:
+    """Format combined fixture instructions with public contract and optional private requirements."""
+    if not private_description.strip():
+        return description.strip()
+    parts: list[str] = []
+    if description.strip():
+        parts.append(f"Schema / Contract:\n{description.strip()}")
+    parts.append(f"Seed Data / Test-Bench Requirements:\n{private_description.strip()}")
+    return "\n\n".join(parts)
 
 
 class AutomaticSetup:
@@ -103,13 +119,15 @@ class AutomaticSetup:
         return f"{BASE_GENERATION_SYSTEM_PROMPT}\n{task_instructions.strip()}"
 
     def _format_task_context(self, task_spec: TaskSpec) -> str:
+        """Format common task metadata for context."""
         dev_cases = "\n".join([f"- {tc.id}: {tc.description} (Turns: {len(tc.turns)})" for tc in task_spec.dev_suite])
         return (
-            f"Task Name: {task_spec.name}\n"
-            f"System Goal: {task_spec.system_goal}\n"
+            f"TASK CONTEXT:\n"
+            f"Name: {task_spec.name}\n"
+            f"Goal: {task_spec.system_goal}\n"
             f"Execution Mode: {task_spec.architecture_contract.execution_mode}\n"
-            f"Required Tools: {[t.name for t in task_spec.architecture_contract.required_tools]}\n"
-            f"Dev Test Scenarios:\n{dev_cases}\n"
+            f"State Schema: {task_spec.architecture_contract.state_schema}\n"
+            f"Development Cases Summary:\n{dev_cases}\n"
         )
 
     def generate_file_script(self, task_spec: TaskSpec, fixture: FileFixtureSpec) -> tuple[str, list[str]]:
@@ -127,12 +145,13 @@ class AutomaticSetup:
             " Preserve valid top-level syntax and container structure (e.g. all records in a JSON list must be objects/dicts, not bare strings) so standard library loaders and iterators do not crash on parse unless unparseable syntax is explicitly requested."
         )
         system_prompt = self._build_system_prompt(instructions)
+        desc_info = _format_fixture_instructions(fixture.description, fixture.private_description)
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"File Path: {fixture.path}\n"
             f"Target File Count: {fixture.count}\n"
             f"Content Type: {fixture.content_type}\n"
-            f"Description & Requirements:\n{fixture.description}\n\n"
+            f"Description & Requirements:\n{desc_info}\n\n"
             "Write the complete Python generator script:"
         )
 
@@ -149,25 +168,28 @@ class AutomaticSetup:
             "The script must define a function:\n"
             "`def seed_database(workspace_dirs: dict[str, str]) -> None:`\n"
             "Rules:\n"
-            "1. Read connection credentials from environment variables where specified.\n"
-            "2. Populate realistic tables, collections, or graph nodes honoring target counts."
+            "1. Destination Path: For embedded/file-based databases (e.g. SQLite, DuckDB), the database file must be created beneath `workspace_dirs['ADAS_INPUT_DIR']`. Resolve the target path as `db_path = Path(workspace_dirs['ADAS_INPUT_DIR']) / '<file_path>'` and ensure parent directories exist: `db_path.parent.mkdir(parents=True, exist_ok=True)`.\n"
+            "2. For client/server or network databases, read connection credentials from environment variables where specified.\n"
+            "3. Populate realistic tables, collections, or graph nodes honoring target counts.\n"
+            "4. Statement Isolation: When clearing existing data before inserting seed records, always execute cleanup/delete statements separately from insert/create statements."
         )
         system_prompt = self._build_system_prompt(instructions)
         conn_info = (
             f"Connection Environment Variables: {fixture.connection_env}"
             if fixture.connection_env
-            else f"Local File Path: {fixture.file_path}"
+            else f"Local File Path (relative to ADAS_INPUT_DIR): {fixture.file_path}"
         )
         count_info = (
             f"Target Records/Nodes Count: {fixture.count}" if fixture.count else "Target Count: Realistic seed dataset"
         )
+        desc_info = _format_fixture_instructions(fixture.description, fixture.private_description)
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"Database Name: {fixture.name}\n"
             f"Engine Type: {fixture.db_type}\n"
             f"{conn_info}\n"
             f"{count_info}\n"
-            f"Schema & Data Requirements:\n{fixture.description}\n\n"
+            f"Schema & Data Requirements:\n{desc_info}\n\n"
             "Write the complete Python seeding script:"
         )
 
@@ -176,32 +198,119 @@ class AutomaticSetup:
         reqs = extract_setup_requirements(code)
         return code, reqs
 
-    def generate_mcp_server_script(self, task_spec: TaskSpec, fixture: MCPFixtureSpec) -> tuple[str, list[str]]:
-        """Prompt setup_model to generate a mock FastMCP server script."""
+    def generate_external_database_seed_script(
+        self, task_spec: TaskSpec, seed: ExternalDatabaseSeedSpec
+    ) -> tuple[str, list[str]]:
+        """Generate a per-case setup/teardown script for an isolated external database namespace."""
+        namespace_guidance = ""
+        if seed.db_type == "postgres":
+            namespace_guidance = (
+                " PostgreSQL rejects unquoted hyphens in identifiers: use the supplied adas_test_ namespace and "
+                "compose SQL identifiers with psycopg.sql.Identifier rather than string interpolation."
+            )
+        elif seed.db_type == "neo4j":
+            namespace_guidance = (
+                " Neo4j database names reject underscores: use the supplied adas-test- namespace and backtick-quote "
+                "the validated name in CREATE/DROP DATABASE commands."
+            )
         instructions = (
-            "TASK: Mock FastMCP Server\n"
-            "Write a complete, executable mock MCP server script using the FastMCP framework (`from mcp.server.fastmcp import FastMCP`).\n"
-            "Implement realistic mock tools using `@mcp.tool()` based on the fixture requirements.\n"
-            "Include `if __name__ == '__main__': mcp.run(...)` configured for the specified Streamable HTTP port and endpoint path."
+            "TASK: Isolated External Database Seed Lifecycle\n"
+            "Write a self-contained Python script for deterministic external-database evaluation data.\n"
+            "The script must define BOTH functions:\n"
+            "`def seed_external_database(connection_config: dict[str, str], namespace: str) -> None:`\n"
+            "`def cleanup_external_database(connection_config: dict[str, str], namespace: str) -> None:`\n"
+            "Rules:\n"
+            "1. Use connection_config only; do not read or log credentials directly.\n"
+            "2. Seed only inside the supplied namespace. Never mutate a default, shared, or production namespace.\n"
+            "3. Explicit Namespace Provisioning: Never assume the target namespace (e.g. database, schema, collection, or keyspace) already exists. seed_external_database must explicitly ensure or create the isolated namespace (e.g. CREATE IF NOT EXISTS) and verify it is ready before connecting to it or writing data.\n"
+            "4. cleanup_external_database must drop/delete only the supplied namespace and be safe after partial setup.\n"
+            "5. Do not start or manage the database service; it is user-provided.\n"
+            "6. Do not print connection values, credentials, or full connection strings.\n"
+            "7. Statement Isolation: When clearing existing data before inserting seed records, always execute cleanup/delete statements separately from insert/create statements (e.g. in Cypher, never combine `MATCH ... DETACH DELETE` and `CREATE` in a single query, as matching 0 records on an empty database filters out and aborts all subsequent creation clauses)."
+            + namespace_guidance
         )
         system_prompt = self._build_system_prompt(instructions)
-        transport_info = f"Transport: {fixture.transport}"
-        if fixture.port:
-            transport_info += f", Port: {fixture.port}, Endpoint Path: {fixture.endpoint_path}"
+        desc_info = _format_fixture_instructions(seed.description, seed.private_description)
+        user_prompt = (
+            f"{self._format_task_context(task_spec)}\n"
+            f"Database Resource: {seed.resource_name}\n"
+            f"Engine Type: {seed.db_type}\n"
+            f"Expected Driver: {seed.driver}\n"
+            f"Connection Parameters (names only): {sorted(seed.connection_env)}\n"
+            f"Namespace Kind: {seed.namespace_kind}\n"
+            f"Isolated Namespace: {seed.namespace}\n"
+            f"Cleanup Policy: {seed.cleanup_policy}\n"
+            f"Schema & Seed Requirements:\n{desc_info}\n\n"
+            "Write the complete Python seed lifecycle script:"
+        )
+        response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        code = normalize_future_imports(extract_code_block(str(response.content)))
+        return code, extract_setup_requirements(code)
 
+    def generate_mcp_server_script(self, task_spec: TaskSpec, fixture: MCPFixtureSpec) -> tuple[str, list[str]]:
+        """Prompt setup_model to generate a mock MCPServer script."""
+        endpoint_path = f"/{fixture.endpoint_path.strip('/')}" if fixture.endpoint_path.strip("/") else "/"
+
+        run_code_example = (
+            "if __name__ == '__main__':\n"
+            "    mcp.run(\n"
+            "        transport='streamable-http',\n"
+            "        host='127.0.0.1',\n"
+            f"        port={fixture.port},\n"
+            f"        streamable_http_path='{endpoint_path}',\n"
+            "    )"
+        )
+
+        instructions = (
+            "TASK: Mock MCPServer (mcp>=2)\n"
+            "Write a complete, runnable mock MCP server script using the modern MCP 2.x Python SDK (`mcp>=2`).\n\n"
+            "STRICT GUIDELINES FOR MCP 2.x:\n"
+            "1. Imports & Server Class: FastMCP was renamed to MCPServer in mcp>=2.\n"
+            "   - Use: `from mcp.server.mcpserver import MCPServer` (or `from mcp.server import MCPServer`).\n"
+            "   - DO NOT import `FastMCP` or import from `mcp.server.fastmcp` (both removed in v2).\n"
+            f"2. Instantiation: `mcp = MCPServer('{fixture.name}')`.\n"
+            "   - DO NOT pass transport options (`host`, `port`, `streamable_http_path`) to `MCPServer(...)`.\n"
+            "3. Tool Definitions (`@mcp.tool()`):\n"
+            "   - Decorate functions with `@mcp.tool()`.\n"
+            "   - Every tool must have full type annotations (parameters and return types) and a docstring describing what it does.\n"
+            "   - Context injection: Do NOT call `mcp.get_context()` (removed in v2). If context is needed, declare a `ctx: Context` parameter (`from mcp.server.mcpserver import Context`).\n"
+            '   - Errors: To simulate a tool error, raise `ToolError("message")` (`from mcp.server.mcpserver.exceptions import ToolError`).\n'
+            "4. Custom HTTP Routes (if non-MCP HTTP endpoints are needed, e.g. health or audit endpoints):\n"
+            '   - Use `@mcp.custom_route(path, methods=["GET"])`.\n'
+            "   - Handler signature: `async def handler(request: Request) -> Response:`.\n"
+            "   - Import `Request` from `starlette.requests` and `JSONResponse` / `Response` from `starlette.responses`.\n"
+            "5. Server Execution: The server must run using Streamable HTTP via `mcp.run`:\n"
+            "```python\n"
+            f"{run_code_example}\n"
+            "```\n"
+            '6. Requirements: Declare `SETUP_REQUIREMENTS = ["mcp>=2", "starlette", "uvicorn"]` at the top of the file, '
+            "plus any third-party libraries used (e.g. `requests`, `pydantic`).\n"
+            "7. Output format: Output ONLY the complete, executable Python code in a single ```python code block."
+        )
+
+        system_prompt = self._build_system_prompt(instructions)
+        transport_info = (
+            f"Transport: streamable-http, Host: 127.0.0.1, Port: {fixture.port}, Endpoint Path: {endpoint_path}"
+        )
+
+        desc_info = _format_fixture_instructions(fixture.description, fixture.private_description)
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"MCP Server Name: {fixture.name}\n"
             f"{transport_info}\n"
-            f"Requirements & Tools to Mock:\n{fixture.description}\n\n"
-            "Write the complete FastMCP server script:"
+            f"Requirements & Tools to Mock:\n{desc_info}\n\n"
+            "Write the complete MCPServer script:"
         )
 
         response = self._invoke_setup_model([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         code = normalize_future_imports(extract_code_block(str(response.content)))
         reqs = extract_setup_requirements(code)
-        if "mcp" not in reqs:
-            reqs.append("mcp")
+        reqs = [r if normalize_package_name(r) != "mcp" else "mcp>=2" for r in reqs]
+
+        for base_dep in ["mcp>=2", "starlette", "uvicorn"]:
+            if base_dep not in reqs:
+                reqs.append(base_dep)
+
         return code, reqs
 
     def generate_mock_service_script(
@@ -212,15 +321,17 @@ class AutomaticSetup:
             "TASK: Mock REST HTTP Service\n"
             "Write a self-contained FastAPI mock server script.\n"
             "Implement realistic endpoints and mock data according to the description.\n"
-            "Include `if __name__ == '__main__': uvicorn.run(app, port=...)`."
+            "Include `if __name__ == '__main__': uvicorn.run(app, host='127.0.0.1', port=...)`.\n"
+            "Use exactly the declared port, stay in the foreground, and run directly with `python fixtures/mock_<name>.py` without interactive setup."
         )
         system_prompt = self._build_system_prompt(instructions)
+        desc_info = _format_fixture_instructions(fixture.description, fixture.private_description)
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"Service Name: {fixture.name}\n"
             f"Port: {fixture.port}\n"
             f"Base URL Env: {fixture.base_url_env}\n"
-            f"Endpoints & Response Requirements:\n{fixture.description}\n\n"
+            f"Endpoints & Response Requirements:\n{desc_info}\n\n"
             "Write the complete FastAPI mock server script:"
         )
 
@@ -252,11 +363,12 @@ class AutomaticSetup:
             f'Artifact Location Instruction: Create that exact relative path beneath workspace_dirs["ADAS_INPUT_DIR"].\n'
         )
 
+        desc_info = _format_fixture_instructions(fixture.description, fixture.private_description)
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"Fixture Name: {fixture.name}\n"
             f"{path_info}"
-            f"Requirements:\n{fixture.description}\n\n"
+            f"Requirements:\n{desc_info}\n\n"
             "Write the complete setup script:"
         )
 
@@ -274,8 +386,9 @@ class AutomaticSetup:
             "`def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:`\n"
             "Rules for check_environment:\n"
             "1. Check that required environment variables / API keys exist (log names only, NEVER secrets).\n"
-            "2. Verify access to declared database resources or file inputs (search input directories recursively using rglob, as fixtures may have relative subdirectories).\n"
-            "3. Return (True, 'Environment verified') on success, or (False, error_description) on failure."
+            "2. Verify declared file and embedded-database inputs only through workspace_dirs and the runtime ADAS_INPUT_DIR environment; search input directories recursively using rglob, as fixtures may have relative subdirectories. Never hardcode a host or sandbox path.\n"
+            "3. For a declared HTTP, MCP, or external database resource, use only its declared environment variable when checking configuration. Do not hardcode localhost URLs, ports, endpoint paths, or connection strings: these may be replaced by a runtime resource profile.\n"
+            "4. Return (True, 'Environment verified') on success, or (False, error_description) on failure."
         )
         system_prompt = self._build_system_prompt(instructions)
         api_keys = [
@@ -333,20 +446,29 @@ class AutomaticSetup:
             discovered_packages.update(reqs)
             logger.info(f"Generated database seed script: {db_script_dest}")
 
+        # 2b. Generate external-database seed lifecycle scripts.
+        for seed in task_spec.test_fixtures.external_database_seeds:
+            seed_script_dest = setup_scripts_dir / f"seed_external_{seed.name}.py"
+            code, reqs = self.generate_external_database_seed_script(task_spec, seed)
+            safe_write_text(seed_script_dest, code, root_dir=setup_scripts_dir)
+            created_files.append(seed_script_dest)
+            discovered_packages.update(reqs)
+            logger.info(f"Generated external database seed lifecycle script: {seed_script_dest}")
+
         # 3. Generate MCP mock server scripts
         for mcp_fix in task_spec.test_fixtures.mcps:
-            mcp_script_dest = setup_scripts_dir / f"mock_{mcp_fix.name}.py"
+            mcp_script_dest = fixtures_dir / f"mock_{mcp_fix.name}.py"
             code, reqs = self.generate_mcp_server_script(task_spec, mcp_fix)
-            safe_write_text(mcp_script_dest, code, root_dir=setup_scripts_dir)
+            safe_write_text(mcp_script_dest, code, root_dir=fixtures_dir)
             created_files.append(mcp_script_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated MCP server script: {mcp_script_dest}")
 
         # 4. Generate mock service scripts
         for mock_fix in task_spec.test_fixtures.mock_services:
-            mock_dest = setup_scripts_dir / f"mock_{mock_fix.name}.py"
+            mock_dest = fixtures_dir / f"mock_{mock_fix.name}.py"
             code, reqs = self.generate_mock_service_script(task_spec, mock_fix)
-            safe_write_text(mock_dest, code, root_dir=setup_scripts_dir)
+            safe_write_text(mock_dest, code, root_dir=fixtures_dir)
             created_files.append(mock_dest)
             discovered_packages.update(reqs)
             logger.info(f"Generated mock service script: {mock_dest}")

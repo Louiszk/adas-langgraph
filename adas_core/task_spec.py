@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from adas_core.exceptions import FeatureNotImplementedError
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
+from adas_core.logging_config import get_logger
+from config import settings
+
+logger = get_logger("adas_core.task_spec")
+
+_DOCUMENTATION_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst", ".yaml", ".yml", ".json", ".toml"})
 
 
 class ToolRequirement(BaseModel):
@@ -89,6 +97,11 @@ class ResourceEntry(BaseModel):
     path_or_uri: str | None = Field(default=None, description="Filesystem path or URI to the resource")
     description: str = Field(default="", description="Description of the resource schema or contents")
 
+    @field_validator("name")
+    @classmethod
+    def validate_resource_name(cls, v: str) -> str:
+        return validate_identifier(v, field_name="resource name")
+
 
 class ApiKeyRequirement(BaseModel):
     """Declaration of an expected environment variable/API key."""
@@ -112,6 +125,13 @@ class ResourceManifest(BaseModel):
         default_factory=list, description="Required environment variables/API keys"
     )
 
+    @model_validator(mode="after")
+    def validate_unique_resource_names(self) -> ResourceManifest:
+        names = [resource.name for resource in self.available_resources]
+        if len(names) != len(set(names)):
+            raise ValueError("resource_manifest.available_resources contains duplicate resource names.")
+        return self
+
 
 class FileFixtureSpec(BaseModel):
     """Specification of test file(s) to be generated for tests."""
@@ -130,6 +150,10 @@ class FileFixtureSpec(BaseModel):
         default=1, ge=1, description="Number of files to generate (1 for single file, N for batch/folder)"
     )
     description: str = Field(default="", description="Purpose, schema, or content requirements for this file")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
     content_type: Literal["text", "csv", "json", "binary"] = Field(default="text", description="File format")
 
     @field_validator("path")
@@ -163,6 +187,10 @@ class DatabaseFixtureSpec(BaseModel):
     )
     count: int | None = Field(default=None, ge=1, description="Target number of records, rows, or nodes to seed")
     description: str = Field(default="", description="Schema, entities, tables, or graph structure to populate")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -200,7 +228,7 @@ class MCPFixtureSpec(BaseModel):
         default="streamable-http",
         description="MCP transport protocol. Streamable HTTP is the only supported protocol.",
     )
-    port: int | None = Field(default=None, description="Port number for the Streamable HTTP MCP server")
+    port: int = Field(..., ge=1, le=65535, description="Port number for the Streamable HTTP MCP server")
     endpoint_path: str = Field(
         default="/mcp", description="HTTP endpoint path for Streamable HTTP (defaults to '/mcp')"
     )
@@ -210,11 +238,30 @@ class MCPFixtureSpec(BaseModel):
     description: str = Field(
         default="", description="Tools, resources, and simulated behaviors this MCP server provides"
     )
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
         return validate_identifier(v, field_name="mcp fixture name")
+
+    @field_validator("endpoint_path")
+    @classmethod
+    def validate_endpoint_path(cls, v: str) -> str:
+        parsed = urlsplit(v)
+        if not v.startswith("/") or parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or "//" in v:
+            raise ValueError("MCP endpoint_path must be an absolute HTTP path without query, fragment, or host.")
+        return v
+
+    @field_validator("url_env")
+    @classmethod
+    def validate_url_env(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("MCP url_env must be a valid environment-variable name.")
+        return v
 
     @model_validator(mode="after")
     def set_default_id(self) -> MCPFixtureSpec:
@@ -232,16 +279,27 @@ class MockServiceFixtureSpec(BaseModel):
 
     id: str = Field(default="", description="Unique fixture identifier. Defaults to name if empty.")
     name: str = Field(..., min_length=1, description="Service name (e.g. 'mock_weather_api')")
-    port: int = Field(default=8000, description="Local port for the mock server")
+    port: int = Field(default=8000, ge=1, le=65535, description="Local port for the mock server")
     base_url_env: str = Field(
         default="MOCK_API_BASE_URL", description="Env var exposing the mock server URL to the agent"
     )
     description: str = Field(default="", description="Endpoints, routes, and response behavior to mock")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
         return validate_identifier(v, field_name="mock service fixture name")
+
+    @field_validator("base_url_env")
+    @classmethod
+    def validate_base_url_env(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("Mock service base_url_env must be a valid environment-variable name.")
+        return v
 
     @model_validator(mode="after")
     def set_default_id(self) -> MockServiceFixtureSpec:
@@ -270,6 +328,10 @@ class CustomFixtureSpec(BaseModel):
         description="Relative file or directory artifact produced by custom setup (e.g. 'repo/' or 'config.yaml')",
     )
     description: str = Field(..., min_length=1, description="Description of the custom setup requirements")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
 
     @field_validator("name")
     @classmethod
@@ -289,6 +351,102 @@ class CustomFixtureSpec(BaseModel):
         return self
 
 
+class ExternalDatabaseSeedSpec(BaseModel):
+    """Per-test seed data for an isolated, user-provided external database.
+
+    The database service itself remains a resource-manifest responsibility.  This
+    spec only authorizes deterministic setup and teardown of a namespace that is
+    clearly reserved for ADAS evaluation.
+    """
+
+    __test__ = False
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default="", description="Unique seed identifier. Defaults to name if empty.")
+    name: str = Field(..., min_length=1, description="Seed script identifier")
+    resource_name: str = Field(..., min_length=1, description="Name of the database resource in resource_manifest")
+    db_type: Literal["postgres", "neo4j", "redis", "qdrant", "custom"] = Field(
+        ..., description="External database engine type"
+    )
+    driver: str = Field(..., min_length=1, description="Expected Python driver/package used by the seed script")
+    connection_env: dict[str, str] = Field(
+        ...,
+        min_length=1,
+        description="Connection parameter to environment-variable mapping; values never contain secrets",
+    )
+    namespace_kind: Literal["schema", "database", "namespace", "collection"] = Field(
+        ..., description="The isolated unit that setup owns and cleanup drops"
+    )
+    namespace: str = Field(
+        ...,
+        min_length=1,
+        description="Dedicated ADAS test namespace using the database engine's safe naming convention",
+    )
+    namespace_env: str = Field(
+        default="",
+        description="Environment variable name used to expose the active isolated namespace to the target system during test execution (e.g. 'NEO4J_DATABASE' or 'PGDATABASE')",
+    )
+    cleanup_policy: Literal["drop_namespace"] = Field(
+        default="drop_namespace", description="Required conservative cleanup action after every case"
+    )
+    description: str = Field(..., min_length=1, description="Schema and deterministic seed-data requirements")
+    private_description: str = Field(
+        default="",
+        description="Private test-bench requirements and deterministic seed data withheld from design context",
+    )
+
+    @field_validator("name", "resource_name")
+    @classmethod
+    def validate_identifiers(cls, v: str) -> str:
+        return validate_identifier(v, field_name="external database seed identifier")
+
+    @field_validator("driver")
+    @classmethod
+    def validate_driver(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", v):
+            raise ValueError("external database seed driver must be a package/driver identifier.")
+        return v
+
+    @field_validator("connection_env")
+    @classmethod
+    def validate_connection_env(cls, v: dict[str, str]) -> dict[str, str]:
+        for parameter, env_var in v.items():
+            validate_identifier(parameter, field_name="external database connection parameter")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_var):
+                raise ValueError("external database seed connection_env values must be environment-variable names.")
+        return v
+
+    @field_validator("namespace_env")
+    @classmethod
+    def validate_namespace_env(cls, v: str) -> str:
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("external database seed namespace_env must be a valid environment-variable name.")
+        return v
+
+    @model_validator(mode="after")
+    def set_default_id(self) -> ExternalDatabaseSeedSpec:
+        if not self.id:
+            self.id = self.name
+        validate_identifier(self.id, field_name="external database seed id")
+        return self
+
+    @model_validator(mode="after")
+    def validate_engine_safe_namespace(self) -> ExternalDatabaseSeedSpec:
+        if self.db_type == "postgres" and not re.fullmatch(r"adas_test_[a-z0-9_]{1,52}", self.namespace):
+            raise ValueError(
+                "PostgreSQL external database seed namespaces must use lowercase letters, digits, and underscores "
+                "with the 'adas_test_' prefix. PostgreSQL rejects unquoted hyphens in identifiers."
+            )
+        if self.db_type == "neo4j" and not re.fullmatch(
+            r"adas-test-[a-z0-9](?:[a-z0-9.-]{0,51}[a-z0-9])?", self.namespace
+        ):
+            raise ValueError(
+                "Neo4j external database seed namespaces must use lowercase letters, digits, and dashes "
+                "with the 'adas-test-' prefix. Neo4j database names reject underscores."
+            )
+        return self
+
+
 class TestFixturesSpec(BaseModel):
     """Declarative specification of all test fixtures."""
 
@@ -304,6 +462,10 @@ class TestFixturesSpec(BaseModel):
     custom_fixtures: list[CustomFixtureSpec] = Field(
         default_factory=list, description="Custom scripts that materialize declared filesystem artifacts"
     )
+    external_database_seeds: list[ExternalDatabaseSeedSpec] = Field(
+        default_factory=list,
+        description="Deterministic per-case seeds for isolated user-provided external database resources",
+    )
 
     @model_validator(mode="after")
     def validate_unique_fixture_ids(self) -> TestFixturesSpec:
@@ -315,6 +477,7 @@ class TestFixturesSpec(BaseModel):
             ("mcps", self.mcps),
             ("mock_services", self.mock_services),
             ("custom_fixtures", self.custom_fixtures),
+            ("external_database_seeds", self.external_database_seeds),
         ]:
             for item in items:
                 if item.id in seen:
@@ -323,15 +486,29 @@ class TestFixturesSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def reject_unimplemented_process_fixtures(self) -> TestFixturesSpec:
-        # TODO(proper-fixtures): Add per-case process lifecycle management for
-        # Streamable HTTP MCP servers and mock HTTP services before enabling them.
-        # Until then, accepting either kind would produce misleading test results.
-        if self.mcps or self.mock_services:
-            raise FeatureNotImplementedError(
-                "NOT_IMPLEMENTED: MCP and mock HTTP service fixtures require process lifecycle management "
-                "and are not supported by the current runtime."
-            )
+    def validate_process_fixture_configuration(self) -> TestFixturesSpec:
+        """Reject port and target-environment collisions before a case is started."""
+        ports: set[int] = set()
+        env_names: set[str] = set()
+        for fixture in [*self.mcps, *self.mock_services]:
+            if fixture.port in ports:
+                raise ValueError(f"Duplicate process fixture port '{fixture.port}'.")
+            ports.add(fixture.port)
+            env_name = fixture.url_env if isinstance(fixture, MCPFixtureSpec) else fixture.base_url_env
+            if env_name in env_names:
+                raise ValueError(f"Duplicate process fixture environment variable '{env_name}'.")
+            env_names.add(env_name)
+        return self
+
+    @model_validator(mode="after")
+    def reject_external_database_fixtures(self) -> TestFixturesSpec:
+        """Only embedded database files can be harness-owned test fixtures."""
+        for fixture in self.databases:
+            if fixture.db_type not in {"sqlite", "duckdb"}:
+                raise ValueError(
+                    f"Database fixture '{fixture.id}' uses unsupported external type '{fixture.db_type}'. "
+                    "Declare external databases in resource_manifest instead."
+                )
         return self
 
     def all_fixture_ids(self) -> set[str]:
@@ -347,6 +524,8 @@ class TestFixturesSpec(BaseModel):
             ids.add(s.id)
         for c in self.custom_fixtures:
             ids.add(c.id)
+        for seed in self.external_database_seeds:
+            ids.add(seed.id)
         return ids
 
     def get_file_paths_for_fixture_ids(self, fixture_ids: list[str] | None) -> list[str] | None:
@@ -378,6 +557,25 @@ class TestFixturesSpec(BaseModel):
 
         return list(dict.fromkeys(paths))
 
+    def get_process_fixtures_for_fixture_ids(
+        self, fixture_ids: list[str] | None
+    ) -> list[MCPFixtureSpec | MockServiceFixtureSpec]:
+        """Return process fixtures selected for a case; ``None`` selects all."""
+        selected = None if fixture_ids is None else set(fixture_ids)
+        fixtures: list[MCPFixtureSpec | MockServiceFixtureSpec] = [*self.mcps, *self.mock_services]
+        return fixtures if selected is None else [fixture for fixture in fixtures if fixture.id in selected]
+
+    def get_external_database_seeds_for_fixture_ids(
+        self, fixture_ids: list[str] | None
+    ) -> list[ExternalDatabaseSeedSpec]:
+        """Return external database seeds selected for a case; ``None`` selects all."""
+        selected = None if fixture_ids is None else set(fixture_ids)
+        return (
+            self.external_database_seeds
+            if selected is None
+            else [seed for seed in self.external_database_seeds if seed.id in selected]
+        )
+
     def get_all_file_paths(self) -> list[str]:
         """Return the relative file paths of all declared filesystem artifacts."""
         paths: list[str] = []
@@ -408,6 +606,9 @@ class TestFixturesSpec(BaseModel):
         for c in self.custom_fixtures:
             if c.id == fixture_id:
                 return c
+        for seed in self.external_database_seeds:
+            if seed.id == fixture_id:
+                return seed
         return None
 
     def get_script_filenames_for_fixture(self, fixture_id: str) -> list[str]:
@@ -427,6 +628,8 @@ class TestFixturesSpec(BaseModel):
             names.extend([f"mock_{fix.id}.py", f"mock_{fix.name}.py"])
         elif isinstance(fix, CustomFixtureSpec):
             names.extend([f"setup_{fix.id}.py", f"setup_{fix.name}.py"])
+        elif isinstance(fix, ExternalDatabaseSeedSpec):
+            names.extend([f"seed_external_{fix.id}.py", f"seed_external_{fix.name}.py"])
 
         return list(dict.fromkeys(names))
 
@@ -535,9 +738,25 @@ class TaskSpec(BaseModel):
     test_fixtures: TestFixturesSpec = Field(
         default_factory=TestFixturesSpec, description="Data fixtures required for tests"
     )
+    additional_documentation: list[str] = Field(
+        default_factory=list,
+        description="Optional list of documentation file paths relative to workspace or task directory to inject into the meta-agent context.",
+    )
     dev_suite: list[TestCaseSpec] = Field(
         default_factory=list, description="Visible test cases used for iterative refinement"
     )
+
+    @field_validator("additional_documentation")
+    @classmethod
+    def validate_additional_documentation(cls, v: list[str]) -> list[str]:
+        normalized_paths = [
+            normalize_fixture_path(doc_path, field_name="additional_documentation path") for doc_path in v
+        ]
+        unsupported = [path for path in normalized_paths if Path(path).suffix.lower() not in _DOCUMENTATION_SUFFIXES]
+        if unsupported:
+            allowed = ", ".join(sorted(_DOCUMENTATION_SUFFIXES))
+            raise ValueError(f"additional_documentation files must use one of: {allowed}. Unsupported: {unsupported}")
+        return normalized_paths
 
     @field_validator("required_packages")
     @classmethod
@@ -606,6 +825,32 @@ class TaskSpec(BaseModel):
                         )
         return self
 
+    @model_validator(mode="after")
+    def validate_external_database_seed_resources(self) -> TaskSpec:
+        """Ensure a seed explicitly targets a declared external database resource."""
+        resources = {resource.name: resource for resource in self.resource_manifest.available_resources}
+        for seed in self.test_fixtures.external_database_seeds:
+            if "ADAS_TEST_NAMESPACE" in seed.connection_env.values():
+                raise ValueError(
+                    f"External database seed '{seed.id}' cannot use reserved connection environment variable "
+                    "'ADAS_TEST_NAMESPACE'."
+                )
+            resource = resources.get(seed.resource_name)
+            if resource is None:
+                raise ValueError(
+                    f"External database seed '{seed.id}' references unknown resource '{seed.resource_name}'."
+                )
+            if resource.type != "database":
+                raise ValueError(
+                    f"External database seed '{seed.id}' references resource '{seed.resource_name}', which is not a database."
+                )
+            if seed.namespace_env and seed.namespace_env in seed.connection_env.values():
+                raise ValueError(
+                    f"External database seed '{seed.id}' namespace_env '{seed.namespace_env}' "
+                    "must not overwrite one of its connection environment variables."
+                )
+        return self
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to standard dictionary."""
         return self.model_dump(mode="json")
@@ -613,12 +858,87 @@ class TaskSpec(BaseModel):
     def to_design_context(self) -> str:
         """Render the generalization-focused task contract supplied to the meta-agent.
 
-        This intentionally excludes the concrete development cases.
-        TaskSpec also has no holdout fields, so this representation cannot expose a private evaluation suite.
+        This intentionally excludes concrete development cases and any private fixture
+        seeding descriptions (private_description), exposing only public schemas and contracts.
         """
         context = self.to_dict()
         context.pop("dev_suite", None)
+        test_fixtures = context.get("test_fixtures")
+        if isinstance(test_fixtures, dict):
+            for fixture_list in test_fixtures.values():
+                if isinstance(fixture_list, list):
+                    for fixture in fixture_list:
+                        if isinstance(fixture, dict):
+                            fixture.pop("private_description", None)
         return json.dumps(context, indent=2, sort_keys=True)
+
+    def load_additional_documentation(self, task_dir: Path | str | None = None) -> str:
+        """Load and format referenced documentation files into markdown sections."""
+        if not self.additional_documentation:
+            return ""
+
+        try:
+            import tiktoken
+
+            encoding = tiktoken.get_encoding(settings.additional_documentation_token_encoding)
+            prefix = "\n\n---\n\n## Additional Reference Documentation\n\n"
+            remaining_tokens = settings.additional_documentation_max_tokens - len(encoding.encode(prefix))
+        except (ImportError, ValueError) as exc:
+            logger.warning("Could not initialize the additional-documentation token counter: %s", exc)
+            return ""
+        if remaining_tokens <= 0:
+            logger.warning("The configured additional-documentation token budget is too small to include a document.")
+            return ""
+
+        search_roots = [Path(".")]
+        if task_dir:
+            search_roots.insert(0, Path(task_dir))
+        search_roots.append(Path("/sandbox/workspace"))
+
+        doc_blocks: list[str] = []
+        for doc_path_str in self.additional_documentation:
+            rel_path = Path(doc_path_str)
+            found_file: Path | None = None
+            for root in search_roots:
+                resolved_root = root.resolve()
+                candidate = (root / rel_path).resolve()
+                try:
+                    candidate.relative_to(resolved_root)
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    found_file = candidate
+                    break
+
+            if found_file:
+                try:
+                    if found_file.stat().st_size > remaining_tokens * 8:
+                        logger.warning(
+                            "Referenced documentation file '%s' exceeds the configured size limit.", doc_path_str
+                        )
+                        continue
+                    content = found_file.read_text(encoding="utf-8").strip()
+                except (OSError, UnicodeError) as exc:
+                    logger.warning("Could not read referenced documentation file '%s': %s", doc_path_str, exc)
+                    continue
+                separator = "" if not doc_blocks else "\n\n"
+                block = f"{separator}### Reference: {rel_path.name}\n\n{content}"
+                token_count = len(encoding.encode(block))
+                if token_count > remaining_tokens:
+                    logger.warning(
+                        "Referenced documentation file '%s' exceeds the remaining %d-token budget.",
+                        doc_path_str,
+                        remaining_tokens,
+                    )
+                    continue
+                doc_blocks.append(block.removeprefix("\n\n"))
+                remaining_tokens -= token_count
+            else:
+                logger.warning("Referenced documentation file '%s' not found.", doc_path_str)
+
+        if not doc_blocks:
+            return ""
+        return prefix + "\n\n".join(doc_blocks)
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize to formatted JSON string."""

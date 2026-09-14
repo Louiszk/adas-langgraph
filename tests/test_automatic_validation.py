@@ -114,6 +114,22 @@ class TestAutomaticValidation:
         assert llm.invoke.call_count == 1
         assert is_validation_manifest_current(sample_task_spec, tmp_path)
 
+    def test_create_validation_cli_verify_flag(self, sample_task_spec, tmp_path):
+        import create_validation
+
+        spec_file = tmp_path / "task.json"
+        sample_task_spec.save(spec_file)
+
+        exit_code = create_validation.main(["--task-spec", str(spec_file), "--verify"])
+        assert exit_code == 1
+
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(content=generated_code())
+        AutomaticValidation(llm=llm).generate_all(sample_task_spec, tmp_path)
+
+        exit_code = create_validation.main(["--task-spec", str(spec_file), "--verify"])
+        assert exit_code == 0
+
     def test_missing_required_validator_fails_loudly(self, sample_task_spec):
         llm = MagicMock()
         llm.invoke.return_value = AIMessage(content="```python\ndef not_a_validator(): pass\n```")

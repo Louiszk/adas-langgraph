@@ -8,7 +8,20 @@ import sys
 from pathlib import Path
 
 from adas_core.automatic_validation import extract_validation_requirements, is_validation_manifest_current
-from adas_core.environment import ensure_packages_installed, isolated_case_workspace, run_preflight_check
+from adas_core.environment import (
+    ensure_packages_installed,
+    isolated_case_workspace,
+    load_environment,
+    run_preflight_check,
+)
+from adas_core.fixture_lifecycle import process_fixture_lifecycle
+from adas_core.runtime_resources import (
+    RuntimeResourceProfile,
+    external_url_overrides,
+    fixture_paths_for_profile,
+    fixture_process_ids_for_profile,
+    stage_local_overrides,
+)
 from adas_core.task_spec import TaskSpec
 
 
@@ -34,12 +47,22 @@ def validation_requirements(task_dir: Path, manifest: dict | None = None) -> lis
 
 
 def main() -> int:
+    load_environment()
+
     parser = argparse.ArgumentParser(description="Run a task setup's preflight check inside the sandbox.")
     parser.add_argument("--task-dir", required=True, type=Path)
+    parser.add_argument(
+        "--runtime-profile", default=None, help="Runtime resource profile JSON supplied by invoke_target."
+    )
     args = parser.parse_args()
 
     try:
         task_spec = TaskSpec.from_file(args.task_dir / "task.json")
+        runtime_profile = (
+            RuntimeResourceProfile.model_validate_json(args.runtime_profile) if args.runtime_profile else None
+        )
+        if runtime_profile:
+            runtime_profile.validate_for_task(task_spec)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"Invalid TaskSpec {args.task_dir / 'task.json'}: {exc}", file=sys.stderr)
         return 1
@@ -63,14 +86,26 @@ def main() -> int:
         print(f"Package provisioning failed: {exc}", file=sys.stderr)
         return 1
 
+    allowed_files = fixture_paths_for_profile(task_spec, runtime_profile)
     with isolated_case_workspace(
         base_dir="/tmp/adas-preflight",
         run_id="preflight",
         case_id="environment",
         fixtures_dir=args.task_dir / "fixtures",
+        allowed_files=allowed_files,
         clean_up=True,
     ) as workspace_dirs:
-        is_ok, message = run_preflight_check(args.task_dir / "preflight.py", workspace_dirs)
+        if runtime_profile:
+            stage_local_overrides(task_spec, runtime_profile, workspace_dirs)
+        fixture_context = process_fixture_lifecycle(
+            task_spec.test_fixtures,
+            fixture_process_ids_for_profile(task_spec, runtime_profile),
+            args.task_dir,
+            workspace_dirs,
+        )
+        url_context = external_url_overrides(task_spec, runtime_profile)
+        with fixture_context, url_context:
+            is_ok, message = run_preflight_check(args.task_dir / "preflight.py", workspace_dirs)
     if not is_ok:
         print(f"Preflight check failed: {message}", file=sys.stderr)
         return 1
