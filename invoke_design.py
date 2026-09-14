@@ -20,6 +20,7 @@ from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from config import settings
 from create_setup import run_setup_for_task, setup_manifest_is_current
+from create_validation import run_validation_for_task
 from sandbox.sandbox import (
     StreamingSandboxSession,
     copy_task_setup_to_sandbox,
@@ -105,47 +106,58 @@ def run_meta_system_in_sandbox(
     return True
 
 
+def _is_validation_current(task_spec: TaskSpec, task_dir: Path) -> bool:
+    safe_spec_name = sanitize_identifier(task_spec.name)
+    candidates = [
+        task_dir / f"{safe_spec_name}.validation.py",
+        task_dir / f"{task_spec.name}.validation.py",
+        task_dir / "validation.py",
+    ]
+    has_file = any(p.exists() for p in candidates)
+    return has_file and is_validation_manifest_current(task_spec, task_dir)
+
+
 def main() -> int:
     load_environment()
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run agentic systems in a sandboxed environment")
-    parser.add_argument("--reinstall", action="store_true", help="Reinstall dependencies.")
     parser.add_argument("--task-spec", type=Path, required=True, help="Validated TaskSpec JSON file")
     parser.add_argument(
         "--system-name",
-        default=None,
-        help="Optional target system name override (defaults to TaskSpec name).",
+        help="Target system name (defaults to TaskSpec name)",
+    )
+    parser.add_argument(
+        "--optimize-system",
+        help="Name of existing system to optimize from",
     )
     parser.add_argument(
         "--auto-setup",
         action="store_true",
-        help="Generate frozen fixtures and preflight artifacts in a separate sandbox before design.",
+        help="Ensure task setup and validation exist before running design",
     )
     parser.add_argument(
-        "--optimize-system",
-        default=None,
-        help="Specify target system name to optimize or change",
+        "--reinstall",
+        action="store_true",
+        help="Force reinstall of dependencies in sandbox",
     )
     parser.add_argument(
         "--container",
         choices=["auto", "docker", "podman"],
         default="auto",
-        help="Container runtime to use (auto will try Docker first, then Podman)",
+        help="Container runtime preference (auto, docker, podman)",
     )
     parser.add_argument(
         "--base-image",
-        default=None,
-        help="The base container image to use for the sandbox.",
+        help="Base image to run the design in (defaults to configured image in sandbox.py)",
     )
-    args = parser.parse_args()
-    task_spec = TaskSpec.from_file(args.task_spec)
-    target_name = args.system_name or task_spec.name
-    logger.info(f"Running with arguments: {args}")
 
-    # Validate identifiers strictly before any container or file operations
+    args = parser.parse_args()
+
     try:
-        validate_identifier(target_name, field_name="target system name")
+        task_spec = TaskSpec.from_file(args.task_spec)
+        if args.system_name:
+            validate_identifier(args.system_name, field_name="system name")
         if args.optimize_system:
             validate_identifier(args.optimize_system, field_name="optimize system name")
     except ValueError as exc:
@@ -153,46 +165,46 @@ def main() -> int:
         return 1
 
     task_dir = args.task_spec.resolve().parent
+    target_name = args.system_name or task_spec.name
 
-    # Host-side check: ensure frozen validation module exists BEFORE setup or opening sandbox
-    safe_spec_name = sanitize_identifier(task_spec.name)
-    validation_candidates = [
-        task_dir / f"{safe_spec_name}.validation.py",
-        task_dir / f"{task_spec.name}.validation.py",
-        task_dir / "validation.py",
-    ]
-    validation_file = next((p for p in validation_candidates if p.exists()), None)
-    if validation_file is None:
-        logger.error(
-            "Frozen validation module not found for TaskSpec '%s' in %s. "
-            "Please generate it before running design optimization: "
-            "python create_validation.py --task-spec %s",
-            task_spec.name,
-            task_dir,
-            args.task_spec,
-        )
-        return 1
-    if not is_validation_manifest_current(task_spec, task_dir):
-        logger.error(
-            "Frozen validation module is missing or stale for TaskSpec '%s'. "
-            "Regenerate it before design optimization: python create_validation.py --task-spec %s --force",
-            task_spec.name,
-            args.task_spec,
-        )
-        return 1
+    validation_current = _is_validation_current(task_spec, task_dir)
+    setup_current = setup_manifest_is_current(args.task_spec)
 
-    if args.auto_setup or not setup_manifest_is_current(args.task_spec):
-        logger.info(
-            "Task setup is missing, stale, or --auto-setup was requested; ensuring setup for %s...",
-            args.task_spec,
-        )
-        run_setup_for_task(
-            args.task_spec,
-            force=args.auto_setup,
-            reinstall=args.reinstall,
-            container=args.container,
-            base_image=args.base_image,
-        )
+    if not args.auto_setup:
+        if not setup_current:
+            logger.error(
+                "Frozen task setup is missing or stale for TaskSpec '%s'. "
+                "Regenerate it before design optimization: python create_setup.py --task-spec %s --force (or pass --auto-setup)",
+                task_spec.name,
+                args.task_spec,
+            )
+        if not validation_current:
+            logger.error(
+                "Frozen validation module is missing or stale for TaskSpec '%s'. "
+                "Regenerate it before design optimization: python create_validation.py --task-spec %s --force (or pass --auto-setup)",
+                task_spec.name,
+                args.task_spec,
+            )
+        if not setup_current or not validation_current:
+            return 1
+    else:
+        if not setup_current:
+            logger.info("Task setup is missing or stale; ensuring setup for %s...", args.task_spec)
+            run_setup_for_task(
+                args.task_spec,
+                force=True,
+                reinstall=args.reinstall,
+                container=args.container,
+                base_image=args.base_image,
+            )
+            validation_current = _is_validation_current(task_spec, task_dir)
+
+        if not validation_current:
+            logger.info("Frozen validation module is missing or stale; generating validation for %s...", args.task_spec)
+            val_path = run_validation_for_task(args.task_spec, force=True)
+            if val_path is None:
+                logger.error("Failed to generate frozen validation module for TaskSpec '%s'.", task_spec.name)
+                return 1
 
     session = StreamingSandboxSession(
         image=args.base_image,

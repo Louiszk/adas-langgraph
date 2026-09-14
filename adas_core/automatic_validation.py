@@ -80,32 +80,61 @@ def write_validation_manifest(task_spec: TaskSpec, root: Path, validation_file: 
     return manifest_path
 
 
-def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) -> bool:
-    """Return whether the frozen validator and all its generation inputs still match."""
+def verify_validation_manifest(task_spec: TaskSpec, task_dir: Path | str) -> tuple[bool, list[str]]:
+    """Return whether the frozen validator and all its generation inputs match, plus diagnostic issues."""
     root = Path(task_dir).resolve()
     manifest_path = root / _SETUP_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return False, ["Missing setup_manifest.json"]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        validation = manifest.get("validation")
-        if not isinstance(validation, dict):
-            return False
-        validator_name = validation.get("validator_file")
-        validator_hash = validation.get("validator_hash")
-        if not isinstance(validator_name, str) or not isinstance(validator_hash, str):
-            return False
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return False, [f"Unreadable setup_manifest.json: {exc}"]
+
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict):
+        return False, ["Missing 'validation' section in setup_manifest.json"]
+
+    issues: list[str] = []
+    if validation.get("schema_version") != "1.0":
+        issues.append(f"Validation schema version mismatch: {validation.get('schema_version')}")
+    if validation.get("task_name") != task_spec.name:
+        issues.append(f"Task name mismatch: manifest={validation.get('task_name')!r}, spec={task_spec.name!r}")
+    if validation.get("generator_version") != VALIDATION_GENERATOR_VERSION:
+        issues.append(
+            f"Generator version mismatch: manifest={validation.get('generator_version')}, current={VALIDATION_GENERATOR_VERSION}"
+        )
+
+    expected_spec_hash = validation.get("task_spec_hash")
+    actual_spec_hash = _task_spec_sha256(task_spec)
+    if expected_spec_hash != actual_spec_hash:
+        issues.append(
+            f"TaskSpec hash mismatch (expected: {str(expected_spec_hash)[:12]}..., actual: {actual_spec_hash[:12]}...)"
+        )
+
+    expected_gen_hashes = validation.get("fixture_generator_hashes")
+    actual_gen_hashes = _fixture_generator_hashes(root)
+    if expected_gen_hashes != actual_gen_hashes:
+        issues.append("Fixture generator scripts hash mismatch")
+
+    validator_name = validation.get("validator_file")
+    validator_hash = validation.get("validator_hash")
+    if not isinstance(validator_name, str) or not isinstance(validator_hash, str):
+        issues.append("Missing validator_file or validator_hash in manifest")
+    else:
         validator_file = (root / validator_name).resolve()
         if not validator_file.is_relative_to(root) or not validator_file.is_file():
-            return False
-        return (
-            validation.get("schema_version") == "1.0"
-            and validation.get("task_name") == task_spec.name
-            and validation.get("task_spec_hash") == _task_spec_sha256(task_spec)
-            and validation.get("fixture_generator_hashes") == _fixture_generator_hashes(root)
-            and validation.get("generator_version") == VALIDATION_GENERATOR_VERSION
-            and validator_hash == _normalized_sha256(validator_file)
-        )
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
+            issues.append(f"Missing validator file: {validator_name}")
+        elif validator_hash != _normalized_sha256(validator_file):
+            issues.append(f"Hash mismatch for validator file: {validator_name}")
+
+    return len(issues) == 0, issues
+
+
+def is_validation_manifest_current(task_spec: TaskSpec, task_dir: Path | str) -> bool:
+    """Return whether the frozen validator and all its generation inputs still match."""
+    is_current, _ = verify_validation_manifest(task_spec, task_dir)
+    return is_current
 
 
 @dataclass
@@ -687,5 +716,6 @@ __all__ = [
     "is_validation_manifest_current",
     "load_validation_module",
     "sanitize_test_id",
+    "verify_validation_manifest",
     "write_validation_manifest",
 ]

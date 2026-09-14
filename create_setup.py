@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -28,36 +30,61 @@ def _file_hash(path: Path) -> str:
     return hashlib.sha256(contents).hexdigest()
 
 
-def setup_manifest_is_current(task_spec_path: Path) -> bool:
-    """Return whether every declared frozen setup artifact still matches its manifest."""
+def verify_setup_manifest(task_spec_path: Path) -> tuple[bool, list[str]]:
+    """Return whether every declared frozen setup artifact matches its manifest, plus diagnostic issues."""
     task_spec_path = task_spec_path.resolve()
     task_dir = task_spec_path.parent
     manifest_path = task_dir / "setup_manifest.json"
+    if not manifest_path.is_file():
+        return False, ["Missing setup_manifest.json"]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("fixture_lifecycle_version") != FIXTURE_LIFECYCLE_VERSION:
-            return False
-        files = manifest.get("files")
-        if not isinstance(files, dict) or not files:
-            return False
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return False, [f"Unreadable setup_manifest.json: {exc}"]
 
-        # The runtime always materializes the supplied specification as task.json.
-        expected_task_hash = files.get("task.json")
-        if not isinstance(expected_task_hash, str) or _file_hash(task_spec_path) != expected_task_hash:
-            return False
+    issues: list[str] = []
+    if manifest.get("fixture_lifecycle_version") != FIXTURE_LIFECYCLE_VERSION:
+        issues.append(
+            f"fixture_lifecycle_version mismatch (manifest={manifest.get('fixture_lifecycle_version')}, current={FIXTURE_LIFECYCLE_VERSION})"
+        )
 
-        resolved_root = task_dir.resolve()
-        for relative_name, expected_hash in files.items():
-            if not isinstance(relative_name, str) or not isinstance(expected_hash, str):
-                return False
-            artifact = (task_dir / relative_name).resolve()
-            if not artifact.is_relative_to(resolved_root) or not artifact.is_file():
-                return False
-            if _file_hash(artifact) != expected_hash:
-                return False
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    return True
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        issues.append("Manifest 'files' mapping is missing or empty")
+        return False, issues
+
+    expected_task_hash = files.get("task.json")
+    if not isinstance(expected_task_hash, str):
+        issues.append("Manifest 'files' mapping missing 'task.json'")
+    elif _file_hash(task_spec_path) != expected_task_hash:
+        issues.append(
+            f"Hash mismatch for task.json (expected: {expected_task_hash[:12]}..., actual: {_file_hash(task_spec_path)[:12]}...)"
+        )
+
+    resolved_root = task_dir.resolve()
+    for relative_name, expected_hash in files.items():
+        if relative_name == "task.json":
+            continue
+        if not isinstance(relative_name, str) or not isinstance(expected_hash, str):
+            issues.append(f"Invalid manifest file entry: {relative_name!r}")
+            continue
+        artifact = (task_dir / relative_name).resolve()
+        if not artifact.is_relative_to(resolved_root) or not artifact.is_file():
+            issues.append(f"Missing artifact file: {relative_name}")
+            continue
+        actual_hash = _file_hash(artifact)
+        if actual_hash != expected_hash:
+            issues.append(
+                f"Hash mismatch for {relative_name} (expected: {expected_hash[:12]}..., actual: {actual_hash[:12]}...)"
+            )
+
+    return len(issues) == 0, issues
+
+
+def setup_manifest_is_current(task_spec_path: Path) -> bool:
+    """Return whether every declared frozen setup artifact still matches its manifest."""
+    is_current, _ = verify_setup_manifest(task_spec_path)
+    return is_current
 
 
 def _copy_tree_from_runtime(session: StreamingSandboxSession, runtime_dir: str, destination: Path) -> None:
@@ -128,6 +155,10 @@ def run_setup_for_task(
         if getattr(result, "exit_code", 1) != 0:
             output = getattr(result, "stdout", "") or getattr(result, "stderr", "")
             raise RuntimeError(f"Sandbox task setup failed: {output}")
+        for generated_dir in ("fixtures", "setup_scripts"):
+            target_dir_path = task_dir / generated_dir
+            if target_dir_path.exists():
+                shutil.rmtree(target_dir_path)
         _copy_tree_from_runtime(session, _RUNTIME_TASK_DIR, task_dir)
         _restore_validation_section(task_dir, previous_validation)
     finally:
@@ -136,16 +167,41 @@ def run_setup_for_task(
     return task_dir
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     load_environment()
     setup_logging()
     parser = argparse.ArgumentParser(description="Generate a TaskSpec's fixtures and preflight script in a sandbox.")
     parser.add_argument("--task-spec", required=True, type=Path)
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify whether the setup manifest is current and exit without making changes.",
+    )
     parser.add_argument("--force", action="store_true", help="Regenerate an existing setup.")
     parser.add_argument("--reinstall", action="store_true", help="Reinstall sandbox base dependencies.")
     parser.add_argument("--container", choices=["auto", "docker", "podman"], default="auto")
     parser.add_argument("--base-image", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.verify:
+        try:
+            TaskSpec.from_file(args.task_spec)
+        except Exception as exc:
+            logger.error("TaskSpec validation failed for '%s': %s", args.task_spec, exc)
+            return 1
+
+        is_current, issues = verify_setup_manifest(args.task_spec)
+        if is_current:
+            logger.info("Frozen task setup is current for '%s'.", args.task_spec)
+            return 0
+        logger.error(
+            "Frozen task setup is stale or incomplete for '%s':\n  - %s\nRun 'python create_setup.py --task-spec %s --force' to regenerate.",
+            args.task_spec,
+            "\n  - ".join(issues),
+            args.task_spec,
+        )
+        return 1
+
     run_setup_for_task(
         args.task_spec,
         force=args.force,
@@ -153,7 +209,8 @@ def main() -> None:
         container=args.container,
         base_image=args.base_image,
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

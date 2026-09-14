@@ -321,3 +321,48 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         system_prompt = mock_llm.invoke.call_args.args[0][0].content
         assert "Never hardcode a host or sandbox path" in system_prompt
         assert "runtime resource profile" in system_prompt
+
+    def test_create_setup_cli_verify_flag(self, tmp_path):
+        import json
+
+        import create_setup
+        from adas_core.task_spec import TaskSpec
+
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "VerifySetupTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "persistence": {},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [
+                {
+                    "id": "case_1",
+                    "description": "Test case 1",
+                    "turns": [{"messages": [{"role": "user", "content": "hi"}]}],
+                }
+            ],
+        }
+        spec = TaskSpec.model_validate(spec_data)
+        spec.save(spec_file)
+
+        exit_code = create_setup.main(["--task-spec", str(spec_file), "--verify"])
+        assert exit_code == 1
+
+        task_hash = create_setup._file_hash(spec_file)
+        manifest = {
+            "schema_version": "1.0",
+            "fixture_lifecycle_version": create_setup.FIXTURE_LIFECYCLE_VERSION,
+            "task_name": "VerifySetupTask",
+            "files": {
+                "task.json": task_hash,
+            },
+        }
+        (tmp_path / "setup_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        exit_code = create_setup.main(["--task-spec", str(spec_file), "--verify"])
+        assert exit_code == 0
