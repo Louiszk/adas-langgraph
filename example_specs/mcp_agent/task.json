@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "name": "mcp_agent",
+  "system_goal": "Build a general-purpose single-turn agent that connects to any Streamable HTTP Model Context Protocol (MCP) server declared via runtime environment variables (any environment variable ending with '_MCP_URL', such as WORKSPACE_MCP_URL or OPERATIONS_MCP_URL). The agent receives a natural-language task in the state key user_request. It must dynamically inspect the environment to find active MCP server endpoints, use a compliant MCP client session over each server's Streamable HTTP endpoint to discover tool schemas with the tools/list protocol method, bind those tools to its reasoning model, and invoke them with the tools/call protocol method to gather facts or enact changes. The agent must handle diverse tool signatures dynamically without hardcoding tool names, supporting both direct single-step lookup tools and multi-step sequential workflows where tool outputs inform subsequent actions. Return a grounded, clear final answer in final_answer, record the discovered tool definitions in discovered_tools, and maintain an audit of executed tools in tool_history.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "discovered_tools": "list[dict[str, Any]]",
+      "tool_history": "list[dict[str, Any]]",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "discover_mcp_tools",
+        "description": "Inspect active environment variables ending with '_MCP_URL' (e.g. WORKSPACE_MCP_URL, OPERATIONS_MCP_URL), open a compliant MCP client session to each Streamable HTTP endpoint, call the tools/list protocol method, and return the aggregated tool definitions with their JSON schemas."
+      },
+      {
+        "name": "call_mcp_tool",
+        "description": "Use the active compliant MCP client session for the appropriate Streamable HTTP endpoint to call the tools/call protocol method with the specified tool name and arguments dictionary, returning the parsed tool execution result."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [
+    "requests",
+    "mcp>=2"
+  ],
+  "additional_documentation": [
+    "example_docs/mcp-documentation.md"
+  ],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [
+      {
+        "id": "workspace_mcp",
+        "name": "workspace_mcp",
+        "transport": "streamable-http",
+        "port": 8810,
+        "endpoint_path": "/mcp",
+        "url_env": "WORKSPACE_MCP_URL",
+        "description": "Streamable HTTP MCP server providing workspace knowledge and calculation tools on 127.0.0.1:8810/mcp. Exposes two tools: 1) search_docs(query: str, category: str = 'all') -> dict which searches engineering documentation and returns matching snippets; 2) calculate_metric(metric_name: str, values: list[float]) -> dict which calculates statistical metrics ('mean', 'median', 'p95', 'sum') over numeric lists. Use a compliant MCP client session against /mcp: the tools/list and tools/call JSON-RPC methods are sent through that single endpoint, rather than separate HTTP routes. Also provides GET /audit/calls returning all executed tool calls.",
+        "private_description": "Deterministic seed data: search_docs must include the database connection policy stating max_retries=5, backoff_seconds=2.0, and connection_timeout=30s; and deployment guide stating blue-green deploy is standard."
+      },
+      {
+        "id": "operations_mcp",
+        "name": "operations_mcp",
+        "transport": "streamable-http",
+        "port": 8820,
+        "endpoint_path": "/mcp",
+        "url_env": "OPERATIONS_MCP_URL",
+        "description": "Streamable HTTP MCP server providing live service operations and incident remediation tools on 127.0.0.1:8820/mcp. Exposes three sequential tools: 1) get_service_health(service_name: str) -> dict returning health status ('healthy', 'degraded', 'down') and an active incident_id; 2) fetch_incident_logs(incident_id: str, max_lines: int = 5) -> dict returning recent error logs for the specified incident ID; 3) apply_mitigation(incident_id: str, action: str) -> dict applying the remediation action ('restart_service', 'resize_connection_pool', 'failover') to resolve the incident, returning status 'mitigation_applied' and resolution timestamp. Use a compliant MCP client session against /mcp: the tools/list and tools/call JSON-RPC methods are sent through that single endpoint, rather than separate HTTP routes. Also provides GET /audit/remediations returning all applied mitigations.",
+        "private_description": "Deterministic incident scenario data: get_service_health for 'auth-service' returns status 'degraded' and active incident_id 'INC-4091' due to pool exhaustion, while 'payment-service' is healthy. fetch_incident_logs for 'INC-4091' returns logs indicating 'FATAL: database connection pool exhausted (30/30 connections in use) - recommendation: apply resize_connection_pool mitigation'."
+      }
+    ],
+    "mock_services": [],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "workspace_doc_search",
+      "description": "Single-step documentation search using workspace_mcp. The agent dynamically discovers search_docs, queries the database connection retry policy, and extracts the maximum retry count.",
+      "fixture_ids": [
+        "workspace_mcp"
+      ],
+      "turns": [
+        {
+          "user_request": "Search our engineering documentation to find out what our database connection retry policy is. Specifically, what is the maximum number of retries allowed and what is the backoff duration?"
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "discovered_tools",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str, discovered_tools containing 'search_docs', and tool_history recording at least one call to 'search_docs'.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent correctly answered that the maximum number of retries is 5 with a backoff duration of 2.0 seconds based on the retrieved documentation. Penalize hallucinated retry values.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "workspace_metric_calculation",
+      "description": "Single-step numeric computation using workspace_mcp. The agent dynamically discovers calculate_metric, computes the mean of the provided latency measurements, and returns the exact mean.",
+      "fixture_ids": [
+        "workspace_mcp"
+      ],
+      "turns": [
+        {
+          "user_request": "Calculate the mean latency from the following measurements in milliseconds: [120.0, 95.0, 145.0, 110.0, 130.0]. State the exact calculated mean."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "discovered_tools",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str, discovered_tools containing 'calculate_metric', and tool_history recording at least one call to 'calculate_metric'.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the final answer contains the correct mean latency of 120.0 ms (or 120 ms). The calculation must be grounded in the tool output.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "operations_incident_remediation",
+      "description": "Multi-step operational investigation and remediation using operations_mcp. The agent dynamically discovers operations tools, checks auth-service health, fetches logs for the active incident INC-4091, and applies the resize_connection_pool mitigation.",
+      "fixture_ids": [
+        "operations_mcp"
+      ],
+      "turns": [
+        {
+          "user_request": "Check the health of 'auth-service'. If there is an active incident, inspect the incident logs to find the root cause and execute the recommended mitigation to resolve it."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "discovered_tools",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer str, discovered_tools containing 'get_service_health', 'fetch_incident_logs', and 'apply_mitigation'. The tool_history records calls to get_service_health, fetch_incident_logs, and apply_mitigation with action 'resize_connection_pool'.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent carried out the full 3-step investigation and remediation workflow: 1) identified that auth-service is degraded with incident INC-4091, 2) read the incident logs revealing connection pool exhaustion, 3) applied the resize_connection_pool mitigation. The final answer must clearly explain the root cause and confirm the mitigation was applied.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

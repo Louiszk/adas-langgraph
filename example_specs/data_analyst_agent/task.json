@@ -64,35 +64,40 @@
         "id": "sales_csv",
         "path": "sales.csv",
         "count": 1,
-        "description": "Clean baseline CSV with columns order_id, order_date, customer_id, product, region, quantity, unit_price, and revenue. Include at least 12 rows spanning multiple dates, products, customers, and regions. Values should support aggregation, time-series analysis, and plotting.",
+        "description": "Clean baseline CSV with columns order_id, order_date, customer_id, product, region, quantity, unit_price, and revenue.",
+        "private_description": "Include at least 12 rows spanning multiple dates, products, customers, and regions. Values should support aggregation, time-series analysis, and plotting.",
         "content_type": "csv"
       },
       {
         "id": "customers_json",
         "path": "customers.json",
         "count": 1,
-        "description": "Clean JSON array of customer records with customer_id, customer_name, segment, and region fields. Include records matching most but not necessarily all customer_id values in sales.csv so the analyst must handle joins and unmatched records.",
+        "description": "Clean JSON array of customer records with customer_id, customer_name, segment, and region fields.",
+        "private_description": "Include records matching most but not necessarily all customer_id values in sales.csv so the analyst must handle joins and unmatched records.",
         "content_type": "json"
       },
       {
         "id": "messy_sales_csv",
         "path": "messy_sales.csv",
         "count": 1,
-        "description": "Messy CSV containing null values, numeric values represented as strings, duplicate rows, inconsistent date values, and at least one row missing a commonly expected column value. It should remain parseable by pandas but require defensive cleaning.",
+        "description": "Messy CSV variant of sales data containing expected columns but requiring defensive cleaning.",
+        "private_description": "Contains null values, numeric values represented as strings, duplicate rows, inconsistent date values, and at least one row missing a commonly expected column value. It should remain parseable by pandas but require defensive cleaning.",
         "content_type": "csv"
       },
       {
         "id": "schema_variant_json",
         "path": "schema_variant.json",
         "count": 1,
-        "description": "JSON input with a valid but different schema, such as nested event records or records using amount instead of revenue and timestamp instead of order_date. The file should be readable but not blindly assumed to have the sales schema.",
+        "description": "JSON input with an alternative schema that differs from the standard sales format.",
+        "private_description": "Valid but different schema, such as nested event records or records using amount instead of revenue and timestamp instead of order_date. The file should be readable but not blindly assumed to have the sales schema.",
         "content_type": "json"
       },
       {
         "id": "malformed_records_csv",
         "path": "malformed_records.csv",
         "count": 1,
-        "description": "CSV with sparse rows, blank lines, missing optional fields, mixed categorical values, and a small number of malformed or nonnumeric measurements. The file must be useful for testing graceful coercion, skipped records, and caveat reporting.",
+        "description": "CSV dataset containing sparse rows, optional measurements, and data-level anomalies for resilience testing.",
+        "private_description": "Sparse rows, blank lines, missing optional fields, mixed categorical values, and a small number of malformed or nonnumeric measurements. The file must be useful for testing graceful coercion, skipped records, and caveat reporting.",
         "content_type": "csv"
       }
     ],

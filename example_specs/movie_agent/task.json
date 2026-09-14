@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "name": "imdb_movie_expert_agent",
+  "system_goal": "Build a single-turn movie expert and recommendation agent that answers complex cinema questions using the public IMDb MariaDB database. It queries schema information, movies, actors, directors, roles, and genres via read-only SQL queries over the environment-configured IMDB_DATABASE_URI, synthesizes evidence-grounded answers, and offers calibrated recommendations citing release years, ratings, directors, and cast members.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "sql_queries": "list[str]",
+      "retrieved_records": "list[dict[str, Any]]",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "describe_table",
+        "description": "Describe the schema and column definitions for a given table in the IMDb database (movies, actors, directors, roles, movies_directors, movies_genres, directors_genres)."
+      },
+      {
+        "name": "execute_sql_query",
+        "description": "Execute a read-only SQL SELECT query against the IMDb MariaDB database identified by IMDB_DATABASE_URI and return matching rows as a list of dictionaries. Always use reasonable LIMIT clauses on exploratory queries."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna"
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [
+      {
+        "name": "imdb_mariadb",
+        "type": "database",
+        "path_or_uri": "mysql://guest:ctu-relational@relational.fel.cvut.cz:3306/imdb_ijs",
+        "description": "Public read-only MariaDB database containing the IMDb dataset (imdb_ijs) with 7 tables: movies, actors, directors, roles, movies_directors, movies_genres, directors_genres. Connect using IMDB_DATABASE_URI or host relational.fel.cvut.cz:3306, user guest, password ctu-relational, database imdb_ijs."
+      }
+    ],
+    "available_api_keys": [
+      {
+        "env_var": "IMDB_DATABASE_URI",
+        "description": "Connection URI for the IMDb MariaDB database (e.g. mysql+pymysql://guest:ctu-relational@relational.fel.cvut.cz:3306/imdb_ijs)",
+        "optional": false
+      }
+    ]
+  },
+  "required_packages": [
+    "pymysql"
+  ],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mock_services": [],
+    "mcps": [],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "smoke_memento_recommendation",
+      "description": "Tier 1 smoke test: Movie inquiry and recommendation. The agent looks up 'Memento' (2000), reports its director and rating, and recommends 2 other well-rated Mystery or Thriller movies from the database.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "user_request": "I really enjoyed 'Memento' (2000). Could you look it up in the database, tell me its director and rating, and recommend 2 other well-rated Mystery or Thriller movies? Include their release years and ratings."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent correctly looked up Memento (2000), identified Christopher Nolan as director and its rating (~8.7), and recommended 2 other well-rated Mystery or Thriller movies from the database with their release years and ratings. The recommendations must be grounded in actual database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "director_nolan_filmography",
+      "description": "Tier 2 intermediate test: Directed filmography with filtering and ordering. The agent retrieves all feature films directed by Christopher Nolan, ordered chronologically by release year, with ratings.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "user_request": "List all feature films directed by Christopher Nolan in the database, ordered chronologically by release year, and include their ratings."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent identified Christopher Nolan's films in chronological order (Following from 1998 with rank ~7.6, Memento from 2000 with rank ~8.7, Insomnia from 2002 with rank ~7.3, and Batman Begins from 2005; Doodlebug from 1997 may also be noted). Ratings and release years must be accurately reported based on retrieved database records.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cast_intersection_pulp_reservoir",
+      "description": "Tier 3 advanced test: Relational cast intersection across millions of role records. The agent finds actors who appeared in both 'Pulp Fiction' and 'Reservoir Dogs'.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "user_request": "Which actors appeared in both 'Pulp Fiction' and 'Reservoir Dogs'? Name at least three actors who were in both films and cite their character roles if available."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "sql_queries",
+        "retrieved_records"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer string, a nonempty sql_queries list of executed SQL strings, and a nonempty retrieved_records list of query results.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the agent correctly performed a relational query across movies, roles, and actors to identify at least three actors who appeared in both 'Pulp Fiction' and 'Reservoir Dogs' (such as Harvey Keitel, Tim Roth, Steve Buscemi, or Quentin Tarantino). Character roles and actors must be accurately attributed.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}
