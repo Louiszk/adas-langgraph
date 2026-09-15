@@ -71,15 +71,16 @@ def build_model_catalog_context() -> str:
     lines = [
         "### AVAILABLE TARGET MODELS & CAPABILITIES CATALOG:",
         "When declaring `available_models` or assigning a `judge_model` for a test case, choose from:",
-        "| Provider | Model Name | Supports Vision | Supports Temp | Supports Reasoning Effort |",
-        "| :--- | :--- | :--- | :--- | :--- |",
+        "| Provider | Model Name | Supports Vision | Supports Temp | Supports Reasoning Effort | Supports Web Search |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
 
     for (provider, model_name), caps in sorted(caps_dict.items()):
         vis = "YES" if caps.supports_vision else "NO (text-only)"
         temp = "YES" if caps.supports_temperature else "NO"
         reason = "YES (" + ", ".join(caps.supported_reasoning_efforts) + ")" if caps.supports_reasoning_effort else "NO"
-        lines.append(f"| `{provider}` | `{model_name}` | {vis} | {temp} | {reason} |")
+        web = "YES" if caps.supports_web_search else "NO"
+        lines.append(f"| `{provider}` | `{model_name}` | {vis} | {temp} | {reason} | {web} |")
 
     lines.extend(
         [
@@ -87,10 +88,10 @@ def build_model_catalog_context() -> str:
             "CRITICAL MODEL & MODALITY CONSTRAINTS:",
             "1. VISION EVALUATION: If a test case involves vision (e.g. modalities includes 'vision'):",
             "   - `llm_judge_needed` must be True.",
-            "   - `judge_model` (if set) must support vision (e.g. 'gpt-4o', 'o1', 'o3', 'gpt-5.6-luna').",
-            "   - NEVER assign a text-only model like 'gpt-3.5-turbo', 'gpt-4', 'o1-mini', or 'o3-mini' as `judge_model` for vision test cases.",
-            "2. REASONING EFFORT: Models supporting reasoning effort (like o1, o3) do not support temperature.",
+            "   - `judge_model` (if set) must support vision (e.g. 'gpt-4o', 'o3', 'gpt-5.6-luna').",
+            "2. REASONING EFFORT: Models supporting reasoning effort (like o3, gpt-5.4, gpt-5.6) do not support temperature.",
             "3. NO UNREGISTERED MODELS: Only declare models that exist in this catalog. If the user requests a model not available in the catalog, suggest that the user may update the `ModelRegistry`.",
+            "4. WEB SEARCH CAPABILITIES: Models supporting web search can be granted external browsing capabilities by setting `enable_web_search: true` on their `ModelSpec` in `available_models`. Test cases requiring web search verification by judges can declare `judge_web_search: true` (which requires a `judge_model` supporting web search).",
         ]
     )
 
@@ -118,6 +119,7 @@ Your mission is to collaborate with the user to design a robust, production-grad
      * Tools & Dependencies: What external libraries (e.g. pandas, requests) and API keys (e.g. SERPER_API_KEY) will it require?
      * Resource ownership: Ask whether required MCP servers, HTTP APIs, or databases already run under the user's control, or whether the evaluation needs a controlled fixture.
      * Available Models: Which models from the catalog are needed? (Check vision/reasoning constraints).
+     * Web Search & Live Retrieval: Does the target agent require server-side web search capabilities? If so, configure `enable_web_search: true` for authorized models in `available_models`. Do test cases require the evaluation judge to verify external facts against live web results (`judge_web_search: true`)?
    - Present trade-offs and options clearly (e.g. "Option A: single-turn pipeline vs Option B: multi-turn agent with memory") to help the user choose.
    - Do NOT quiz or consult internal ADAS schema plumbing to the user (e.g. how sandbox workspace directories map or relative fixture paths). Handle all such architectural plumbing silently and automatically according to the mandatory rules.
 

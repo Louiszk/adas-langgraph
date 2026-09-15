@@ -35,14 +35,31 @@ A standardized, composition-based wrapper for interacting with LLMs.
 - **Allowed Models (`available_models`)**:
   - The target system may **only** instantiate models declared in the task's `available_models` contract.
   - Calling `ChatModel()` with no arguments automatically defaults to the primary model declared in `available_models`.
-  - You can leverage multi-model architectures by selecting different models from `available_models` for different nodes (e.g. a lightweight model for classification and a reasoning model for complex planning).
+  - You can leverage multi-model architectures by selecting different models from `available_models` for different roles or steps (e.g. a lightweight model for classification, a reasoning model for complex planning, or combining multiple models within the same node or across different nodes).
   - Attempting to instantiate an unlisted model will raise an authorization error.
 - **Parameters**:
   - `model`: Model name from `available_models`.
   - `provider`: Provider name (`"openai"`). Optional unless the model name is ambiguous across multiple providers.
   - `temperature`: Sampling temperature (0.0 to 2.0). Only supported by standard chat models. Unsupported combinations fail explicitly.
-  - `reasoning_effort`: Reasoning intensity for reasoning models (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`). Only passed when explicitly specified.
-- **Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = True) -> ChatModel`
+  - `reasoning_effort`: Reasoning intensity for reasoning models (`"none"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`). Only passed when explicitly specified.
+  - `default_tools`: Optional sequence of default server-side tools attached to the model (e.g. `["web_search"]`).
+- **Server-Side Tools**:
+  - When authorized by `enable_web_search: true` on an entry in `available_models`, `ChatModel` can enable OpenAI's native server-side web search.
+  - Web search is not automatically equipped on every `ChatModel()` instance. Equip web search specifically on the model instance(s) responsible for external information gathering:
+    ```python
+    # Model instance configured for live web search:
+    search_llm = ChatModel(default_tools=["web_search"])
+    
+    # Standard model instance for synthesis, routing, formatting, or reasoning without search overhead:
+    standard_llm = ChatModel()
+    ```
+  - When `enable_web_search: true` is authorized on a model, web search should be utilized at least once in the target graph workflow to satisfy information gathering, but it is not required (nor recommended) on every LLM call or model instance.
+  - Unlike client-side function tools where the model returns a `tool_call` and waits for client execution in a secondary turn, server-side web search runs entirely within a single `llm.invoke(...)` call.
+  - The model queries the web, reads pages, and directly synthesizes the answer into `response.content`. `response.tool_calls` remains empty for web searches.
+  - Citations & Search Metadata:
+    * `response.additional_kwargs.get("citations", [])`: list of URL citation dicts containing `url`, `title`, and referenced text.
+    * `response.additional_kwargs.get("web_search_calls", [])`: list of web search actions and search queries executed.
+- **Standard Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = True) -> ChatModel`
   Returns a **new** `ChatModel` instance with tools bound (immutable).
 - **Structured Output**: `structured_llm = llm.with_structured_output(schema: Any) -> ChatModel`
   Returns a **new** `ChatModel` instance bound to output the schema.
@@ -151,6 +168,7 @@ Your task statement provides the TaskSpec design contract (`--- TaskSpec Design 
 
 3. **`available_models`**:
    The allowed LLM models your target system may instantiate via `ChatModel(model=...)`. Calling `ChatModel()` without arguments automatically defaults to the primary model declared in `available_models`. Instantiating any unlisted model raises an authorization error.
+   If a model in `available_models` specifies `enable_web_search: true`, web search is authorized on that model. Target systems should equip web search specifically on the `ChatModel` instance(s) that perform external information retrieval via `ChatModel(default_tools=["web_search"])`.
 
 4. **`resource_manifest` & `test_fixtures`**:
    Declare the external services (HTTP APIs, Streamable HTTP MCP servers, databases) and test fixtures. Access them dynamically at runtime via the declared environment variables (`ADAS_INPUT_DIR`, `*_URL`, etc.); never hardcode hostnames, ports, URLs, or local paths.

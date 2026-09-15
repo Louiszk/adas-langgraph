@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -48,6 +49,7 @@ class ModelCapabilities:
     supported_reasoning_efforts: frozenset[str] = frozenset()
     supports_structured_output: bool = True
     supports_vision: bool = True
+    supports_web_search: bool = False
 
 
 _STANDARD_CHAT_CAPABILITIES = ModelCapabilities(
@@ -57,15 +59,7 @@ _STANDARD_CHAT_CAPABILITIES = ModelCapabilities(
     supported_reasoning_efforts=frozenset(),
     supports_structured_output=True,
     supports_vision=True,
-)
-
-_LEGACY_TEXT_ONLY_CAPABILITIES = ModelCapabilities(
-    supports_temperature=True,
-    temperature_range=(0.0, 2.0),
-    supports_reasoning_effort=False,
-    supported_reasoning_efforts=frozenset(),
-    supports_structured_output=True,
-    supports_vision=False,
+    supports_web_search=True,
 )
 
 _OPENAI_REASONING_VISION = ModelCapabilities(
@@ -74,22 +68,16 @@ _OPENAI_REASONING_VISION = ModelCapabilities(
     supported_reasoning_efforts=frozenset({"low", "medium", "high"}),
     supports_structured_output=True,
     supports_vision=True,
-)
-
-_OPENAI_REASONING_TEXT_ONLY = ModelCapabilities(
-    supports_temperature=False,
-    supports_reasoning_effort=True,
-    supported_reasoning_efforts=frozenset({"low", "medium", "high"}),
-    supports_structured_output=True,
-    supports_vision=False,
+    supports_web_search=True,
 )
 
 _OPENAI_REASONING_FULL = ModelCapabilities(
     supports_temperature=False,
     supports_reasoning_effort=True,
-    supported_reasoning_efforts=frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
+    supported_reasoning_efforts=frozenset({"none", "low", "medium", "high", "xhigh"}),
     supports_structured_output=True,
     supports_vision=True,
+    supports_web_search=True,
 )
 
 
@@ -99,26 +87,26 @@ class ModelRegistry:
     _lock = threading.Lock()
     _capabilities: dict[tuple[str, str], ModelCapabilities] = {}
 
+    @staticmethod
+    def _matches_registered_name(configured_model: str, model_name: str) -> bool:
+        """Accept a catalog model or one of its OpenAI date-versioned snapshots."""
+        if model_name == configured_model:
+            return True
+        snapshot_suffix = model_name.removeprefix(f"{configured_model}-")
+        return snapshot_suffix != model_name and bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", snapshot_suffix))
+
     @classmethod
     def _init_defaults(cls) -> None:
         defaults: dict[tuple[str, str], ModelCapabilities] = {
             # OpenAI standard models
             ("openai", "gpt-4o"): _STANDARD_CHAT_CAPABILITIES,
             ("openai", "gpt-4o-mini"): _STANDARD_CHAT_CAPABILITIES,
-            ("openai", "gpt-4-turbo"): _STANDARD_CHAT_CAPABILITIES,
-            ("openai", "gpt-4"): _LEGACY_TEXT_ONLY_CAPABILITIES,
-            ("openai", "gpt-3.5-turbo"): _LEGACY_TEXT_ONLY_CAPABILITIES,
+            # OpenAI GPT-5.4 family
+            ("openai", "gpt-5.4"): _OPENAI_REASONING_FULL,
+            ("openai", "gpt-5.4-mini"): _OPENAI_REASONING_FULL,
+            ("openai", "gpt-5.4-nano"): _OPENAI_REASONING_FULL,
             # OpenAI reasoning models
-            ("openai", "o1"): _OPENAI_REASONING_VISION,
-            ("openai", "o1-mini"): _OPENAI_REASONING_TEXT_ONLY,
-            ("openai", "o1-preview"): ModelCapabilities(
-                supports_temperature=False,
-                supports_reasoning_effort=False,
-                supports_structured_output=False,
-                supports_vision=False,
-            ),
             ("openai", "o3"): _OPENAI_REASONING_VISION,
-            ("openai", "o3-mini"): _OPENAI_REASONING_TEXT_ONLY,
             # OpenAI GPT-5.6 family
             ("openai", "gpt-5.6-sol"): _OPENAI_REASONING_FULL,
             ("openai", "gpt-5.6-terra"): _OPENAI_REASONING_FULL,
@@ -145,7 +133,7 @@ class ModelRegistry:
             matching_candidates = [
                 (m, caps)
                 for (p, m), caps in cls._capabilities.items()
-                if p == provider.lower() and model_name.startswith(m)
+                if p == provider.lower() and cls._matches_registered_name(m, model_name)
             ]
             if matching_candidates:
                 matching_candidates.sort(key=lambda x: len(x[0]), reverse=True)
@@ -162,7 +150,7 @@ class ModelRegistry:
                 cls._init_defaults()
             provider = provider.lower()
             return any(
-                configured_provider == provider and model_name.startswith(configured_model)
+                configured_provider == provider and cls._matches_registered_name(configured_model, model_name)
                 for configured_provider, configured_model in cls._capabilities
             )
 
@@ -402,7 +390,7 @@ def has_image_content(messages: Sequence[BaseMessage]) -> bool:
 # ============================================================================
 
 
-def get_allowed_target_models() -> list[dict[str, str]]:
+def get_allowed_target_models() -> list[dict[str, Any]]:
     """Return the list of allowed target models from ChatModel or active TaskSpec."""
     if ChatModel.allowed_target_models is not None:
         return ChatModel.allowed_target_models
@@ -424,7 +412,7 @@ def get_allowed_target_models() -> list[dict[str, str]]:
 def _resolve_target_model(
     model: str | None,
     provider: str | None,
-    allowed: list[dict[str, str]],
+    allowed: list[dict[str, Any]],
 ) -> tuple[str, str]:
     """Resolve a provider and model name strictly against the allowed models list."""
     if model is None and provider is None:
@@ -566,17 +554,53 @@ def _normalize_ai_message(message: Any) -> Any:
         if reasoning_blocks and "reasoning" not in message.additional_kwargs:
             message.additional_kwargs["reasoning"] = reasoning_blocks
 
+        web_search_blocks = [b for b in message.content if isinstance(b, dict) and b.get("type") == "web_search_call"]
+        if web_search_blocks and "web_search_calls" not in message.additional_kwargs:
+            message.additional_kwargs["web_search_calls"] = web_search_blocks
+
         text_blocks = [b for b in message.content if isinstance(b, dict) and b.get("type") == "text"]
+        citations: list[dict[str, Any]] = []
+        for tb in text_blocks:
+            for ann in tb.get("annotations", []) or []:
+                if isinstance(ann, dict) and ann.get("type") == "url_citation":
+                    citations.append(ann)
+        if citations and "citations" not in message.additional_kwargs:
+            message.additional_kwargs["citations"] = citations
+
         non_text_blocks = [
             b
             for b in message.content
-            if isinstance(b, dict) and b.get("type") not in ("text", "reasoning", "function_call")
+            if isinstance(b, dict) and b.get("type") not in ("text", "reasoning", "function_call", "web_search_call")
         ]
         if text_blocks and not non_text_blocks:
             message.content = "".join(b.get("text", "") for b in text_blocks)
         elif not non_text_blocks:
             message.content = ""
     return message
+
+
+def _normalize_tool_spec(
+    tool: Any,
+    capabilities: ModelCapabilities,
+    provider: str,
+    model: str,
+) -> Any:
+    """Normalize and validate a tool specification for default_tools."""
+    if tool == "web_search":
+        if not capabilities.supports_web_search:
+            raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support web search.")
+        return {"type": "web_search"}
+    if isinstance(tool, dict):
+        if tool.get("type") == "web_search":
+            if not capabilities.supports_web_search:
+                raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support web search.")
+        return tool
+    if getattr(tool, "name", None) and callable(getattr(tool, "invoke", None)):
+        return tool
+    raise ValueError(
+        f"All values in default_tools must be tool instances with 'name' and callable 'invoke', "
+        f"a tool dictionary (e.g. {{'type': 'web_search'}}), or 'web_search'. Got: {tool!r}"
+    )
 
 
 # ============================================================================
@@ -590,7 +614,7 @@ class ChatModel:
     Enforces allowlist authorization, tool-history protocol, and scoped telemetry.
     """
 
-    allowed_target_models: list[dict[str, str]] | None = None
+    allowed_target_models: list[dict[str, Any]] | None = None
     usage_metrics: dict[str, Any] = UsageRecorder._legacy_metrics
     token_counter: Any = _TokenCounterDescriptor()
 
@@ -602,17 +626,28 @@ class ChatModel:
         reasoning_effort: str | None = None,
         name: str | None = None,
         is_meta: bool | None = None,
+        default_tools: Sequence[Any] | None = None,
         **kwargs: Any,
     ) -> None:
         scope = get_current_scope()
         is_meta_effective = (is_meta is True) or (scope.system == "meta")
 
+        matched_allowed_spec: dict[str, Any] | None = None
         if is_meta_effective:
             effective_provider = provider or "openai"
             effective_model = model or "gpt-5.6-luna"
         else:
             allowed = get_allowed_target_models()
             effective_provider, effective_model = _resolve_target_model(model, provider, allowed)
+            matched_allowed_spec = next(
+                (
+                    m
+                    for m in allowed
+                    if m.get("provider", "openai").lower() == effective_provider.lower()
+                    and m.get("model_name") == effective_model
+                ),
+                None,
+            )
 
         capabilities = ModelRegistry.get_capabilities(effective_provider, effective_model)
         runnable = _create_provider_runnable(
@@ -623,14 +658,32 @@ class ChatModel:
             reasoning_effort=reasoning_effort,
         )
 
+        is_target_web_search_authorized = bool(matched_allowed_spec and matched_allowed_spec.get("enable_web_search"))
+
+        normalized_default_tools: list[Any] = []
+        if default_tools:
+            for t in default_tools:
+                norm_tool = _normalize_tool_spec(t, capabilities, effective_provider, effective_model)
+                if not is_meta_effective and isinstance(norm_tool, dict) and norm_tool.get("type") == "web_search":
+                    if not is_target_web_search_authorized:
+                        raise ModelConfigurationError(
+                            f"Model '{effective_model}' ({effective_provider}) is not authorized for web search by active TaskSpec."
+                        )
+                normalized_default_tools.append(norm_tool)
+
         self.model: str = effective_model
         self.provider: str = effective_provider
         self.model_name: str = effective_model
         self.name: str = name if name else effective_model
         self.capabilities: ModelCapabilities = capabilities
         self.is_meta: bool = is_meta_effective
+        self.default_tools: tuple[Any, ...] = tuple(normalized_default_tools)
+        self._bound_client_tools: tuple[Any, ...] = ()
         self._raw_model: Any = runnable
-        self._runnable: Any = runnable
+        if self.default_tools:
+            self._runnable = runnable.bind_tools(list(self.default_tools))
+        else:
+            self._runnable = runnable
         self._response_transformer: Callable[[Any], Any] | None = None
 
     @classmethod
@@ -643,6 +696,8 @@ class ChatModel:
         capabilities: ModelCapabilities,
         name: str,
         is_meta: bool,
+        default_tools: tuple[Any, ...] = (),
+        bound_client_tools: tuple[Any, ...] = (),
         response_transformer: Callable[[Any], Any] | None = None,
     ) -> ChatModel:
         instance = cls.__new__(cls)
@@ -652,6 +707,8 @@ class ChatModel:
         instance.capabilities = capabilities
         instance.name = name
         instance.is_meta = is_meta
+        instance.default_tools = default_tools
+        instance._bound_client_tools = bound_client_tools
         instance._raw_model = raw_model
         instance._runnable = runnable
         instance._response_transformer = response_transformer
@@ -665,21 +722,34 @@ class ChatModel:
         **kwargs: Any,
     ) -> ChatModel:
         """Return a NEW ChatModel instance with tools bound, preserving telemetry and immutability."""
-        if not tools:
+        if not tools and not self.default_tools:
             return self
 
-        invalid = []
-        for t in tools:
-            if not getattr(t, "name", None) or not callable(getattr(t, "invoke", None)):
-                invalid.append(t)
-        if invalid:
-            raise ValueError("All values in tools must be tool instances with 'name' and callable 'invoke'.")
+        normalized_tools: list[Any] = []
+        if tools:
+            for t in tools:
+                if t == "web_search" or (isinstance(t, dict) and t.get("type") == "web_search"):
+                    raise ValueError(
+                        "bind_tools is reserved for client-side tool instances with 'name' and callable 'invoke'. "
+                        "For server-side provider tools like web search, pass default_tools=['web_search'] to ChatModel."
+                    )
+                if not (getattr(t, "name", None) and callable(getattr(t, "invoke", None))):
+                    raise ValueError(
+                        f"All values in tools must be tool instances with 'name' and callable 'invoke'. "
+                        f"For server-side provider tools like web search, pass default_tools=['web_search'] to ChatModel. Got: {t!r}"
+                    )
+                normalized_tools.append(t)
+
+        combined: list[Any] = list(normalized_tools)
+        for t in self.default_tools:
+            if t not in combined:
+                combined.append(t)
 
         bind_kwargs = dict(kwargs)
         if parallel_tool_calls is not None:
             bind_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
-        bound = self._runnable.bind_tools(tools, **bind_kwargs)
+        bound = self._raw_model.bind_tools(combined, **bind_kwargs)
         return ChatModel._from_runnable(
             runnable=bound,
             raw_model=self._raw_model,
@@ -688,6 +758,8 @@ class ChatModel:
             capabilities=self.capabilities,
             name=self.name,
             is_meta=self.is_meta,
+            default_tools=self.default_tools,
+            bound_client_tools=tuple(normalized_tools),
             response_transformer=self._response_transformer,
         )
 
@@ -699,7 +771,28 @@ class ChatModel:
         if "include_raw" in kwargs:
             raise ModelConfigurationError("ChatModel manages include_raw internally to preserve usage telemetry.")
 
-        structured = self._runnable.with_structured_output(schema, include_raw=True, **kwargs)
+        if self.default_tools:
+            if "tools" in kwargs:
+                raise ModelConfigurationError(
+                    "ChatModel manages tools for structured output; bind client-side tools with bind_tools() instead."
+                )
+            if "method" in kwargs and kwargs["method"] != "json_schema":
+                raise ModelConfigurationError("Structured output with server-side tools requires method='json_schema'.")
+            if "strict" in kwargs and kwargs["strict"] is not True:
+                raise ModelConfigurationError("Structured output with server-side tools requires strict=True.")
+
+            # LangChain's public API supports provider tools with structured output only via json_schema + strict + include_raw.
+            structured_tools = [*self._bound_client_tools, *self.default_tools]
+            structured = self._raw_model.with_structured_output(
+                schema,
+                method="json_schema",
+                strict=True,
+                include_raw=True,
+                tools=structured_tools,
+                **kwargs,
+            )
+        else:
+            structured = self._runnable.with_structured_output(schema, include_raw=True, **kwargs)
 
         def extract_parsed_output(response: Any) -> Any:
             if not isinstance(response, dict) or "raw" not in response:
@@ -721,6 +814,8 @@ class ChatModel:
             capabilities=self.capabilities,
             name=self.name,
             is_meta=self.is_meta,
+            default_tools=self.default_tools,
+            bound_client_tools=self._bound_client_tools,
             response_transformer=extract_parsed_output,
         )
 

@@ -39,6 +39,12 @@ def _task_spec_sha256(task_spec: TaskSpec) -> str:
     data = task_spec.to_dict()
     if not data.get("additional_documentation"):
         data.pop("additional_documentation", None)
+    for m in data.get("available_models", []):
+        if not m.get("enable_web_search"):
+            m.pop("enable_web_search", None)
+    for tc in data.get("dev_suite", []):
+        if not tc.get("judge_web_search"):
+            tc.pop("judge_web_search", None)
     payload = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -204,8 +210,8 @@ MANDATORY RULES:
    - Never instantiate external model APIs directly in validator code.
    - Usage:
      `from adas_core.judge import LLMJudge`
-      `judge = LLMJudge(model=<Judge Model Override or None>, provider=<Judge Provider Override or None>)`
-      Use the literal overrides supplied in the case context whenever they are populated; otherwise pass None.
+      `judge = LLMJudge(model=<Judge Model Override or None>, provider=<Judge Provider Override or None>, enable_web_search=<Judge Web Search>)`
+       Use the literal overrides and Judge Web Search boolean supplied in the case context. When Judge Web Search is True, pass `enable_web_search=True` so the judge can verify live facts and sources; otherwise pass `enable_web_search=False`.
      `eval_result = judge.evaluate(prompt=f"Task: ... Criteria: ... Output: {final_state}")`
      `if not eval_result.is_pass: return False, f"LLM Judge rejected: {eval_result.reasoning}"`
    - State Serialization:
@@ -544,6 +550,7 @@ class AutomaticValidation:
             f"- Judge Criteria: {test_case.judge_criteria}",
             f"- Judge Model Override: {test_case.judge_model}",
             f"- Judge Provider Override: {test_case.judge_provider}",
+            f"- Judge Web Search: {test_case.judge_web_search}",
             f"- Modalities: {test_case.modalities}",
             f"- Active Fixture IDs: {test_case.fixture_ids}",
         ]

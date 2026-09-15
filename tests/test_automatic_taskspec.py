@@ -63,7 +63,9 @@ class TestModelCatalogContext:
         catalog = build_model_catalog_context()
         assert "gpt-4o" in catalog
         assert "gpt-5.6-luna" in catalog
-        assert "o1" in catalog
+        assert "gpt-5.4" in catalog
+        assert "o3" in catalog
+        assert "Supports Web Search" in catalog
         assert "VISION EVALUATION" in catalog
         assert "REASONING EFFORT" in catalog
 

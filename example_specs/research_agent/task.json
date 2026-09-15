@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "name": "web_research_agent",
+  "system_goal": "Build a single-turn autonomous research agent that synthesizes evidence-backed technical reports by querying the live web via native web search. The agent decomposes user research queries into targeted investigations, extracts factual findings with source citations, and writes comprehensive structured reports.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "query": "str",
+      "findings": "list[str]",
+      "sources": "list[str]",
+      "report": "str"
+    },
+    "persistence": null,
+    "required_tools": []
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.6-luna",
+      "enable_web_search": true
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [],
+    "available_api_keys": []
+  },
+  "required_packages": [],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mock_services": [],
+    "mcps": [],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "tier1_artemis2_lunar_mission",
+      "description": "Tier 1 smoke test: Synthesize key facts about NASA's Artemis II crewed lunar mission.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "query": "Summarize the execution, flight timeline, and astronaut crew of NASA's Artemis II lunar flyby mission. Detail the launch date, splashdown date, and the participating astronauts."
+        }
+      ],
+      "expected_outputs": [
+        "report",
+        "findings",
+        "sources"
+      ],
+      "deterministic_criteria": "The final state must contain a nonempty report string of at least 100 characters, a nonempty list of findings, and a nonempty list of sources.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the report correctly identifies key details of the Artemis II mission (such as the April 2026 timeframe, the crew including Reid Wiseman, Victor Glover, Christina Koch, or Jeremy Hansen, and the lunar flyby trajectory). Minor omissions of secondary details are acceptable as long as the core facts presented are accurate and grounded in search findings.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tier2_europa_clipper_trajectory",
+      "description": "Tier 2 intermediate test: Investigate the Europa Clipper Mars gravity assist and trajectory.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "query": "Detail the trajectory and scientific milestones of the Europa Clipper spacecraft's Mars Gravity Assist (MEGA) maneuver. When did the Mars flyby occur, at what approximate altitude, and what instrument observations were conducted?"
+        }
+      ],
+      "expected_outputs": [
+        "report",
+        "findings",
+        "sources"
+      ],
+      "deterministic_criteria": "The final state must contain a nonempty report string, at least 2 distinct findings in the findings list, and a nonempty list of sources.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the report accurately describes the Europa Clipper Mars gravity assist (such as the March 2025 timeframe, low Martian flyby altitude around 500-600 miles / 800-900 km, or instrument checkouts like REASON radar or thermal imaging). Partial coverage of instruments or flight details is acceptable as long as the information provided is factually sound.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tier3_nvidia_vera_rubin",
+      "description": "Tier 3 systems test: Architectural breakdown of the NVIDIA Vera Rubin AI computing platform.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "query": "Provide an architectural overview of the NVIDIA Vera Rubin AI computing platform announced for 2026. Detail the key specifications of the Rubin GPU (such as HBM4 memory or process node), the Vera CPU, and the NVLink 6 rack-scale integration."
+        }
+      ],
+      "expected_outputs": [
+        "report",
+        "findings",
+        "sources"
+      ],
+      "deterministic_criteria": "The final state must contain a structured report of at least 150 characters, at least 2 distinct findings, and a nonempty list of sources.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the report accurately identifies primary architectural features of the Vera Rubin platform (e.g. Rubin GPU with HBM4 memory, Vera CPU, NVLink 6, or NVL72 rack-scale design). The report does not need to cover every specification exhaustively to pass, provided the technical details included are correct.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tier4_google_willow_quantum",
+      "description": "Tier 4 advanced research test: Google Quantum AI Willow chip below-threshold error correction.",
+      "fixture_ids": [],
+      "turns": [
+        {
+          "query": "Investigate the quantum error correction demonstration on Google Quantum AI's Willow chip. Detail the processor characteristics, the physical-to-logical error scaling across surface code distances, and the significance of operating below the surface code threshold."
+        }
+      ],
+      "expected_outputs": [
+        "report",
+        "findings",
+        "sources"
+      ],
+      "deterministic_criteria": "The final state must contain a structured report of at least 200 characters, at least 3 distinct findings, and a nonempty list of sources.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Judge whether the report accurately explains the core achievement of the Willow processor: demonstrating quantum error correction below the surface code threshold where larger code distances suppress logical errors. Omission of specific numerical error rates is acceptable as long as the core scaling principle and processor context are accurately conveyed.",
+      "judge_model": "gpt-5.6-luna",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

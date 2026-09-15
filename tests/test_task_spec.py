@@ -3,6 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from adas_core.chat_model import ModelCapabilities, ModelRegistry
 from adas_core.task_spec import (
     ApiKeyRequirement,
     ArchitectureContract,
@@ -435,13 +436,14 @@ class TestTaskSpecModel:
             turns=[{"q": "generate plot"}],
             llm_judge_needed=True,
             judge_criteria="The plot must display all sales bars correctly.",
-            judge_model="o3-mini",
+            judge_model="o3",
             modalities=["text", "vision"],
         )
-        assert tc_custom.judge_model == "o3-mini"
+        assert tc_custom.judge_model == "o3"
         assert tc_custom.modalities == ["text", "vision"]
 
     def test_vision_judge_requires_a_vision_capable_override(self):
+        ModelRegistry.register_capabilities("openai", "text-judge-model", ModelCapabilities(supports_vision=False))
         with pytest.raises(ValidationError, match="not vision-capable"):
             TaskSpec(
                 name="VisionTask",
@@ -454,7 +456,7 @@ class TestTaskSpecModel:
                         turns=[{"query": "go"}],
                         llm_judge_needed=True,
                         judge_criteria="The chart is readable.",
-                        judge_model="o3-mini",
+                        judge_model="text-judge-model",
                         modalities=["vision"],
                     )
                 ],
@@ -1067,3 +1069,95 @@ class TestBenchmarkSpecs:
         loaded = spec.load_additional_documentation(task_dir=tmp_path)
         assert "invalid.txt" not in loaded
         assert len(tiktoken.get_encoding(settings.additional_documentation_token_encoding).encode(loaded)) <= 15
+
+    def test_model_spec_enable_web_search_validation(self):
+        # Valid web search model
+        spec_valid = TaskSpec(
+            name="ValidWebSearchModel",
+            system_goal="Test web search model validation.",
+            architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+            available_models=[ModelSpec(provider="openai", model_name="gpt-5.6-luna", enable_web_search=True)],
+        )
+        assert spec_valid.available_models[0].enable_web_search is True
+
+        # Unsupported web search model
+        ModelRegistry.register_capabilities(
+            "openai", "no-web-search-model", ModelCapabilities(supports_web_search=False)
+        )
+        with pytest.raises(
+            ValueError, match="specifies enable_web_search=True, but the model does not support web search"
+        ):
+            TaskSpec(
+                name="InvalidWebSearchModel",
+                system_goal="Test web search model validation.",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                available_models=[
+                    ModelSpec(provider="openai", model_name="no-web-search-model", enable_web_search=True)
+                ],
+            )
+
+    def test_test_case_spec_judge_web_search_validation(self):
+        # Valid judge web search
+        spec_valid = TaskSpec(
+            name="ValidJudgeWebSearch",
+            system_goal="Test judge web search validation.",
+            architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+            dev_suite=[
+                TestCaseSpec(
+                    id="case_1",
+                    description="Test case with judge web search",
+                    turns=[{"query": "hello"}],
+                    llm_judge_needed=True,
+                    judge_criteria="Fact check answer",
+                    judge_model="gpt-5.6-luna",
+                    judge_web_search=True,
+                )
+            ],
+        )
+        assert spec_valid.dev_suite[0].judge_web_search is True
+
+        # Unsupported judge web search model
+        ModelRegistry.register_capabilities(
+            "openai", "no-web-search-model", ModelCapabilities(supports_web_search=False)
+        )
+        with pytest.raises(ValueError, match="requires judge web search but judge_model 'no-web-search-model'"):
+            TaskSpec(
+                name="InvalidJudgeWebSearch",
+                system_goal="Test judge web search validation.",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                dev_suite=[
+                    TestCaseSpec(
+                        id="case_1",
+                        description="Test case with unsupported judge web search",
+                        turns=[{"query": "hello"}],
+                        llm_judge_needed=True,
+                        judge_criteria="Fact check answer",
+                        judge_model="no-web-search-model",
+                        judge_web_search=True,
+                    )
+                ],
+            )
+
+    def test_judge_web_search_requires_an_active_llm_judge(self):
+        with pytest.raises(ValueError, match="judge_web_search=True but llm_judge_needed is False"):
+            TestCaseSpec(
+                id="inactive_judge_search",
+                description="Invalid inactive judge web-search configuration",
+                turns=[{"query": "hello"}],
+                judge_web_search=True,
+            )
+
+    def test_task_spec_rejects_unregistered_model_prefix_extension(self):
+        with pytest.raises(ValueError, match="is not registered in ModelRegistry"):
+            TaskSpec(
+                name="UnregisteredPrefixModel",
+                system_goal="Reject an arbitrary model prefix extension.",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                available_models=[
+                    ModelSpec(
+                        provider="openai",
+                        model_name="gpt-5.6-luna-unintended-model",
+                        enable_web_search=True,
+                    )
+                ],
+            )
