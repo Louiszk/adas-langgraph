@@ -4,7 +4,7 @@ import random
 
 from datasets import load_dataset  # type: ignore
 
-from adas_core.logging_config import get_logger, setup_logging
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("create_gsmhard_subset")
 

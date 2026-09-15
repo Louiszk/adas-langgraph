@@ -16,9 +16,9 @@ from adas_core.environment import (
     load_environment,
 )
 from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from config import settings
+from config.logging import get_logger, setup_logging
 from create_setup import run_setup_for_task, setup_manifest_is_current
 from create_validation import run_validation_for_task
 from sandbox.sandbox import (

@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from adas_core.exceptions import FeatureNotImplementedError
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
-from adas_core.logging_config import get_logger
 from config import settings
+from config.logging import get_logger
 
 logger = get_logger("adas_core.task_spec")
 
@@ -34,6 +34,10 @@ class ModelSpec(BaseModel):
 
     provider: str = Field(default="openai", description="Provider name (e.g. 'openai')")
     model_name: str = Field(..., min_length=1, description="Model identifier (e.g. 'gpt-5.6-luna')")
+    enable_web_search: bool = Field(
+        default=False,
+        description="Whether this model is authorized to have web search capability enabled for target system nodes.",
+    )
 
 
 class PersistenceContract(BaseModel):
@@ -665,6 +669,10 @@ class TestCaseSpec(BaseModel):
     judge_provider: str | None = Field(
         default=None, description="Optional provider override for LLMJudge (defaults to validation_wrapper)"
     )
+    judge_web_search: bool = Field(
+        default=False,
+        description="Whether qualitative evaluation with LLMJudge should have web search enabled to verify real-time facts or external sources.",
+    )
     modalities: list[Literal["text", "vision"]] = Field(
         default_factory=lambda: ["text"],
         description="Expected output modalities for evaluation, e.g. ['text', 'vision']",
@@ -686,6 +694,8 @@ class TestCaseSpec(BaseModel):
     def validate_judge_criteria_present_if_needed(self) -> TestCaseSpec:
         if self.llm_judge_needed and not (self.judge_criteria and self.judge_criteria.strip()):
             raise ValueError(f"TestCase '{self.id}' sets llm_judge_needed=True but judge_criteria is empty.")
+        if self.judge_web_search and not self.llm_judge_needed:
+            raise ValueError(f"TestCase '{self.id}' sets judge_web_search=True but llm_judge_needed is False.")
         if self.judge_model is not None and not self.judge_model.strip():
             raise ValueError(f"TestCase '{self.id}' specifies an empty judge_model.")
         if self.judge_provider is not None and not self.judge_provider.strip():
@@ -788,26 +798,52 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_judge_model_capabilities(self) -> TaskSpec:
-        """Fail early for judge overrides that cannot evaluate declared modalities."""
+        """Fail early for judge overrides that cannot evaluate declared modalities or web search."""
         # Delayed import avoids the TaskSpec <-> ChatModel module dependency at import time.
         from adas_core.chat_model import ModelRegistry
-        from meta_system.config import validation_wrapper
+        from config.settings import validation_model, validation_wrapper
 
         for test_case in self.dev_suite:
-            if not test_case.judge_model:
+            judge_model_to_check = test_case.judge_model
+            if not judge_model_to_check and not test_case.judge_web_search:
                 continue
+            effective_judge_model = judge_model_to_check or validation_model
             provider = test_case.judge_provider or validation_wrapper
-            if not ModelRegistry.is_registered_model(provider, test_case.judge_model):
+            if not ModelRegistry.is_registered_model(provider, effective_judge_model):
                 raise ValueError(
                     f"TestCase '{test_case.id}' specifies unregistered judge_model "
-                    f"'{test_case.judge_model}' for provider '{provider}'. "
+                    f"'{effective_judge_model}' for provider '{provider}'. "
                     f"Add it to ModelRegistry before using it in a TaskSpec."
                 )
-            capabilities = ModelRegistry.get_capabilities(provider, test_case.judge_model)
+            capabilities = ModelRegistry.get_capabilities(provider, effective_judge_model)
             if "vision" in test_case.modalities and not capabilities.supports_vision:
                 raise ValueError(
                     f"TestCase '{test_case.id}' requires vision evaluation but judge_model "
-                    f"'{test_case.judge_model}' ({provider}) is not vision-capable."
+                    f"'{effective_judge_model}' ({provider}) is not vision-capable."
+                )
+            if test_case.judge_web_search and not capabilities.supports_web_search:
+                raise ValueError(
+                    f"TestCase '{test_case.id}' requires judge web search but judge_model "
+                    f"'{effective_judge_model}' ({provider}) does not support web search."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def validate_available_models_capabilities(self) -> TaskSpec:
+        """Validate available models and web search declarations against ModelRegistry."""
+        from adas_core.chat_model import ModelRegistry
+
+        for m in self.available_models:
+            if not ModelRegistry.is_registered_model(m.provider, m.model_name):
+                raise ValueError(
+                    f"ModelSpec '{m.model_name}' for provider '{m.provider}' is not registered in ModelRegistry. "
+                    "Add it to ModelRegistry before using it in a TaskSpec."
+                )
+            capabilities = ModelRegistry.get_capabilities(m.provider, m.model_name)
+            if m.enable_web_search and not capabilities.supports_web_search:
+                raise ValueError(
+                    f"ModelSpec '{m.model_name}' ({m.provider}) specifies enable_web_search=True, "
+                    "but the model does not support web search."
                 )
         return self
 

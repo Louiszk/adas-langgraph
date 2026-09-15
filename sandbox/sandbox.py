@@ -19,8 +19,8 @@ from adas_core.exceptions import (
     SandboxRuntimeUnavailableError,
     SandboxSessionError,
 )
-from adas_core.logging_config import get_logger
-from config import settings
+from config.dependencies import SANDBOX_DEPENDENCIES
+from config.logging import get_logger
 
 logger = get_logger("sandbox")
 
@@ -33,7 +33,7 @@ def _cached_sandbox_image_tag() -> str:
     fingerprint = "\n".join(
         [
             _SANDBOX_DOCKERFILE.read_text(encoding="utf-8"),
-            *settings.dependencies,
+            *SANDBOX_DEPENDENCIES,
         ]
     )
     return f"{_CACHED_IMAGE_REPOSITORY}:{hashlib.sha256(fingerprint.encode()).hexdigest()[:16]}"
@@ -67,7 +67,7 @@ def ensure_cached_sandbox_image(client=None) -> str:
             path=str(_SANDBOX_DOCKERFILE.parent),
             dockerfile=_SANDBOX_DOCKERFILE.name,
             tag=image_tag,
-            buildargs={"ADAS_SANDBOX_DEPENDENCIES": " ".join(settings.dependencies)},
+            buildargs={"ADAS_SANDBOX_DEPENDENCIES": " ".join(SANDBOX_DEPENDENCIES)},
         )
     return image_tag
 
@@ -309,15 +309,14 @@ def setup_sandbox_environment(session, reinstall=False):
     session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/config")
     session.execute_command(f"rm -rf {SANDBOX_TARGET_METRICS_DIR}")
 
-    # Copy meta-system package files
+    # Copy config, meta-system, and core framework files
+    session.copy_dir_to_runtime(src_dir="config", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/config", pattern="*.py")
     session.copy_dir_to_runtime(src_dir="meta_system", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/meta_system", pattern="*.py")
-
-    # Copy core framework files
     session.copy_dir_to_runtime(src_dir="adas_core", dest_dir=f"{SANDBOX_WORKSPACE_DIR}/adas_core", pattern="*.py")
 
-    # Copy individual config, env and runner files
+    # Copy environment and runner files
     additional_files = [
-        ("config/settings.py", f"{SANDBOX_WORKSPACE_DIR}/config/settings.py"),
+        ("requirements.txt", f"{SANDBOX_WORKSPACE_DIR}/requirements.txt"),
         (".env", f"{SANDBOX_WORKSPACE_DIR}/.env"),
         ("sandbox/run_meta.py", f"{SANDBOX_WORKSPACE_DIR}/run_meta.py"),
         ("sandbox/run_target.py", f"{SANDBOX_WORKSPACE_DIR}/run_target.py"),
@@ -350,7 +349,7 @@ def setup_sandbox_environment(session, reinstall=False):
 
     if reinstall or deps_missing:
         logger.info("Installing dependencies in sandbox...")
-        session.execute_command(f"pip install {' '.join(settings.dependencies)}")
+        session.execute_command(f"pip install {' '.join(SANDBOX_DEPENDENCIES)}")
 
     logger.info("Sandbox environment set up successfully!")
     return True

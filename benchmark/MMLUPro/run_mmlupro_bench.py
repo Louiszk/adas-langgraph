@@ -52,7 +52,7 @@ def execute_problem(problem_item: dict, system_path: str) -> dict:
 if __name__ == "__main__":
     import argparse
 
-    from adas_core.logging_config import setup_logging
+    from config.logging import setup_logging
 
     setup_logging()
 

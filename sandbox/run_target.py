@@ -20,7 +20,6 @@ from adas_core.environment import (
 )
 from adas_core.fixture_lifecycle import process_fixture_lifecycle
 from adas_core.helpers import escape_system_name, validate_identifier
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.runtime_resources import (
     RuntimeResourceProfile,
     external_url_overrides,
@@ -29,6 +28,7 @@ from adas_core.runtime_resources import (
     stage_local_overrides,
 )
 from adas_core.task_spec import TaskSpec
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("run_target")
 

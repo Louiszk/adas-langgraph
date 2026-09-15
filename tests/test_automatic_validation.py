@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from adas_core.automatic_validation import (
+    CASE_VALIDATION_SYSTEM_PROMPT,
     AutomaticValidation,
     assemble_validation_module,
     discover_fixture_generators,
@@ -58,17 +59,22 @@ class TestAutomaticValidation:
             "pytest",
         ]
 
-    def test_case_context_includes_judge_overrides(self, sample_task_spec):
+    def test_case_context_includes_judge_overrides_and_web_search(self, sample_task_spec):
         case = TestCaseSpec(
             id="vision_case",
             description="Evaluate a chart",
             turns=[{"prompt": "make chart"}],
+            llm_judge_needed=True,
+            judge_criteria="Assess whether the chart is accurate and readable.",
             judge_model="gpt-4o",
             judge_provider="openai",
+            judge_web_search=True,
         )
         context = AutomaticValidation._format_case_context(sample_task_spec, case)
         assert "Judge Model Override: gpt-4o" in context
         assert "Judge Provider Override: openai" in context
+        assert "Judge Web Search: True" in context
+        assert "enable_web_search=True" in CASE_VALIDATION_SYSTEM_PROMPT
 
     def test_generates_loadable_llm_authored_module(self, sample_task_spec, tmp_path):
         llm = MagicMock()

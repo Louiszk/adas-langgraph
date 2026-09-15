@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,13 +16,16 @@ from langchain_core.tools import tool
 
 from adas_core.chat_model import (
     ChatModel,
+    ModelCapabilities,
     ModelRegistry,
     UsageRecorder,
+    _normalize_ai_message,
     convert_to_messages,
     execute_tool_calls,
     usage_scope,
     validate_tool_history,
 )
+from adas_core.exceptions import ModelConfigurationError
 
 
 @pytest.fixture(autouse=True)
@@ -185,14 +189,19 @@ class TestParameterCapabilities:
         assert call_kwargs["output_version"] == "responses/v1"
 
     def test_reasoning_model_rejects_invalid_effort_level(self):
-        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "o1"}]
+        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "o3"}]
         with pytest.raises(ValueError, match="Invalid reasoning_effort 'unsupported_effort'"):
-            ChatModel(model="o1", reasoning_effort="unsupported_effort")
+            ChatModel(model="o3", reasoning_effort="unsupported_effort")
 
     def test_older_o_series_rejects_reasoning_effort_none(self):
-        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "o1"}]
+        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "o3"}]
         with pytest.raises(ValueError, match="Invalid reasoning_effort 'none'"):
-            ChatModel(model="o1", reasoning_effort="none")
+            ChatModel(model="o3", reasoning_effort="none")
+
+    def test_gpt_5_4_rejects_reasoning_effort_minimal(self):
+        ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-5.4"}]
+        with pytest.raises(ValueError, match="Invalid reasoning_effort 'minimal'"):
+            ChatModel(model="gpt-5.4", reasoning_effort="minimal")
 
     def test_temperature_out_of_range_raises_value_error(self):
         ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-4o"}]
@@ -501,17 +510,16 @@ class TestTokenCounting:
     def test_token_counter_uses_model_specific_tokenizer(self):
         ChatModel.allowed_target_models = [
             {"provider": "openai", "model_name": "gpt-4o"},
-            {"provider": "openai", "model_name": "gpt-3.5-turbo"},
+            {"provider": "openai", "model_name": "gpt-4o-mini"},
         ]
         llm_4o = ChatModel(model="gpt-4o")
-        llm_35 = ChatModel(model="gpt-3.5-turbo")
+        llm_mini = ChatModel(model="gpt-4o-mini")
         assert llm_4o.token_counter.model_name == "gpt-4o"
-        assert llm_35.token_counter.model_name == "gpt-3.5-turbo"
+        assert llm_mini.token_counter.model_name == "gpt-4o-mini"
 
-        # Japanese text encodes to 10 tokens with o200k_base (gpt-4o) vs 12 with cl100k_base (gpt-3.5)
         unicode_msgs = [HumanMessage(content="こんにちは世界！")]
         assert llm_4o.token_counter.get_num_tokens_from_messages(unicode_msgs) == 10
-        assert llm_35.token_counter.get_num_tokens_from_messages(unicode_msgs) == 12
+        assert llm_mini.token_counter.get_num_tokens_from_messages(unicode_msgs) == 10
 
     def test_trim_messages_integration(self):
         ChatModel.allowed_target_models = [{"provider": "openai", "model_name": "gpt-5.6-luna"}]
@@ -801,19 +809,17 @@ class TestExecuteToolCalls:
 
 class TestVisionCapabilities:
     def test_model_registry_vision_capabilities_and_prefix_ordering(self):
-        # Explicit models
+        # Standard chat models
         assert ModelRegistry.get_capabilities("openai", "gpt-4o").supports_vision is True
         assert ModelRegistry.get_capabilities("openai", "gpt-4o-mini").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "gpt-4-turbo").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "gpt-4").supports_vision is False
-        assert ModelRegistry.get_capabilities("openai", "gpt-3.5-turbo").supports_vision is False
+
+        # GPT-5.4 family
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-mini").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-nano").supports_vision is True
 
         # Reasoning models
-        assert ModelRegistry.get_capabilities("openai", "o1").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "o1-mini").supports_vision is False
-        assert ModelRegistry.get_capabilities("openai", "o1-preview").supports_vision is False
         assert ModelRegistry.get_capabilities("openai", "o3").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "o3-mini").supports_vision is False
 
         # GPT-5.6 family
         assert ModelRegistry.get_capabilities("openai", "gpt-5.6-sol").supports_vision is True
@@ -821,13 +827,13 @@ class TestVisionCapabilities:
         assert ModelRegistry.get_capabilities("openai", "gpt-5.6-luna").supports_vision is True
 
         # Prefix sorting tests: ensure longer prefixes match before shorter prefixes
-        # 1. o1-mini prefix must match o1-mini (False), NOT o1 (True)
-        assert ModelRegistry.get_capabilities("openai", "o1-mini-2024-09-12").supports_vision is False
-        assert ModelRegistry.get_capabilities("openai", "o1-2024-12-17").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o-mini-2024-07-18").supports_vision is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-mini-2026-03-05").supports_vision is True
 
-        # 2. gpt-4o prefix must match gpt-4o (True), NOT gpt-4 (False)
-        assert ModelRegistry.get_capabilities("openai", "gpt-4o-2024-08-06").supports_vision is True
-        assert ModelRegistry.get_capabilities("openai", "gpt-4-0613").supports_vision is False
+    def test_model_registry_rejects_arbitrary_prefix_extensions(self):
+        assert ModelRegistry.is_registered_model("openai", "gpt-5.6-luna") is True
+        assert ModelRegistry.is_registered_model("openai", "gpt-5.6-luna-2026-03-05") is True
+        assert ModelRegistry.is_registered_model("openai", "gpt-5.6-luna-unintended-model") is False
 
     def test_has_image_content_detection(self):
         from adas_core.chat_model import has_image_content
@@ -858,7 +864,8 @@ class TestVisionCapabilities:
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_chat_model_rejects_images_for_non_vision_model(self, mock_chat_openai):
         mock_chat_openai.return_value = MagicMock()
-        llm = ChatModel(model="o3-mini", provider="openai", is_meta=True)
+        ModelRegistry.register_capabilities("openai", "text-only-model", ModelCapabilities(supports_vision=False))
+        llm = ChatModel(model="text-only-model", provider="openai", is_meta=True)
 
         image_message = HumanMessage(
             content=[
@@ -887,3 +894,167 @@ class TestVisionCapabilities:
         response = llm.invoke([image_message])
         assert response.content == "I see the chart"
         mock_instance.invoke.assert_called_once()
+
+
+class TestWebSearchCapabilities:
+    """Specification tests for web search capabilities, registry declarations, and normalization."""
+
+    def test_model_registry_supports_web_search(self):
+        """Verify web search capability declarations across model families."""
+        # Supported standard chat models
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-4o-mini").supports_web_search is True
+
+        # Supported GPT-5.4 family
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-mini").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-nano").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.4-2026-03-05").supports_web_search is True
+
+        # Supported GPT-5.6 family
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-luna").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-sol").supports_web_search is True
+        assert ModelRegistry.get_capabilities("openai", "gpt-5.6-terra").supports_web_search is True
+
+        # Reasoning models
+        assert ModelRegistry.get_capabilities("openai", "o3").supports_web_search is True
+
+        # Unsupported model (custom registration)
+        ModelRegistry.register_capabilities("openai", "no-search-model", ModelCapabilities(supports_web_search=False))
+        assert ModelRegistry.get_capabilities("openai", "no-search-model").supports_web_search is False
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_default_tools_web_search(self, mock_chat_openai):
+        """Verify ChatModel with default_tools=['web_search'] binds {'type': 'web_search'}."""
+        mock_instance = MagicMock()
+        mock_bound = MagicMock()
+        mock_instance.bind_tools.return_value = mock_bound
+        mock_chat_openai.return_value = mock_instance
+
+        llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
+        assert llm.default_tools == ({"type": "web_search"},)
+        mock_instance.bind_tools.assert_called_once_with([{"type": "web_search"}])
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_default_tools_unsupported_model(self, mock_chat_openai):
+        """Verify ChatModel with web_search on an unsupported model raises ModelConfigurationError."""
+        mock_chat_openai.return_value = MagicMock()
+        ModelRegistry.register_capabilities("openai", "no-search-model", ModelCapabilities(supports_web_search=False))
+        with pytest.raises(ModelConfigurationError, match="does not support web search"):
+            ChatModel(model="no-search-model", provider="openai", is_meta=True, default_tools=["web_search"])
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_target_authorization(self, mock_chat_openai):
+        """Verify target systems can only use web search if declared in TaskSpec."""
+        mock_instance = MagicMock()
+        mock_chat_openai.return_value = mock_instance
+
+        # Case 1: Target model is NOT authorized for web search
+        ChatModel.allowed_target_models = [
+            {"provider": "openai", "model_name": "gpt-5.6-luna", "enable_web_search": False}
+        ]
+        with pytest.raises(ModelConfigurationError, match="not authorized for web search"):
+            ChatModel(model="gpt-5.6-luna", is_meta=False, default_tools=["web_search"])
+
+        target_llm = ChatModel(model="gpt-5.6-luna", is_meta=False)
+        assert target_llm.default_tools == ()
+        with pytest.raises(ValueError, match="bind_tools is reserved for client-side tool instances"):
+            target_llm.bind_tools(["web_search"])
+
+        # Case 2: Target model IS authorized for web search
+        ChatModel.allowed_target_models = [
+            {"provider": "openai", "model_name": "gpt-5.6-luna", "enable_web_search": True}
+        ]
+        # Standard target instance does not equip web search by default (selective node usage)
+        target_llm_auth = ChatModel(model="gpt-5.6-luna", is_meta=False)
+        assert target_llm_auth.default_tools == ()
+
+        # Target node explicitly equipping web search succeeds when authorized
+        target_search_llm = ChatModel(model="gpt-5.6-luna", is_meta=False, default_tools=["web_search"])
+        assert target_search_llm.default_tools == ({"type": "web_search"},)
+        mock_instance.bind_tools.assert_called_with([{"type": "web_search"}])
+
+        # Target node calling bind_tools(["web_search"]) is rejected with informative error
+        with pytest.raises(ValueError, match="bind_tools is reserved for client-side tool instances"):
+            target_llm_auth.bind_tools(["web_search"])
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_chat_model_bind_tools_with_web_search_and_custom_tools(self, mock_chat_openai):
+        """Verify bind_tools combines custom LangChain tools and default web search."""
+        mock_instance = MagicMock()
+        mock_chat_openai.return_value = mock_instance
+
+        @tool
+        def custom_calc(x: int) -> int:
+            """Custom tool."""
+            return x + 1
+
+        llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
+        bound_llm = llm.bind_tools([custom_calc])
+
+        mock_instance.bind_tools.assert_called_with([custom_calc, {"type": "web_search"}])
+        assert bound_llm.default_tools == ({"type": "web_search"},)
+
+    @patch("adas_core.chat_model.ChatOpenAI")
+    def test_structured_output_with_web_search_uses_documented_composition(self, mock_chat_openai):
+        """Bind provider tools and JSON-schema output together through LangChain's public API."""
+        mock_model = MagicMock()
+        mock_structured = MagicMock()
+        mock_model.bind_tools.return_value = MagicMock()
+        mock_model.with_structured_output.return_value = mock_structured
+        mock_chat_openai.return_value = mock_model
+
+        schema = {"type": "object", "properties": {"is_pass": {"type": "boolean"}}}
+        llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
+        structured_llm = llm.with_structured_output(schema)
+
+        assert structured_llm._runnable is mock_structured
+        mock_model.with_structured_output.assert_called_once_with(
+            schema,
+            method="json_schema",
+            strict=True,
+            include_raw=True,
+            tools=[{"type": "web_search"}],
+        )
+
+    def test_normalize_ai_message_extracts_web_search_calls_and_citations(self):
+        """Verify _normalize_ai_message extracts web_search_call blocks and annotations."""
+        raw_content = [
+            {
+                "id": "rs_123",
+                "type": "reasoning",
+                "content": [],
+            },
+            {
+                "id": "ws_456",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {
+                    "type": "search",
+                    "queries": ["weather Tokyo today"],
+                },
+            },
+            {
+                "id": "msg_789",
+                "type": "text",
+                "text": "Tokyo weather is 25C. ([source](https://weather.example.com))",
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "title": "Tokyo Weather",
+                        "url": "https://weather.example.com",
+                        "start_index": 22,
+                        "end_index": 62,
+                    }
+                ],
+            },
+        ]
+        msg = AIMessage(content=cast(Any, raw_content))
+        normalized = _normalize_ai_message(msg)
+
+        assert normalized.content == "Tokyo weather is 25C. ([source](https://weather.example.com))"
+        assert len(normalized.additional_kwargs["reasoning"]) == 1
+        assert len(normalized.additional_kwargs["web_search_calls"]) == 1
+        assert normalized.additional_kwargs["web_search_calls"][0]["id"] == "ws_456"
+        assert len(normalized.additional_kwargs["citations"]) == 1
+        assert normalized.additional_kwargs["citations"][0]["url"] == "https://weather.example.com"

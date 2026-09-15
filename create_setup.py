@@ -13,8 +13,8 @@ from typing import Any
 
 from adas_core.environment import SANDBOX_TASK_SETUP_DIR, SANDBOX_WORKSPACE_DIR, load_environment
 from adas_core.fixture_lifecycle import FIXTURE_LIFECYCLE_VERSION
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
+from config.logging import get_logger, setup_logging
 from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
 logger = get_logger("create_setup")

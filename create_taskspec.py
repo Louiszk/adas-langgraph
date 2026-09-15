@@ -16,7 +16,7 @@ from pathlib import Path
 
 from adas_core.automatic_taskspec import run_interactive_wizard
 from adas_core.environment import load_environment
-from adas_core.logging_config import get_logger, setup_logging
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("create_taskspec")
 

@@ -7,6 +7,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# The build argument is derived from config.settings.dependencies.
+# The build argument is derived from config.dependencies.SANDBOX_DEPENDENCIES.
 # Docker caches this layer, and sandbox.py gives dependency changes a new image tag.
 RUN python -m pip install --no-cache-dir ${ADAS_SANDBOX_DEPENDENCIES}

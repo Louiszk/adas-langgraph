@@ -3,8 +3,8 @@ import sys
 import time
 
 from adas_core.environment import SANDBOX_WORKSPACE_DIR
-from adas_core.logging_config import get_logger, setup_logging
 from benchmark.benchmark_base import extract_target_usage, reset_target_usage, run_benchmark_parallel
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("run_fever_bench")
 

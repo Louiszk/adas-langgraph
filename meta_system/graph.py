@@ -4,8 +4,8 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 
 from adas_core.candidate_selection import finalize_best_candidate
-from adas_core.logging_config import get_logger
-from meta_system.config import (
+from config.logging import get_logger
+from config.settings import (
     CANDIDATE_OPTIMIZATION_METRIC,
     CLEANUP_CHECKPOINTS_ON_FINALIZATION,
 )

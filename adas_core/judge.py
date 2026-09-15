@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 
 from adas_core.chat_model import ChatModel, ModelRegistry, usage_scope
 from adas_core.exceptions import JudgeMaxRetriesExceededError, JudgePayloadError
-from adas_core.logging_config import get_logger
-from meta_system.config import validation_model, validation_wrapper
+from config.logging import get_logger
+from config.settings import validation_model, validation_wrapper
 
 logger = get_logger("judge")
 
@@ -113,12 +113,14 @@ class LLMJudge:
         provider: str | None = None,
         temperature: float | None = None,
         max_retries: int = 2,
+        enable_web_search: bool = False,
     ) -> None:
         self.system_prompt = system_prompt or DEFAULT_JUDGE_SYSTEM_PROMPT
         self.model = model or validation_model
         self.provider = provider or validation_wrapper
         self.temperature = temperature
         self.max_retries = max_retries
+        self.enable_web_search = enable_web_search
 
     def evaluate(
         self,
@@ -129,6 +131,7 @@ class LLMJudge:
         images: list[str | Path] | str | Path | None = None,
         model: str | None = None,
         provider: str | None = None,
+        enable_web_search: bool | None = None,
     ) -> Any:
         """
         Evaluate target agent execution against instructions and criteria.
@@ -140,6 +143,7 @@ class LLMJudge:
             images: Optional local path(s) or remote URL(s) for multimodal visual evaluation.
             model: Optional model override for this evaluation call.
             provider: Optional provider override for this evaluation call.
+            enable_web_search: Optional override to enable/disable web search fact-checking.
 
         Returns:
             An instance of schema (defaults to JudgeEvaluation).
@@ -148,6 +152,7 @@ class LLMJudge:
         effective_system_prompt = system_prompt or self.system_prompt
         effective_model = model or self.model
         effective_provider = provider or self.provider
+        effective_enable_web_search = self.enable_web_search if enable_web_search is None else enable_web_search
 
         formatted_images: list[dict[str, Any]] = []
         if images:
@@ -178,11 +183,13 @@ class LLMJudge:
 
         # Enforce meta scope with node='judge' so judge tokens are never attributed to target system
         with usage_scope(system="meta", node="judge"):
+            default_tools = ["web_search"] if effective_enable_web_search else None
             llm = ChatModel(
                 model=effective_model,
                 provider=effective_provider,
                 temperature=self.temperature,
                 is_meta=True,
+                default_tools=default_tools,
             ).with_structured_output(target_schema)
 
             last_error: Exception | None = None

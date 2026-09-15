@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from adas_core.chat_model import get_current_scope, usage_scope
+from adas_core.chat_model import ModelCapabilities, ModelRegistry, get_current_scope, usage_scope
 from adas_core.judge import (
     DEFAULT_JUDGE_SYSTEM_PROMPT,
     JudgeEvaluation,
@@ -327,30 +327,33 @@ class TestLLMJudge:
             provider=judge_fast.provider,
             temperature=None,
             is_meta=True,
+            default_tools=None,
         )
 
         # 2. Custom model override at evaluate() time
         judge_default = LLMJudge()
-        judge_default.evaluate(prompt="Deep reasoning check", model="o3-mini")
+        judge_default.evaluate(prompt="Deep reasoning check", model="o3")
         mock_chat_model_cls.assert_called_with(
-            model="o3-mini",
+            model="o3",
             provider=judge_default.provider,
             temperature=None,
             is_meta=True,
+            default_tools=None,
         )
 
     def test_evaluate_fails_fast_when_model_does_not_support_vision(self, tmp_path):
-        """Passing images to a non-vision model (e.g. o3-mini or gpt-3.5-turbo) fails fast."""
+        """Passing images to a non-vision model fails fast."""
         dummy_img = tmp_path / "chart.png"
         dummy_img.write_bytes(b"\x89PNG\r\n\x1a\n")
 
+        ModelRegistry.register_capabilities("openai", "text-only-eval", ModelCapabilities(supports_vision=False))
         judge = LLMJudge()
 
         with pytest.raises(ValueError, match="does not support vision/image evaluation"):
             judge.evaluate(
                 prompt="Verify chart",
                 images=[dummy_img],
-                model="o3-mini",
+                model="text-only-eval",
             )
 
     @patch("adas_core.judge.ChatModel")
@@ -378,4 +381,5 @@ class TestLLMJudge:
             provider=judge.provider,
             temperature=None,
             is_meta=True,
+            default_tools=None,
         )

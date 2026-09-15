@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from config.dependencies import SANDBOX_DEPENDENCIES
 from sandbox.sandbox import StreamingSandboxSession
 
 
@@ -93,7 +94,6 @@ class TestSandboxSessionSpecification:
         """A new dependency set creates one new reusable image."""
         from docker.errors import ImageNotFound
 
-        from config import settings
         from sandbox.sandbox import ensure_cached_sandbox_image
 
         mock_client = MagicMock()
@@ -105,7 +105,7 @@ class TestSandboxSessionSpecification:
         assert image.startswith("adas-sandbox:")
         assert mock_client.images.build.call_args.kwargs["tag"] == image
         assert mock_client.images.build.call_args.kwargs["buildargs"] == {
-            "ADAS_SANDBOX_DEPENDENCIES": " ".join(settings.dependencies)
+            "ADAS_SANDBOX_DEPENDENCIES": " ".join(SANDBOX_DEPENDENCIES)
         }
 
     @patch("sandbox.sandbox.ensure_cached_sandbox_image", return_value="adas-sandbox:testtag")
@@ -145,7 +145,6 @@ class TestSandboxSessionSpecification:
 
     def test_builds_cached_image_with_provided_client_when_absent(self):
         """When the image is absent in the provided client, build using that client."""
-        from config import settings
         from sandbox.sandbox import ensure_cached_sandbox_image
 
         mock_client = MagicMock()
@@ -157,7 +156,7 @@ class TestSandboxSessionSpecification:
         assert image.startswith("adas-sandbox:")
         assert mock_client.images.build.call_args.kwargs["tag"] == image
         assert mock_client.images.build.call_args.kwargs["buildargs"] == {
-            "ADAS_SANDBOX_DEPENDENCIES": " ".join(settings.dependencies)
+            "ADAS_SANDBOX_DEPENDENCIES": " ".join(SANDBOX_DEPENDENCIES)
         }
 
     def test_propagates_cached_image_lookup_errors(self):
@@ -191,7 +190,11 @@ class TestSandboxSessionSpecification:
 
         # Check meta_system directory copy was invoked
         copied_dirs = [call.kwargs.get("dest_dir") for call in mock_session.copy_dir_to_runtime.call_args_list]
+        assert "/sandbox/workspace/config" in copied_dirs
         assert "/sandbox/workspace/meta_system" in copied_dirs
+
+        copied_files = {call.args[1] for call in mock_session.copy_to_runtime.call_args_list}
+        assert "/sandbox/workspace/requirements.txt" in copied_files
 
 
 class TestSetupSandboxUtilities:

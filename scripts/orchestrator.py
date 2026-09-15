@@ -19,7 +19,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from adas_core.environment import load_environment  # noqa: E402
-from adas_core.logging_config import get_logger, setup_logging  # noqa: E402
+from config.logging import get_logger, setup_logging  # noqa: E402
 from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
 
 logger = get_logger("orchestrator")
