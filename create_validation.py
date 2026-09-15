@@ -8,8 +8,8 @@ from pathlib import Path
 
 from adas_core.automatic_validation import ensure_automatic_validation, verify_validation_manifest
 from adas_core.environment import load_environment
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("create_validation")
 

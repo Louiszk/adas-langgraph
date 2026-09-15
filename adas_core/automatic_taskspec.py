@@ -11,13 +11,13 @@ from pydantic import ValidationError
 
 from adas_core.chat_model import ChatModel, ModelRegistry, usage_scope
 from adas_core.helpers import sanitize_identifier
-from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import (
     extract_json_block,
     extract_json_block_optional,
     find_markdown_fences,
 )
 from adas_core.task_spec import TaskSpec
+from config.logging import get_logger
 from config.settings import taskspec_enable_web_search, taskspec_model, taskspec_reasoning_effort, taskspec_wrapper
 
 logger = get_logger("adas_core.automatic_taskspec")

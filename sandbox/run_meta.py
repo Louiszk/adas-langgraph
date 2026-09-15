@@ -19,9 +19,9 @@ from adas_core.helpers import escape_system_name, validate_identifier
 
 sys.path.append(SANDBOX_WORKSPACE_DIR)
 from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
-from adas_core.logging_config import get_logger, setup_logging
 from adas_core.task_spec import TaskSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config.logging import get_logger, setup_logging
 from meta_system.graph import workflow
 
 logger = get_logger("run_meta")

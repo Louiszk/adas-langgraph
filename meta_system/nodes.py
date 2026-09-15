@@ -12,8 +12,8 @@ from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.decorator_logic import execute_decorator_tool_calls
 from adas_core.exceptions import MetaStateError
 from adas_core.helpers import remove_old_test_results
-from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
+from config.logging import get_logger
 from config.settings import (
     ACTION_CUTOFF,
     meta_agent_enable_web_search,

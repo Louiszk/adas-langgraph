@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 import dill as pickle
 
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR
-from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config.logging import get_logger
 
 DEFAULT_OPTIMIZATION_METRIC: Literal["tokens", "runtime"] = "tokens"
 DEFAULT_CLEANUP_CHECKPOINTS: bool = True

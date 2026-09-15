@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from adas_core.chat_model import ChatModel, ModelRegistry, usage_scope
 from adas_core.exceptions import JudgeMaxRetriesExceededError, JudgePayloadError
-from adas_core.logging_config import get_logger
+from config.logging import get_logger
 from config.settings import validation_model, validation_wrapper
 
 logger = get_logger("judge")

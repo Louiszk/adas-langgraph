@@ -22,10 +22,10 @@ from adas_core.exceptions import (
 )
 from adas_core.fixture_lifecycle import external_database_seed_lifecycle, process_fixture_lifecycle
 from adas_core.helpers import TruncatingStringIO, sanitize_test_id
-from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config.logging import get_logger
 
 logger = get_logger("adas_core.test_runner")
 

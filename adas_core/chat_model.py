@@ -28,8 +28,8 @@ from pydantic import SecretStr
 
 from adas_core.environment import SANDBOX_TASK_SPEC_PATH
 from adas_core.exceptions import ModelConfigurationError, StructuredOutputError
-from adas_core.logging_config import get_logger
 from adas_core.tool_calls import execute_tool_calls, validate_tool_history
+from config.logging import get_logger
 
 logger = get_logger("chat_model")
 

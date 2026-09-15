@@ -29,10 +29,10 @@ from adas_core.helpers import (
     truncate_state,
     validate_identifier,
 )
-from adas_core.logging_config import get_logger
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from config.logging import get_logger
 from config.settings import TARGET_SYSTEM_RECURSION_LIMIT
 from meta_system.prompts import test_reminder
 

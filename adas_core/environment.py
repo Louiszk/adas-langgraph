@@ -18,7 +18,8 @@ from dotenv import find_dotenv, load_dotenv
 from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
-from adas_core.logging_config import get_logger
+from config.dependencies import DEFAULT_EXCLUDED_PACKAGES
+from config.logging import get_logger
 
 logger = get_logger("adas_core.environment")
 
@@ -44,20 +45,6 @@ SANDBOX_GENERATED_SYSTEMS_DIR = f"{SANDBOX_WORKSPACE_DIR}/generated_systems"
 SANDBOX_TARGET_METRICS_DIR = f"{SANDBOX_WORKSPACE_DIR}/target_metrics"
 SANDBOX_DATA_DIR = f"{SANDBOX_WORKSPACE_DIR}/data"
 SANDBOX_DATA_OUTPUT_DIR = f"{SANDBOX_DATA_DIR}/output"
-
-DEFAULT_EXCLUDED_PACKAGES: list[str] = [
-    "datasets",
-    "docker",
-    "grpcio-status",
-    "langchain-openai",
-    "wheel",
-    "llm-sandbox",
-    "pip",
-    "dill",
-    "podman",
-    "python-dotenv",
-    "setuptools",
-]
 
 _PACKAGE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?(?:\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+(?:\s*,\s*(?:==|!=|<=|>=|<|>|~=)\s*[A-Za-z0-9.*+!._-]+)*)?$"

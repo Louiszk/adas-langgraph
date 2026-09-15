@@ -4,7 +4,7 @@ import os
 import random
 from collections import defaultdict
 
-from adas_core.logging_config import get_logger, setup_logging
+from config.logging import get_logger, setup_logging
 
 logger = get_logger("create_fever_subset")
 

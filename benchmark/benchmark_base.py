@@ -7,7 +7,7 @@ from typing import Any
 
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
 from adas_core.helpers import validate_python_module_path
-from adas_core.logging_config import get_logger
+from config.logging import get_logger
 
 logger = get_logger("benchmark_base")
 
@@ -243,7 +243,7 @@ def benchmark_cli_main(
     """Unified CLI entry point for benchmark sandbox runners."""
     import argparse
 
-    from adas_core.logging_config import setup_logging
+    from config.logging import setup_logging
     from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
 
     setup_logging()

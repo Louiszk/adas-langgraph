@@ -7,6 +7,7 @@ from adas_core.automatic_setup import AutomaticSetup
 from adas_core.automatic_taskspec import AutomaticTaskSpec
 from adas_core.automatic_validation import AutomaticValidation
 from config import settings
+from config.dependencies import SANDBOX_DEPENDENCIES
 
 
 def test_sandbox_dependencies_match_requirements_file():
@@ -18,7 +19,7 @@ def test_sandbox_dependencies_match_requirements_file():
         and not line.lstrip().startswith("#")
         and line.split("==", maxsplit=1)[0].strip() in sandbox_dependency_names
     ]
-    assert settings.dependencies == expected
+    assert SANDBOX_DEPENDENCIES == expected
 
 
 def test_meta_agent_web_search_is_opt_in_by_default():

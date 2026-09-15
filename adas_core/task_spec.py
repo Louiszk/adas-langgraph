@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from adas_core.exceptions import FeatureNotImplementedError
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
-from adas_core.logging_config import get_logger
 from config import settings
+from config.logging import get_logger
 
 logger = get_logger("adas_core.task_spec")
 

@@ -11,7 +11,6 @@ from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.environment import normalize_package_name
 from adas_core.exceptions import FixtureExecutionError
 from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
-from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import (
     CustomFixtureSpec,
@@ -22,6 +21,7 @@ from adas_core.task_spec import (
     MockServiceFixtureSpec,
     TaskSpec,
 )
+from config.logging import get_logger
 from config.settings import setup_enable_web_search, setup_model, setup_reasoning_effort, setup_wrapper
 
 logger = get_logger("adas_core.automatic_setup")
