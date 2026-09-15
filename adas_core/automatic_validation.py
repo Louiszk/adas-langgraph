@@ -21,7 +21,12 @@ from adas_core.helpers import normalize_future_imports, safe_write_text, sanitiz
 from adas_core.logging_config import get_logger
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import TaskSpec, TestCaseSpec
-from meta_system.config import validation_model, validation_wrapper
+from config.settings import (
+    validation_enable_web_search,
+    validation_model,
+    validation_reasoning_effort,
+    validation_wrapper,
+)
 
 logger = get_logger("adas_core.automatic_validation")
 
@@ -522,8 +527,10 @@ class AutomaticValidation:
         self.llm = llm or ChatModel(
             provider=validation_wrapper,
             model=validation_model,
+            reasoning_effort=validation_reasoning_effort,
             name="AutomaticValidation",
             is_meta=True,
+            default_tools=["web_search"] if validation_enable_web_search else None,
         )
 
     @staticmethod

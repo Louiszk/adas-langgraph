@@ -801,7 +801,7 @@ class TaskSpec(BaseModel):
         """Fail early for judge overrides that cannot evaluate declared modalities or web search."""
         # Delayed import avoids the TaskSpec <-> ChatModel module dependency at import time.
         from adas_core.chat_model import ModelRegistry
-        from meta_system.config import validation_model, validation_wrapper
+        from config.settings import validation_model, validation_wrapper
 
         for test_case in self.dev_suite:
             judge_model_to_check = test_case.judge_model

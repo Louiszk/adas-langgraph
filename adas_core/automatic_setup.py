@@ -22,7 +22,7 @@ from adas_core.task_spec import (
     MockServiceFixtureSpec,
     TaskSpec,
 )
-from meta_system.config import validation_model, validation_wrapper
+from config.settings import setup_enable_web_search, setup_model, setup_reasoning_effort, setup_wrapper
 
 logger = get_logger("adas_core.automatic_setup")
 
@@ -103,10 +103,12 @@ class AutomaticSetup:
 
     def __init__(self, llm: ChatModel | None = None) -> None:
         self.llm = llm or ChatModel(
-            provider=validation_wrapper,
-            model=validation_model,
+            provider=setup_wrapper,
+            model=setup_model,
+            reasoning_effort=setup_reasoning_effort,
             name="AutomaticSetup",
             is_meta=True,
+            default_tools=["web_search"] if setup_enable_web_search else None,
         )
 
     def _invoke_setup_model(self, messages: list[SystemMessage | HumanMessage]) -> Any:

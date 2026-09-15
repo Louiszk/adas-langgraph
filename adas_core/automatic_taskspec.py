@@ -18,7 +18,7 @@ from adas_core.markdown_parser import (
     find_markdown_fences,
 )
 from adas_core.task_spec import TaskSpec
-from meta_system.config import validation_model, validation_wrapper
+from config.settings import taskspec_enable_web_search, taskspec_model, taskspec_reasoning_effort, taskspec_wrapper
 
 logger = get_logger("adas_core.automatic_taskspec")
 
@@ -193,10 +193,12 @@ class AutomaticTaskSpec:
 
     def __init__(self, llm: ChatModel | None = None) -> None:
         self.llm = llm or ChatModel(
-            provider=validation_wrapper,
-            model=validation_model,
+            provider=taskspec_wrapper,
+            model=taskspec_model,
+            reasoning_effort=taskspec_reasoning_effort,
             name="AutomaticTaskSpec",
             is_meta=True,
+            default_tools=["web_search"] if taskspec_enable_web_search else None,
         )
 
     def _invoke_model(self, messages: list[BaseMessage]) -> Any:

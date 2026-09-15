@@ -14,8 +14,9 @@ from adas_core.exceptions import MetaStateError
 from adas_core.helpers import remove_old_test_results
 from adas_core.logging_config import get_logger
 from adas_core.materialize import materialize_system
-from meta_system.config import (
+from config.settings import (
     ACTION_CUTOFF,
+    meta_agent_enable_web_search,
     meta_agent_model,
     meta_agent_reasoning_effort,
     meta_agent_wrapper,
@@ -116,6 +117,7 @@ def meta_agent_function(state: MetaState) -> dict[str, Any]:
             model=meta_agent_model,
             reasoning_effort=meta_agent_reasoning_effort,
             name="MetaAgent",
+            default_tools=["web_search"] if meta_agent_enable_web_search else None,
         )
 
         context_length = ACTION_CUTOFF * 2

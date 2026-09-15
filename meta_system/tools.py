@@ -33,7 +33,7 @@ from adas_core.logging_config import get_logger
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
-from meta_system.config import RECURSION_LIMIT
+from config.settings import TARGET_SYSTEM_RECURSION_LIMIT
 from meta_system.prompts import test_reminder
 
 logger = get_logger("meta_system.tools")
@@ -408,7 +408,7 @@ def _resolve_task_validation(
     Returns:
         (task_spec, validation_module, test_cases)
     """
-    # Import lazily: automatic_validation depends on meta_system.config, whose
+    # Import lazily: automatic_validation depends on config.settings, whose
     # package initialization imports this module.
     from adas_core.automatic_validation import load_validation_module
 
@@ -523,7 +523,7 @@ def test_system(state: dict[str, Any]) -> str:
             system=target_agentic_system,
             test_cases=all_test_cases,
             validation_module=validation_module,
-            recursion_limit=RECURSION_LIMIT,
+            recursion_limit=TARGET_SYSTEM_RECURSION_LIMIT,
             stop_on_first_failure=True,
             workspace_root=os.environ.get("ADAS_WORKSPACE_ROOT"),
             fixtures_dir=active_fixtures_dir,
