@@ -11,9 +11,10 @@ agentic_system_documentation = """
    - Any extra custom state keys must be declared in `AgentState` before use.
 
 2. **Node and Conditional-Edge Function Signatures**:
-   - **Strict Rule**: EVERY node and conditional-edge function must accept **exactly one** argument named `state`.
-     - Node Signature: `def my_node(state: AgentState) -> dict:`
-     - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
+   - Every node and conditional-edge function must accept exactly one argument named `state`.
+   - Do not use asynchronous (`async def`) nodes or `.ainvoke()`/`.astream()` model calls.
+   - Node Signature: `def my_node(state: AgentState) -> dict:`
+   - Conditional-edge Function Signature: `def choose_next(state: AgentState) -> str | List[str]:`
    - Nodes return a dictionary containing state keys to update (e.g., `{"final_answer": "42"}`).
    - Conditional-edge functions return a pathmap key for the next node(s) to run, or `END`. Returning a `List[str]` triggers parallel branches.
 

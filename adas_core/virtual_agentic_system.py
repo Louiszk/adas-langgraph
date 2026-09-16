@@ -313,6 +313,21 @@ class VirtualAgenticSystem:
 
             func_def_node = None
             for node in tree.body:
+                # TODO: allow AsyncFunctionDef nodes
+                if (
+                    isinstance(node, ast.AsyncFunctionDef)
+                    and component_type
+                    and component_type.lower()
+                    in [
+                        "node",
+                        "conditional_edge",
+                    ]
+                ):
+                    return (
+                        None,
+                        "ERROR: Asynchronous node and conditional-edge functions are not currently supported. "
+                        "Use 'def'.",
+                    )
                 if isinstance(node, ast.FunctionDef):
                     func_def_node = node
                     break

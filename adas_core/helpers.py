@@ -162,7 +162,7 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
 def validate_node_conditional_edge_signature(function_code: str) -> tuple[bool, str | None]:
     """
     Validates the signature of a node or conditional-edge function.
-    It should accept exactly one argument named 'state'.
+    It should be a synchronous function accepting exactly one argument named 'state'.
     """
 
     try:
@@ -173,6 +173,9 @@ def validate_node_conditional_edge_signature(function_code: str) -> tuple[bool, 
     # Find the function definition node
     func_def_node = None
     for node in tree.body:
+        # TODO: allow AsyncFunctionDef nodes
+        if isinstance(node, ast.AsyncFunctionDef):
+            return False, "Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
         if isinstance(node, ast.FunctionDef):
             func_def_node = node
             break

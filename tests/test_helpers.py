@@ -25,6 +25,14 @@ class TestNodeConditionalEdgeSignatureValidation:
         assert is_valid is True
         assert err is None
 
+    def test_async_signature_is_rejected_explicitly(self):
+        is_valid, err = validate_node_conditional_edge_signature(
+            "async def my_node(state: dict) -> dict:\n    return state"
+        )
+
+        assert is_valid is False
+        assert err == "Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
+
     def test_invalid_param_name(self):
         """Contract: Functions accepting a parameter not named 'state' must be rejected."""
         invalid_code = "def my_node(ctx: dict) -> dict:\n    return ctx"

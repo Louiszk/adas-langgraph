@@ -83,6 +83,17 @@ class TestComponentLifecycleAndCascadeDeletion:
         assert empty_system.nodes["researcher_node"]["description"] == "Research node"
         assert "def researcher_node" in empty_system.nodes["researcher_node"]["source_code"]
 
+    def test_async_node_is_rejected_explicitly(self, empty_system: VirtualAgenticSystem):
+        func, error = empty_system.get_function(
+            "async def researcher_node(state: dict) -> dict:\n    return state",
+            "node",
+        )
+
+        assert func is None
+        assert error == (
+            "ERROR: Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
+        )
+
     def test_delete_node_cascades_to_edges(
         self, empty_system: VirtualAgenticSystem, sample_node_researcher: str, sample_node_writer: str
     ):
