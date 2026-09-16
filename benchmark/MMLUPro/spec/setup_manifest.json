@@ -3,6 +3,7 @@
     "preflight.py": "5cb39033e49f2cebeccfe7c8c4fbf87522ff08dc94fafd0ec94f6642c230f00b",
     "task.json": "9955b2a4c2ba64f2bf77b3bbf6be1d3a30cbb6c887cd3e4bf0203b2cf4a4f48e"
   },
+  "fixture_lifecycle_version": 1,
   "required_packages": [],
   "schema_version": "1.0",
   "task_name": "mmlu_pro",

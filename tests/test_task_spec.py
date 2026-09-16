@@ -854,8 +854,8 @@ class TestBenchmarkSpecs:
                 f"Expected exactly 1 *.validation.py file in {spec_dir}, found {len(validation_files)}"
             )
             validation_file = validation_files[0]
-            assert not setup_manifest_is_current(spec_path), (
-                "Frozen benchmark setup must be regenerated after the fixture lifecycle manifest-version change."
+            assert setup_manifest_is_current(spec_path), (
+                f"Frozen benchmark setup is stale or incomplete for {spec_path}; regenerate it before running benchmarks."
             )
             task_spec = TaskSpec.from_file(spec_path)
             assert is_validation_manifest_current(task_spec, spec_dir), (
