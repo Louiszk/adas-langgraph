@@ -15,7 +15,7 @@ from adas_core.environment import (
     SANDBOX_WORKSPACE_DIR,
     load_environment,
 )
-from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
+from adas_core.helpers import escape_system_name, sanitize_identifier, validate_system_name
 from adas_core.task_spec import TaskSpec
 from config import settings
 from config.logging import get_logger, setup_logging
@@ -157,9 +157,9 @@ def main() -> int:
     try:
         task_spec = TaskSpec.from_file(args.task_spec)
         if args.system_name:
-            validate_identifier(args.system_name, field_name="system name")
+            validate_system_name(args.system_name, field_name="system name")
         if args.optimize_system:
-            validate_identifier(args.optimize_system, field_name="optimize system name")
+            validate_system_name(args.optimize_system, field_name="optimize system name")
     except ValueError as exc:
         logger.error(str(exc))
         return 1

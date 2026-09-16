@@ -16,7 +16,7 @@ from adas_core.environment import (
     get_installed_packages_from_metrics,
     load_environment,
 )
-from adas_core.helpers import validate_identifier
+from adas_core.helpers import validate_identifier, validate_system_name
 from adas_core.runtime_resources import RuntimeResourceProfile
 from adas_core.task_spec import TaskSpec
 from config.logging import get_logger, setup_logging
@@ -199,7 +199,7 @@ def main() -> int:
     args: argparse.Namespace = parser.parse_args()
 
     try:
-        validate_identifier(args.system_name, field_name="target system name")
+        validate_system_name(args.system_name, field_name="target system name")
     except ValueError as exc:
         logger.error(str(exc))
         return 1

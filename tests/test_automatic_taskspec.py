@@ -49,12 +49,12 @@ def test_format_assistant_message_for_display():
         f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```\n"
         "Please review the state schema and let me know if you want changes."
     )
-    saved_path = Path("specs/mathsolver/mathsolver.task.json")
+    saved_path = Path("specs/mathsolver/task.json")
     formatted = format_assistant_message_for_display(content, saved_path=saved_path)
 
     assert "I've drafted the schema for you!" in formatted
     assert "Please review the state schema" in formatted
-    assert "[Draft TaskSpec persisted to: specs/mathsolver/mathsolver.task.json]" in formatted
+    assert "[Draft TaskSpec persisted to: specs/mathsolver/task.json]" in formatted
     assert '"schema_version"' not in formatted  # Huge json is cleanly replaced
 
 
@@ -142,6 +142,10 @@ class TestAutomaticTaskSpecSynthesis:
         found_direct = find_existing_task_spec_file(output_dir=task_file)
         assert found_direct == task_file
 
+        # A staging directory named task.json is not itself a TaskSpec file.
+        (tmp_path / "task.json").mkdir()
+        assert find_existing_task_spec_file(output_dir=tmp_path) is None
+
     def test_save_task_spec_creates_file(self, tmp_path):
         gen = AutomaticTaskSpec(llm=MagicMock())
         spec = TaskSpec.model_validate(SAMPLE_VALID_TASKSPEC_DICT)
@@ -168,7 +172,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "MathSolver"
-        assert (tmp_path / "mathsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()
 
     def test_run_interactive_wizard_grilling_and_persistence(self, monkeypatch, tmp_path):
         mock_llm = MagicMock()
@@ -206,7 +210,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "MathSolver"
-        target_file = tmp_path / "mathsolver.task.json"
+        target_file = tmp_path / "task.json"
         assert target_file.exists()
 
     def test_run_interactive_wizard_refinement_conversation(self, monkeypatch, tmp_path):
@@ -238,7 +242,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "RefinedSolver"
-        assert (tmp_path / "refinedsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()
 
     def test_run_interactive_wizard_exit_before_spec(self, monkeypatch, tmp_path):
         gen = AutomaticTaskSpec(llm=MagicMock())
@@ -393,4 +397,4 @@ class TestCreateTaskSpecCLI:
             )
 
         assert ret == 0
-        assert (tmp_path / "mathsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()

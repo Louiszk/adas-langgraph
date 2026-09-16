@@ -7,7 +7,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
 from adas_core.environment import is_provisioning_script
-from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_test_id
+from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_identifier, sanitize_test_id
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from config.logging import get_logger
@@ -671,7 +670,7 @@ class AutomaticValidation:
         destination = Path(target_path_or_dir)
         if destination.is_dir() or not destination.suffix:
             destination.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+            safe_name = sanitize_identifier(task_spec.name)
             validation_file = destination / f"{safe_name}.validation.py"
         else:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +723,7 @@ def ensure_automatic_validation(
 ) -> ValidationGenerationResult | None:
     """Create a validator only when explicitly invoked by the validation stage."""
     root = Path(task_dir)
-    safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+    safe_name = sanitize_identifier(task_spec.name)
     expected_files = [
         root / f"{safe_name}.validation.py",
         root / f"{task_spec.name}.validation.py",

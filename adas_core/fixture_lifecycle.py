@@ -9,7 +9,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from typing import Any
 
@@ -110,7 +110,7 @@ def _wait_for_mcp_endpoint(
         try:
             connection.request("OPTIONS", fixture.endpoint_path)
             status = connection.getresponse().status
-        except OSError:
+        except (OSError, HTTPException):
             time.sleep(0.05)
             continue
         finally:

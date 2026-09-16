@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from adas_core.exceptions import FeatureNotImplementedError
-from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
+from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier, validate_system_name
 from config import settings
 from config.logging import get_logger
 
@@ -731,7 +731,7 @@ class TaskSpec(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_task_spec_name(cls, v: str) -> str:
-        return validate_identifier(v, field_name="TaskSpec name")
+        return validate_system_name(v, field_name="TaskSpec name")
 
     architecture_contract: ArchitectureContract = Field(..., description="Execution mode, schema, and persistence")
     available_models: list[ModelSpec] = Field(
@@ -805,7 +805,7 @@ class TaskSpec(BaseModel):
 
         for test_case in self.dev_suite:
             judge_model_to_check = test_case.judge_model
-            if not judge_model_to_check and not test_case.judge_web_search:
+            if not judge_model_to_check and not test_case.judge_web_search and "vision" not in test_case.modalities:
                 continue
             effective_judge_model = judge_model_to_check or validation_model
             provider = test_case.judge_provider or validation_wrapper

@@ -102,7 +102,7 @@ def build_architect_system_prompt(task_dir_hint: str | None = None) -> str:
     """Build the conversational system prompt for the interactive architect model."""
     schema_json = json.dumps(TaskSpec.model_json_schema(), indent=2)
     catalog_context = build_model_catalog_context()
-    target_dir = task_dir_hint or "specs/<task_name>/"
+    target_dir = task_dir_hint.rstrip("/\\") + "/" if task_dir_hint else "specs/<task_name>/"
 
     return f"""You are an expert AI agentic system architect conducting an interactive requirements elicitation and specification interview for ADAS (Automated Design of Agentic Systems).
 In ADAS, an autonomous meta-agent automatically designs, implements, and refines a LangGraph target system based on the synthesized task specification and development test cases.
@@ -127,7 +127,7 @@ Your mission is to collaborate with the user to design a robust, production-grad
    - When key dimensions are sufficiently clarified, OR when the user asks you to draft or update the spec:
      * Embed the complete, schema-compliant `TaskSpec` JSON inside a fenced code block ```json ... ```.
      * Accompany the JSON with conversational commentary:
-       - Inform the user that the draft has been generated and will be saved to `{target_dir}<clean_name>.task.json`.
+       - Inform the user that the draft has been generated and will be saved to `{target_dir}task.json`.
        - Summarize the key architectural choices made (state keys, tools, test cases).
        - Point out specific aspects you recommend the user inspect or consider adjusting.
        - Ask if they would like to add edge-case test scenarios or adjust any parameters.
@@ -281,10 +281,10 @@ class AutomaticTaskSpec:
                 target_file = out_p
             else:
                 base_dir = out_p
-                target_file = base_dir / (filename or f"{clean_name}.task.json")
+                target_file = base_dir / (filename or "task.json")
         else:
             base_dir = DEFAULT_SPECS_DIR / clean_name
-            target_file = base_dir / (filename or f"{clean_name}.task.json")
+            target_file = base_dir / (filename or "task.json")
 
         base_dir.mkdir(parents=True, exist_ok=True)
         target_file.write_text(task_spec.to_json(indent=2), encoding="utf-8")
@@ -302,20 +302,28 @@ def find_existing_task_spec_file(
         if out_path.is_file():
             return out_path
         if out_path.is_dir():
+            canonical_file = out_path / "task.json"
+            if canonical_file.is_file():
+                return canonical_file
             if task_name:
                 clean_name = sanitize_identifier(task_name.lower())
-                named_file = out_path / f"{clean_name}.task.json"
-                if named_file.is_file():
-                    return named_file
-            task_files = list(out_path.glob("*.task.json"))
+                legacy_named_file = out_path / f"{clean_name}.task.json"
+                if legacy_named_file.is_file():
+                    return legacy_named_file
+            task_files = [
+                path for path in list(out_path.glob("*.task.json")) + list(out_path.glob("task.json")) if path.is_file()
+            ]
             if len(task_files) == 1:
                 return task_files[0]
 
     if task_name:
         clean_name = sanitize_identifier(task_name.lower())
-        default_file = DEFAULT_SPECS_DIR / clean_name / f"{clean_name}.task.json"
+        default_file = DEFAULT_SPECS_DIR / clean_name / "task.json"
         if default_file.is_file():
             return default_file
+        legacy_default_file = DEFAULT_SPECS_DIR / clean_name / f"{clean_name}.task.json"
+        if legacy_default_file.is_file():
+            return legacy_default_file
 
     return None
 

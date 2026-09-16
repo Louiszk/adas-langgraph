@@ -34,7 +34,7 @@ from adas_core.task_spec import TaskSpec, TestCaseSpec
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from config.logging import get_logger
-from config.settings import TARGET_SYSTEM_RECURSION_LIMIT
+from config.settings import STRICT_END_DESIGN, TARGET_SYSTEM_RECURSION_LIMIT
 from meta_system.prompts import test_reminder
 
 logger = get_logger("meta_system.tools")
@@ -194,7 +194,8 @@ def set_state(state_code: str, state: dict[str, Any]) -> str:
             else:
                 ignored_nodes.append(node)
 
-        target_agentic_system.imports.extend(target_agentic_system.deduplicate_imports(imports_found))
+        new_imports = target_agentic_system.deduplicate_imports(imports_found)
+        target_agentic_system.imports = list(dict.fromkeys(target_agentic_system.imports + new_imports))
         if class_def_node is None:
             return "ERROR: No TypedDict state definition class found."
         main_message = target_agentic_system.set_state_from_node(class_def_node)
@@ -395,7 +396,8 @@ def manage_utilities(
             elif not isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign)):
                 ignored_nodes.append(node)
 
-        target_agentic_system.imports.extend(target_agentic_system.deduplicate_imports(imports_found))
+        new_imports = target_agentic_system.deduplicate_imports(imports_found)
+        target_agentic_system.imports = list(dict.fromkeys(target_agentic_system.imports + new_imports))
         main_message = target_agentic_system.upsert_utility_code(utility_code)
         return f"{main_message}{ignored_nodes_message(ignored_nodes)}"
     except SyntaxError as e:
@@ -689,6 +691,8 @@ def test_system(state: dict[str, Any]) -> str:
         state["system_passed"] = True
         if not state.get("optimize"):
             state["design_completed"] = True
+            state["design_status"] = "completed"
+            state["design_message"] = "All development tests passed successfully."
             return test_result + "\nAll tests passed successfully! The design process will now end automatically."
         else:
             test_result += (
@@ -704,25 +708,36 @@ def test_system(state: dict[str, Any]) -> str:
     return final_test_output
 
 
-def end_design(state: dict[str, Any]) -> str:
+def end_design(message: str = "", state: dict[str, Any] | None = None) -> str:
     """
-    Signals that the design process is complete and ends the session. Use this only when the system has been successfully tested.
+    Signals that the design process is complete and ends the session.
+
+    Args:
+        message: Final rationale or summary. Required when accepting a failing design
+            while strict end-design mode is disabled.
     """
-    messages = state.get("messages", [])
-    max_iterations = state.get("max_iterations", 30)
-    iteration = len([msg for msg in messages if isinstance(msg, AIMessage)]) - 1
+    if state is None:
+        return "ERROR: state is required"
     system_passed = state.get("system_passed")
     candidates = state.get("candidates", [])
     has_passing_candidate = any(
         c.get("dev_pass_rate", 0.0) == 1.0
-        or (c.get("total_count", 0) > 0 and c.get("passed_count") == c.get("total_count"))
+        or ((c.get("total_count") or 0) > 0 and c.get("passed_count") == c.get("total_count"))
         for c in candidates
+        if isinstance(c, dict)
     )
-    if system_passed or has_passing_candidate or iteration >= (max_iterations - 2):
-        state["design_completed"] = True
-        return "Ending the design process..."
-    else:
-        return "ERROR: The design cannot be finalized yet. Please run fully successful tests using `@@test_system()` first."
+    passed = bool(system_passed or has_passing_candidate)
+    if STRICT_END_DESIGN and not passed:
+        return "ERROR: Strict end-design mode requires all development tests to pass before finalization."
+    if not passed and not message.strip():
+        return "ERROR: Provide a final message explaining why the incomplete design is being accepted."
+
+    state["design_completed"] = True
+    state["design_status"] = "completed" if passed else "partial"
+    state["design_message"] = message.strip() or "All development tests passed."
+    if passed:
+        return "Ending the design process with a passing candidate..."
+    return "Ending the design process with a partial candidate: " + state["design_message"]
 
 
 # Define all code related tools and corresponding attributes

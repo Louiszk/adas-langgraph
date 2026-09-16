@@ -15,7 +15,7 @@ from adas_core.environment import (
     SANDBOX_WORKSPACE_DIR,
     load_environment,
 )
-from adas_core.helpers import escape_system_name, validate_identifier
+from adas_core.helpers import escape_system_name, validate_system_name
 
 sys.path.append(SANDBOX_WORKSPACE_DIR)
 from adas_core.chat_model import ChatModel, UsageRecorder, usage_scope
@@ -96,14 +96,17 @@ def main() -> int:
 
     target_agentic_system: VirtualAgenticSystem | None = None
     design_completed = False
+    design_status = "in_progress"
+    design_message = ""
+    passing_candidate_found = False
     success = False
     task_spec: TaskSpec | None = None
     problem_statement = ""
 
     try:
-        validate_identifier(system_name, field_name="system-name")
+        validate_system_name(system_name, field_name="system-name")
         if optimize_from_file:
-            validate_identifier(optimize_from_file, field_name="optimize-system")
+            validate_system_name(optimize_from_file, field_name="optimize-system")
 
         task_spec = load_visible_task_spec(task_spec_path)
         problem_statement = task_spec.system_goal + load_visible_task_context(task_spec)
@@ -162,12 +165,34 @@ def main() -> int:
                     if out.get("design_completed"):
                         logger.info("Design completed.")
                         design_completed = True
+                    if isinstance(out.get("design_status"), str):
+                        design_status = out["design_status"]
+                    if isinstance(out.get("design_message"), str):
+                        design_message = out["design_message"]
+                    candidates = out.get("candidates")
+                    if isinstance(candidates, list) and any(
+                        candidate.get("dev_pass_rate", 0.0) == 1.0
+                        or (
+                            (candidate.get("total_count") or 0) > 0
+                            and candidate.get("passed_count") == candidate.get("total_count")
+                        )
+                        for candidate in candidates
+                        if isinstance(candidate, dict)
+                    ):
+                        passing_candidate_found = True
 
         escaped_name = escape_system_name(system_name)
         final_system_path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{escaped_name}.pkl"
         final_code_path = f"{SANDBOX_GENERATED_SYSTEMS_DIR}/{escaped_name}.py"
+        if not design_completed and passing_candidate_found:
+            design_completed = True
+            design_status = "completed"
+            design_message = design_message or "A passing candidate was finalized."
+
         if design_completed and os.path.exists(final_system_path) and os.path.exists(final_code_path):
-            metrics["status"] = "completed"
+            metrics["status"] = design_status if design_status in {"completed", "partial"} else "completed"
+            metrics["design_status"] = metrics["status"]
+            metrics["design_message"] = design_message
             success = True
         else:
             metrics["status"] = "error"

@@ -80,6 +80,12 @@ class TestImportManagement:
         assert deduped.count("import math") == 1
         assert "from dataclasses import dataclass" in deduped
 
+    def test_set_imports_replaces_custom_imports(self, empty_system: VirtualAgenticSystem):
+        empty_system.set_imports(["import math"])
+        empty_system.set_imports(["import json"])
+        assert "import math" not in empty_system.imports
+        assert "import json" in empty_system.imports
+
 
 class TestComponentLifecycleAndCascadeDeletion:
     def test_create_node_registers_code_and_description(

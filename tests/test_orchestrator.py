@@ -142,6 +142,33 @@ def test_orchestrator_run_design_command_construction(tmp_path: Path):
         assert "ablationC_gsm1_gpt" in cmd
 
 
+def test_orchestrator_uses_task_directory_name_for_canonical_task_spec(tmp_path: Path):
+    task_dir = tmp_path / "my_agent"
+    task_dir.mkdir()
+    dummy_spec = task_dir / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "design",
+            "--task-spec",
+            str(dummy_spec),
+            "--type",
+            "ablationC",
+            "--iterations",
+            "1",
+        ]
+    )
+    args.benchmark = None
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        assert orchestrator.run_design() == 0
+        cmd = mock_run.call_args[0][0]
+        assert "ablationC_my_agent1_gpt" in cmd
+
+
 def test_orchestrator_run_target_command_construction(tmp_path: Path):
     dummy_spec = tmp_path / "task.json"
     dummy_spec.write_text("{}", encoding="utf-8")

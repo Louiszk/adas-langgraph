@@ -460,6 +460,28 @@ class TestTaskSpecModel:
                 ],
             )
 
+    def test_vision_judge_checks_default_model_capability(self, monkeypatch):
+        from config import settings
+
+        ModelRegistry.register_capabilities("openai", "text-default-model", ModelCapabilities(supports_vision=False))
+        monkeypatch.setattr(settings, "validation_model", "text-default-model")
+        with pytest.raises(ValidationError, match="not vision-capable"):
+            TaskSpec(
+                name="DefaultVisionTask",
+                system_goal="Assess a chart",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                dev_suite=[
+                    TestCaseSpec(
+                        id="vision_default",
+                        description="Assess a chart",
+                        turns=[{"query": "go"}],
+                        llm_judge_needed=True,
+                        judge_criteria="The chart is readable.",
+                        modalities=["vision"],
+                    )
+                ],
+            )
+
     def test_unknown_modalities_are_rejected(self):
         with pytest.raises(ValidationError):
             TestCaseSpec.model_validate({"id": "audio", "description": "Audio", "turns": [{}], "modalities": ["audio"]})

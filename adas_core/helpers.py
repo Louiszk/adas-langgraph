@@ -1,6 +1,7 @@
 import ast
 import copy
 import io
+import keyword
 import re
 import subprocess
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 SAFE_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_-]+$")
+SAFE_SYSTEM_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def validate_identifier(name: str, field_name: str = "identifier") -> str:
@@ -20,6 +22,16 @@ def validate_identifier(name: str, field_name: str = "identifier") -> str:
         raise ValueError(
             f"Invalid {field_name} '{name}': must match pattern '^[a-zA-Z0-9_-]+$' with no traversal or special characters."
         )
+    return stripped
+
+
+def validate_system_name(name: str, field_name: str = "system name") -> str:
+    """Validate a system name that will also be used as a Python module name."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"Invalid {field_name}: cannot be empty.")
+    stripped = name.strip()
+    if not SAFE_SYSTEM_NAME_PATTERN.fullmatch(stripped) or keyword.iskeyword(stripped):
+        raise ValueError(f"Invalid {field_name} '{name}': must be a valid, non-reserved Python identifier.")
     return stripped
 
 
@@ -39,6 +51,7 @@ def validate_python_module_path(module_path: str, field_name: str = "Python modu
 def escape_system_name(system_name: str) -> str:
     """Sanitize a system name by removing path, filesystem separator, and dangerous shell characters."""
     cleaned = re.sub(r'[/\\:\x00-\x1f`$"\'|&;<>\s]', "", system_name)
+    cleaned = cleaned.replace("-", "_")
     cleaned = cleaned.lstrip(".")
     return cleaned or "default_system"
 

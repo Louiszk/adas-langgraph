@@ -24,7 +24,17 @@ def design_completed_condition(state: MetaState | dict[str, Any]) -> str:
     """Routes to END if design is completed, otherwise to MetaAgent."""
     messages = state.get("messages", [])
     iteration = len([msg for msg in messages if isinstance(msg, AIMessage)])
-    if state.get("design_completed", False) or iteration > state.get("max_iterations", 30):
+    max_iterations = state.get("max_iterations", 30)
+    exhausted = iteration > max_iterations
+    if exhausted and any(
+        candidate.get("dev_pass_rate", 0.0) == 1.0
+        or ((candidate.get("total_count") or 0) > 0 and candidate.get("passed_count") == candidate.get("total_count"))
+        for candidate in state.get("candidates", [])
+        if isinstance(candidate, dict)
+    ):
+        state["design_completed"] = True
+
+    if state.get("design_completed", False) or exhausted:
         try:
             finalize_best_candidate(
                 state,

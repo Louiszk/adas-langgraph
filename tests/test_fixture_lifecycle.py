@@ -1,11 +1,18 @@
 import os
 import socket
 import time
+from http.client import BadStatusLine
 from pathlib import Path
 
 import pytest
 
-from adas_core.fixture_lifecycle import FixtureStartupError, _script_path, _wait_for_port, process_fixture_lifecycle
+from adas_core.fixture_lifecycle import (
+    FixtureStartupError,
+    _script_path,
+    _wait_for_mcp_endpoint,
+    _wait_for_port,
+    process_fixture_lifecycle,
+)
 from adas_core.task_spec import MCPFixtureSpec, MockServiceFixtureSpec, TestFixturesSpec
 
 
@@ -168,3 +175,33 @@ def test_script_path_accepts_a_fixtures_directory_directly(tmp_path):
     script.write_text("# fixture", encoding="utf-8")
     fixture = MockServiceFixtureSpec(name="weather", port=_free_port())
     assert _script_path(tmp_path, fixture) == script
+
+
+def test_wait_for_mcp_endpoint_retries_http_protocol_errors(tmp_path, monkeypatch):
+    class Process:
+        def poll(self):
+            return None
+
+    class Connection:
+        calls = 0
+
+        def request(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                raise BadStatusLine("incomplete response")
+
+        def getresponse(self):
+            class Response:
+                status = 405
+
+            return Response()
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setattr("adas_core.fixture_lifecycle.HTTPConnection", lambda *args, **kwargs: connection)
+    monkeypatch.setattr("adas_core.fixture_lifecycle.time.sleep", lambda _: None)
+    fixture = MCPFixtureSpec(name="tools", port=1234, endpoint_path="/mcp", url_env="TOOLS_MCP_URL")
+
+    _wait_for_mcp_endpoint(Process(), fixture, tmp_path / "stdout.log", tmp_path / "stderr.log")  # type: ignore[arg-type]

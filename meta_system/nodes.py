@@ -59,6 +59,8 @@ def formatting_function(state: MetaState) -> dict[str, Any]:
         "messages": [HumanMessage(new_task_statement)],
         "designer_task": HumanMessage(new_task_statement),
         "system_passed": False,
+        "design_status": "in_progress",
+        "design_message": "",
     }
     return new_state
 
@@ -227,6 +229,8 @@ def tool_execution(state: MetaState) -> dict[str, Any]:
         "messages": messages,
         "system_passed": state.get("system_passed", False),
         "design_completed": state.get("design_completed", False),
+        "design_status": state.get("design_status", "in_progress"),
+        "design_message": state.get("design_message", ""),
         "test_metrics": state.get("test_metrics", {}),
         "candidates": state.get("candidates", []),
     }

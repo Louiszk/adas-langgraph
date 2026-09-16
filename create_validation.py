@@ -8,6 +8,7 @@ from pathlib import Path
 
 from adas_core.automatic_validation import ensure_automatic_validation, verify_validation_manifest
 from adas_core.environment import load_environment
+from adas_core.helpers import sanitize_identifier
 from adas_core.task_spec import TaskSpec
 from config.logging import get_logger, setup_logging
 
@@ -29,7 +30,7 @@ def run_validation_for_task(
     result = ensure_automatic_validation(task_spec, target_dir, force=force)
     if result is None:
         logger.info("Frozen validation module is already up to date (use --force to regenerate).")
-        safe_name = task_spec.name.replace("/", "_").replace("\\", "_").replace(":", "_")
+        safe_name = sanitize_identifier(task_spec.name)
         for candidate in [
             target_dir / f"{safe_name}.validation.py",
             target_dir / f"{task_spec.name}.validation.py",

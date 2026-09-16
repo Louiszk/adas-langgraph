@@ -485,7 +485,11 @@ class Orchestrator:
             if getattr(self.args, "benchmark", None):
                 sys_name = f"{approach}_{self.args.benchmark}{iter_num}_gpt"
             else:
-                base_name = task_spec_path.stem.replace(".task", "")
+                base_name = (
+                    task_spec_path.parent.name
+                    if task_spec_path.stem == "task"
+                    else task_spec_path.stem.replace(".task", "")
+                )
                 sys_name = f"{approach}_{base_name}{iter_num}_gpt" if approach else f"{base_name}_{iter_num}"
 
             logger.info("=========================================================")

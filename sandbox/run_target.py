@@ -19,7 +19,7 @@ from adas_core.environment import (
     load_environment,
 )
 from adas_core.fixture_lifecycle import process_fixture_lifecycle
-from adas_core.helpers import escape_system_name, validate_identifier
+from adas_core.helpers import escape_system_name, validate_system_name
 from adas_core.runtime_resources import (
     RuntimeResourceProfile,
     external_url_overrides,
@@ -29,6 +29,7 @@ from adas_core.runtime_resources import (
 )
 from adas_core.task_spec import TaskSpec
 from config.logging import get_logger, setup_logging
+from config.settings import TARGET_SYSTEM_RECURSION_LIMIT
 
 logger = get_logger("run_target")
 
@@ -89,7 +90,7 @@ def main() -> int:
     exit_code = 0
 
     try:
-        validate_identifier(args.system_name, field_name="target system name")
+        validate_system_name(args.system_name, field_name="target system name")
         try:
             raw_state: Any = json.loads(args.state)
         except json.JSONDecodeError as e:
@@ -172,7 +173,7 @@ def main() -> int:
                 with usage_scope(system="target", run_id=run_id):
                     for mode, payload in workflow.stream(
                         initial_state,
-                        config={"recursion_limit": 20},
+                        config={"recursion_limit": TARGET_SYSTEM_RECURSION_LIMIT},
                         stream_mode=["updates", "values"],
                     ):
                         if mode == "updates" and isinstance(payload, dict):

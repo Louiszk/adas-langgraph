@@ -100,11 +100,15 @@ class VirtualAgenticSystem:
         except Exception:
             return None, None
 
-    # It currently does not merge separate imports from the same module
-    def deduplicate_imports(self, new_import_statements: list[str]) -> list[str]:
-        # Build existing map for from-imports based ONLY on base_imports
+    def deduplicate_imports(
+        self,
+        new_import_statements: list[str],
+        existing_import_statements: list[str] | None = None,
+    ) -> list[str]:
+        existing_import_statements = self.imports if existing_import_statements is None else existing_import_statements
+        existing_imports = {imp.strip() for imp in existing_import_statements}
         existing_imports_map = {}
-        for imp_str in self.base_imports:
+        for imp_str in existing_import_statements:
             module, names = self._parse_from_import(imp_str)
             if module:
                 existing_imports_map.setdefault(module, set()).update(names)
@@ -113,7 +117,7 @@ class VirtualAgenticSystem:
         for new_imp_str in new_import_statements:
             clean_new = new_imp_str.strip()
 
-            if clean_new in self.base_imports:
+            if not clean_new or clean_new in existing_imports:
                 continue
 
             module, new_names = self._parse_from_import(clean_new)
@@ -123,8 +127,10 @@ class VirtualAgenticSystem:
                 if new_names.issubset(existing_imports_map.get(module, set())):
                     continue
                 truly_new_imports.append(clean_new)
+                existing_imports_map.setdefault(module, set()).update(new_names)
             else:
                 truly_new_imports.append(clean_new)
+            existing_imports.add(clean_new)
 
         return sorted(set(truly_new_imports))
 
@@ -133,7 +139,9 @@ class VirtualAgenticSystem:
         if not import_statements:
             return "WARNING: No import statements were found. No changes were made."
         try:
-            new_unique_imports = self.deduplicate_imports(import_statements)
+            new_unique_imports = self.deduplicate_imports(
+                import_statements, existing_import_statements=self.base_imports
+            )
             import_exec_globals = {}
             import_code = "\n".join(new_unique_imports)
             exec(import_code, import_exec_globals)
