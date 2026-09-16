@@ -147,18 +147,14 @@ Your output JSON must strictly conform to the following JSON Schema generated di
 {catalog_context}
 
 ### MANDATORY ARCHITECTURAL RULES:
-1. PHYSICAL HOLDOUT SEPARATION:
-   - Do NOT include any holdout fields (e.g. 'holdout_suite' or 'private_tasks') in this TaskSpec.
-   - The TaskSpec defines ONLY the visible development contract (`dev_suite`).
-
-2. SINGLE-TURN VS. MULTI-TURN CONTRACT:
+1. SINGLE-TURN VS. MULTI-TURN CONTRACT:
    - If execution_mode is 'single_turn', persistence must be null, and each test case turn must provide the required input state.
    - If execution_mode is 'multi_turn', state_schema must declare a message history key (e.g. 'messages'), and persistence must specify 'checkpointer': 'memory' and 'requires_thread_id': true.
 
-3. VALID JSON OUTPUT:
+2. VALID JSON OUTPUT:
    - When providing a specification, output a complete, valid JSON object in a ```json ... ``` block.
 
-4. FIXTURE DEFINITIONS AND TEST CASE SCOPING:
+3. FIXTURE DEFINITIONS AND TEST CASE SCOPING:
    - Each fixture declared in `test_fixtures` (files, databases, mcps, mock_services, custom_fixtures, external_database_seeds) must have a clean unique `id` (e.g. 'sales_csv', 'customers_json', 'weather_api', 'analytics_db').
    - Keep public interface contracts, schemas, table/node definitions, and API routes in `description` (visible to the meta-agent). Put deterministic evaluation seed data, specific rows/records, planted secrets, or test-bench ground truth in `private_description` (withheld from the meta-agent to prevent overfitting).
    - When declaring file fixtures in `test_fixtures.files`, `path` must be relative to the input folder (e.g. "sales.csv", "customers.json"). Never use hardcoded sandbox prefixes or absolute paths.
@@ -173,7 +169,7 @@ Your output JSON must strictly conform to the following JSON Schema generated di
    - To seed deterministic evaluation data, declare `test_fixtures.external_database_seeds` with a unique id, the matching database resource name, engine/driver, connection_env mapping containing ENVIRONMENT VARIABLE NAMES only (never credentials), an explicit namespace_kind, cleanup_policy `drop_namespace`, public schema/ontology in `description`, and evaluation-only seed records in `private_description`.
    - Use `adas_test_...` for PostgreSQL namespaces because PostgreSQL rejects unquoted hyphens; use `adas-test-...` for Neo4j database namespaces because Neo4j rejects underscores.
 
-5. DEV SUITE 3-TIER PROGRESSION:
+4. DEV SUITE 3-TIER PROGRESSION:
    - The test cases in `dev_suite` must follow a strictly progressive difficulty gradient:
      * Tier 1 (Baseline / Smoke Test): Minimal viable happy-path test on clean, standard input with 1-2 primary expected outputs.
      * Tier 2 (Core Functional Complexity): Primary domain logic exercising core analytical or multi-step capabilities.

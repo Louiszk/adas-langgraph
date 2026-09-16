@@ -11,7 +11,6 @@ from adas_core.task_spec import (
     DatabaseFixtureSpec,
     ExternalDatabaseSeedSpec,
     FileFixtureSpec,
-    HoldoutSuiteSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
     ModelSpec,
@@ -53,7 +52,6 @@ class TestTaskSpecModel:
         assert '"schema_version": "1.0"' in context
         assert '"dev_suite"' not in context
         assert "case_1_addition" not in context
-        assert '"holdout_suite"' not in context
 
     def test_fixtures_private_description_defaults_and_design_context_stripping(self):
         file_fix = FileFixtureSpec(
@@ -508,54 +506,7 @@ class TestTaskSpecModel:
             )
 
 
-class TestHoldoutSuiteSpecModel:
-    def test_valid_holdout_suite_spec(self, tmp_path):
-        holdout = HoldoutSuiteSpec(
-            schema_version="1.0",
-            task_name="SimpleMathAgent",
-            holdout_suite=[
-                TestCaseSpec(
-                    id="holdout_1_division",
-                    description="Hidden division test",
-                    turns=[{"query": "What is 10 / 2?"}],
-                    expected_outputs=["answer"],
-                    deterministic_criteria="Output must contain '5'",
-                ),
-                TestCaseSpec(
-                    id="holdout_2_negative",
-                    description="Hidden negative addition",
-                    turns=[{"query": "What is -3 + 5?"}],
-                    expected_outputs=["answer"],
-                    deterministic_criteria="Output must contain '2'",
-                ),
-            ],
-        )
-
-        assert len(holdout.holdout_suite) == 2
-        file_path = tmp_path / "holdout.json"
-        holdout.save(file_path)
-
-        loaded = HoldoutSuiteSpec.from_file(file_path)
-        assert loaded.task_name == "SimpleMathAgent"
-        assert loaded.holdout_suite[1].id == "holdout_2_negative"
-
-    def test_empty_holdout_suite_rejected(self):
-        with pytest.raises(ValidationError):
-            HoldoutSuiteSpec(
-                task_name="EmptyHoldout",
-                holdout_suite=[],
-            )
-
-    def test_duplicate_holdout_ids_rejected(self):
-        with pytest.raises(ValidationError):
-            HoldoutSuiteSpec(
-                task_name="DupHoldout",
-                holdout_suite=[
-                    TestCaseSpec(id="dup", description="A", turns=[{"x": 1}]),
-                    TestCaseSpec(id="dup", description="B", turns=[{"x": 2}]),
-                ],
-            )
-
+class TestTaskSpecValidation:
     def test_duplicate_dev_suite_ids_rejected(self):
         with pytest.raises(ValidationError, match="Duplicate test case id 'case_1' in dev_suite"):
             TaskSpec(
@@ -822,30 +773,6 @@ class TestHoldoutSuiteSpecModel:
                     execution_mode="single_turn", state_schema={"status": "str"}
                 ),
                 dev_suite=cases,
-            )
-
-    def test_holdout_suite_rejects_colliding_sanitized_test_case_ids(self):
-        # eval-1 and eval_1 both sanitize to eval_1
-        from adas_core.task_spec import HoldoutSuiteSpec
-
-        cases = [
-            TestCaseSpec(id="eval-1", description="Eval 1", turns=[{"input": "1"}]),
-            TestCaseSpec(id="eval_1", description="Eval 1 duplicate", turns=[{"input": "2"}]),
-        ]
-        with pytest.raises(ValidationError, match="Duplicate sanitized test case id 'eval_1'"):
-            HoldoutSuiteSpec(
-                task_name="CollisionTest",
-                holdout_suite=cases,
-            )
-
-    def test_holdout_suite_rejects_unsupported_schema_version(self):
-        from adas_core.task_spec import HoldoutSuiteSpec
-
-        with pytest.raises(ValidationError, match="Unsupported schema_version '0.9'"):
-            HoldoutSuiteSpec(
-                schema_version="0.9",
-                task_name="OldTask",
-                holdout_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
             )
 
 

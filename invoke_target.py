@@ -145,6 +145,15 @@ def main() -> int:
         type=Path,
         help="Path to a JSON file defining the initial state for the system.",
     )
+    state_group.add_argument(
+        "--batch",
+        type=Path,
+        help=(
+            "Path to a JSON file containing an array of test cases to run in a single sandbox session. "
+            'Each entry must be an object with "id" (str) and "state" (object) fields, '
+            'e.g. [{"id": "case_1", "state": {"query": "..."}}].'
+        ),
+    )
     parser.add_argument(
         "--reinstall",
         action="store_true",
@@ -172,29 +181,63 @@ def main() -> int:
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    raw_state: Any
-    if args.state_file:
-        state_file_path = args.state_file.resolve()
-        if not state_file_path.is_file():
-            logger.error("State file not found: %s", state_file_path)
+    cases: list[tuple[str, dict[str, Any]]] = []
+
+    if args.batch:
+        batch_path = args.batch.resolve()
+        if not batch_path.is_file():
+            logger.error("Batch file not found: %s", batch_path)
             return 1
         try:
-            raw_state = json.loads(state_file_path.read_text(encoding="utf-8"))
+            batch_data: Any = json.loads(batch_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            logger.error("Invalid JSON provided in --state-file: %s", e)
+            logger.error("Invalid JSON in --batch file: %s", e)
             return 1
+        if not isinstance(batch_data, list) or not batch_data:
+            logger.error("--batch file must contain a non-empty JSON array.")
+            return 1
+        seen_ids: set[str] = set()
+        for idx, entry in enumerate(batch_data):
+            if not isinstance(entry, dict) or "id" not in entry or "state" not in entry:
+                logger.error("Batch entry %d must be an object with 'id' and 'state' fields.", idx)
+                return 1
+            try:
+                case_id = validate_identifier(entry["id"], field_name=f"batch case id at entry {idx}")
+            except ValueError as exc:
+                logger.error(str(exc))
+                return 1
+            if case_id in seen_ids:
+                logger.error("Duplicate batch case id: '%s'", case_id)
+                return 1
+            seen_ids.add(case_id)
+            if not isinstance(entry["state"], dict):
+                logger.error("Batch entry '%s' state must be a JSON object.", case_id)
+                return 1
+            cases.append((case_id, entry["state"]))
     else:
-        try:
-            raw_state = json.loads(args.state)
-        except json.JSONDecodeError as e:
-            logger.error("Invalid JSON provided for --state argument: %s", e)
+        raw_state: Any
+        if args.state_file:
+            state_file_path = args.state_file.resolve()
+            if not state_file_path.is_file():
+                logger.error("State file not found: %s", state_file_path)
+                return 1
+            try:
+                raw_state = json.loads(state_file_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.error("Invalid JSON provided in --state-file: %s", e)
+                return 1
+        else:
+            try:
+                raw_state = json.loads(args.state)
+            except json.JSONDecodeError as e:
+                logger.error("Invalid JSON provided for --state argument: %s", e)
+                return 1
+
+        if not isinstance(raw_state, dict):
+            logger.error("Initial state must be a JSON object.")
             return 1
+        cases.append((timestamp, raw_state))
 
-    if not isinstance(raw_state, dict):
-        logger.error("Initial state must be a JSON object.")
-        return 1
-
-    initial_state: dict[str, Any] = raw_state
     runtime_profile: RuntimeResourceProfile | None = None
     task_spec: TaskSpec | None = None
 
@@ -261,26 +304,35 @@ def main() -> int:
             session.execute_command(f"rm -rf {SANDBOX_WORKSPACE_DIR}/target_runs")
             session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/target_runs")
 
-            if not run_target_system_in_sandbox(
-                session,
-                args.system_name,
-                initial_state,
-                run_id=timestamp,
-                task_dir=runtime_task_dir,
-                runtime_profile=runtime_profile,
-            ):
-                return 1
+            succeeded_cases: list[str] = []
+            failed_cases: list[str] = []
 
-            logger.info("Checking for output data to copy back")
-            host_output_folder = f"data/output/{args.system_name}_{timestamp}"
+            for case_id, case_state in cases:
+                run_id = f"{timestamp}_{case_id}" if args.batch else case_id
+                logger.info("Running case '%s' (run_id=%s)", case_id, run_id)
 
-            sandbox_invocation_output = f"{SANDBOX_WORKSPACE_DIR}/target_runs/{timestamp}/invocation/output"
-            session.copy_dir_from_runtime(
-                src_dir=sandbox_invocation_output,
-                dest_dir=host_output_folder,
-                pattern="*",
-            )
-            logger.info(f"Output data copied to: {host_output_folder}")
+                ok = run_target_system_in_sandbox(
+                    session,
+                    args.system_name,
+                    case_state,
+                    run_id=run_id,
+                    task_dir=runtime_task_dir,
+                    runtime_profile=runtime_profile,
+                )
+
+                if ok:
+                    succeeded_cases.append(case_id)
+                else:
+                    failed_cases.append(case_id)
+
+                host_output_folder = f"data/output/{args.system_name}_{run_id}"
+                sandbox_invocation_output = f"{SANDBOX_WORKSPACE_DIR}/target_runs/{run_id}/invocation/output"
+                session.copy_dir_from_runtime(
+                    src_dir=sandbox_invocation_output,
+                    dest_dir=host_output_folder,
+                    pattern="*",
+                )
+                logger.info("Output data copied to: %s", host_output_folder)
 
             logger.info("Checking for metrics files to copy back")
             session.copy_dir_from_runtime(
@@ -289,8 +341,19 @@ def main() -> int:
                 pattern="*",
             )
 
+            total = len(cases)
+            if total > 1:
+                logger.info(
+                    "Batch complete: %d/%d succeeded, %d failed",
+                    len(succeeded_cases),
+                    total,
+                    len(failed_cases),
+                )
+                if failed_cases:
+                    logger.error("Failed cases: %s", ", ".join(failed_cases))
+
             logger.info("File copy process finished")
-            return 0
+            return 1 if failed_cases else 0
 
         else:
             logger.error("Failed to set up the sandbox environment.")

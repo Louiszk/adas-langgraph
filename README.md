@@ -153,8 +153,26 @@ python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example
 # Or invoke using a JSON state file:
 python invoke_target.py --system-name data_analyst_iter1_gpt --task-spec example_specs/data_analyst_agent/task.json --state-file path/to/state.json
 
-# --state and --state-file are mutually exclusive; one is required.
+# --state, --state-file, and --batch are mutually exclusive; one is required.
 ```
+
+#### Batch Mode
+Run multiple test cases in a single sandbox session to avoid per-case container startup overhead:
+```bash
+python invoke_target.py --system-name my_system --task-spec task.json --batch cases.json [--runtime-config runtime.json]
+```
+
+The batch file is a JSON array of objects, each with an `id` and a `state`:
+```json
+[
+  {"id": "case_1", "state": {"query": "What is 2 + 2?"}},
+  {"id": "case_2", "state": {"query": "Summarize the report"}}
+]
+```
+
+Each case produces its own output directory (`data/output/<system>_<timestamp>_<id>/`) and metrics file. A single `--runtime-config` applies to all cases in the batch.
+
+This can be used to evaluate a designed system against held-out test cases not seen during design. Combine with a custom post-processing script to validate outputs against expected results.
 
 ---
 

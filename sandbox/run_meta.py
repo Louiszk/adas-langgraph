@@ -36,7 +36,7 @@ def load_visible_task_spec(spec_path: Path | str = _TASK_SPEC_PATH) -> TaskSpec:
 
 
 def load_visible_task_context(task_spec: TaskSpec) -> str:
-    """Load the visible development contract without any holdout data."""
+    """Load the visible development contract for the meta-agent."""
     return (
         "\n\n--- TaskSpec Design Contract ---\n"
         "Use this contract for architecture, state, declared fixture paths, resources, and output requirements. "

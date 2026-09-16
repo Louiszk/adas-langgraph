@@ -1,5 +1,6 @@
 """Specification tests for invoke_target CLI."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -135,6 +136,80 @@ class TestInvokeTargetCLI:
         monkeypatch.setattr("sys.argv", ["invoke_target.py", "--system-name", "TestSystem"])
         with pytest.raises(SystemExit, match="2"):
             invoke_target.main()
+
+    @pytest.mark.parametrize(
+        "batch_data",
+        [
+            [{"state": {}}],
+            [{"id": "case_1"}],
+            [{"id": "case_1", "state": []}],
+            [{"id": "../escape", "state": {}}],
+            [{"id": "case/one", "state": {}}],
+            [{"id": ".", "state": {}}],
+            [{"id": "", "state": {}}],
+            [{"id": 1, "state": {}}],
+        ],
+    )
+    def test_batch_rejects_malformed_entries(self, batch_data, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(json.dumps(batch_data), encoding="utf-8")
+
+        with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        mock_session_cls.assert_not_called()
+
+    def test_batch_rejects_duplicate_ids(self, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(
+            '[{"id": "case_1", "state": {}}, {"id": "case_1", "state": {}}]',
+            encoding="utf-8",
+        )
+
+        with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        mock_session_cls.assert_not_called()
+
+    def test_batch_runs_safe_ids_and_returns_failure_if_any_case_fails(self, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(
+            '[{"id": "case-1", "state": {"query": "one"}}, {"id": "case_2", "state": {"query": "two"}}]',
+            encoding="utf-8",
+        )
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with (
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.run_target_system_in_sandbox", side_effect=[True, False]) as mock_run_target,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        assert mock_run_target.call_count == 2
+        run_ids = [call.kwargs["run_id"] for call in mock_run_target.call_args_list]
+        assert all(run_id.endswith(case_id) for run_id, case_id in zip(run_ids, ["case-1", "case_2"], strict=True))
+        assert all("/" not in run_id and "\\" not in run_id for run_id in run_ids)
+        copied_destinations = [
+            call.kwargs["dest_dir"] for call in mock_session.copy_dir_from_runtime.call_args_list[:2]
+        ]
+        assert copied_destinations == [
+            f"data/output/TestSystem_{run_ids[0]}",
+            f"data/output/TestSystem_{run_ids[1]}",
+        ]
 
     def test_run_target_system_in_sandbox_command_formatting(self):
         mock_session = MagicMock()
