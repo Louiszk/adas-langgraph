@@ -681,7 +681,7 @@ class ChatModel:
         self._bound_client_tools: tuple[Any, ...] = ()
         self._raw_model: Any = runnable
         if self.default_tools:
-            self._runnable = runnable.bind_tools(list(self.default_tools))
+            self._runnable = runnable.bind_tools(list(self.default_tools), parallel_tool_calls=False)
         else:
             self._runnable = runnable
         self._response_transformer: Callable[[Any], Any] | None = None
@@ -718,7 +718,7 @@ class ChatModel:
         self,
         tools: Sequence[Any],
         *,
-        parallel_tool_calls: bool | None = None,
+        parallel_tool_calls: bool = False,
         **kwargs: Any,
     ) -> ChatModel:
         """Return a NEW ChatModel instance with tools bound, preserving telemetry and immutability."""
@@ -746,8 +746,7 @@ class ChatModel:
                 combined.append(t)
 
         bind_kwargs = dict(kwargs)
-        if parallel_tool_calls is not None:
-            bind_kwargs["parallel_tool_calls"] = parallel_tool_calls
+        bind_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
         bound = self._raw_model.bind_tools(combined, **bind_kwargs)
         return ChatModel._from_runnable(

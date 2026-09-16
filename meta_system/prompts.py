@@ -60,10 +60,11 @@ A standardized, composition-based wrapper for interacting with LLMs.
   - Citations & Search Metadata:
     * `response.additional_kwargs.get("citations", [])`: list of URL citation dicts containing `url`, `title`, and referenced text.
     * `response.additional_kwargs.get("web_search_calls", [])`: list of web search actions and search queries executed.
-- **Standard Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = True) -> ChatModel`
-  Returns a **new** `ChatModel` instance with tools bound (immutable).
+- **Standard Tool Binding**: `tool_llm = llm.bind_tools(tool_objects: List[Any], parallel_tool_calls: bool = False) -> ChatModel`
+  Returns a new `ChatModel` instance with the supplied client-side tools bound (immutable).
+  Treat each call as replacing the previous client-side tool binding; bind all required client-side tools in one call.
 - **Structured Output**: `structured_llm = llm.with_structured_output(schema: Any) -> ChatModel`
-  Returns a **new** `ChatModel` instance bound to output the schema.
+  Returns a new `ChatModel` instance bound to output the schema.
 - **Invocation**: `response = llm.invoke(messages_input: List[Any]) -> AIMessage`
   Sends requests to the model and returns an `AIMessage` (which may contain `tool_calls`).
 - **Token Counter**: `ChatModel.token_counter` or `llm.get_num_tokens_from_messages`
@@ -71,9 +72,9 @@ A standardized, composition-based wrapper for interacting with LLMs.
 
 ### `execute_tool_calls` Function
 - **Signature**: `execute_tool_calls(response: AIMessage, available_tools: Dict[str, Any]) -> Tuple[List[ToolMessage], Dict[str, Any]]`
-- **Behavior**: Processes `tool_calls` inside an `AIMessage`. Returns:
+- **Behavior**: Processes `tool_calls` inside an `AIMessage` (concurrently when multiple calls are present). Returns:
   1. `tool_messages`: A `List[ToolMessage]` containing execution outputs or error messages to append to history.
-  2. `tool_results`: A `Dict[str, Any]` mapping executed tool names to their raw return values.
+  2. `tool_results`: A `Dict[str, Any]` mapping each tool-call ID to its raw return value.
 
 ### Standard Agent Node Pattern
 ```python
@@ -93,6 +94,11 @@ def agent_node(state: AgentState) -> dict:
     
     response: AIMessage = llm.invoke(full_messages)
     tool_messages, tool_results = execute_tool_calls(response, tools)
+
+    # Tool results are keyed by the IDs returned in response.tool_calls.
+    if response.tool_calls:
+        first_tool_call_id = response.tool_calls[0]["id"]
+        print(tool_results[first_tool_call_id])
     
     # Return updated state dictionary (append AIMessage and resulting ToolMessages)
     return {"messages": [response] + tool_messages}
