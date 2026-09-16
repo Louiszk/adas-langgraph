@@ -13,6 +13,7 @@ from adas_core.ast_parser import (
     extract_top_level_names,
     get_top_level_definitions,
 )
+from adas_core.environment import get_core_package_versions
 from adas_core.exceptions import GraphTopologyError
 from adas_core.helpers import escape_system_name, validate_identifier, validate_node_conditional_edge_signature
 
@@ -36,7 +37,7 @@ class VirtualAgenticSystem:
         self.edges = []  # List[(source, target)]
         self.conditional_edges = {}  # source_node -> {condition_code: str, path_map: dict}
 
-        self.packages_info = ["langchain-core 1.5.1", "langgraph 1.2.9"]
+        self.packages_info = get_core_package_versions()
         self.installed_packages = {}
         self.base_imports = [
             "from adas_core.chat_model import ChatModel",

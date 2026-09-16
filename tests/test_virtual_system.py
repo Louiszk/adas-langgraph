@@ -5,14 +5,23 @@ Tests verify behavior invariants rather than implementation details.
 
 import ast
 import textwrap
+from unittest.mock import patch
 
 from langgraph.graph import END, START
 
+from adas_core.environment import get_core_package_versions
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from tests.conftest import add_conditional_edge_to_system, add_node_to_system, add_tool_to_system
 
 
 class TestVirtualAgenticSystemInitialization:
+    def test_core_package_versions_are_read_from_installed_metadata(self):
+        with patch(
+            "adas_core.environment.importlib.metadata.version",
+            side_effect=lambda name: {"langchain-core": "1.6.2", "langgraph": "1.2.11"}[name],
+        ):
+            assert get_core_package_versions() == ["langchain-core 1.6.2", "langgraph 1.2.11"]
+
     def test_sanitizes_system_name(self):
         """System name with path separators must be sanitized for safe filesystem usage."""
         system = VirtualAgenticSystem(system_name="Folder/Subfolder\\MySystem:v1")

@@ -199,8 +199,12 @@ def run_benchmark_in_sandbox(
 
     if required_packages:
         for pkg in required_packages:
-            if "not found" in str(session.execute_command(f"pip show {pkg}")):
-                session.execute_command(f"pip install {pkg}")
+            show_result = session.execute_command(f"pip show {shlex.quote(pkg)}")
+            if getattr(show_result, "exit_code", 1) != 0:
+                install_result = session.execute_command(f"pip install {shlex.quote(pkg)}")
+                if getattr(install_result, "exit_code", 1) != 0:
+                    logger.error("Failed to install benchmark dependency: %s", pkg)
+                    return False
 
     # Run the benchmark
     command = (

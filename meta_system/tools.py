@@ -19,6 +19,7 @@ from adas_core.environment import (
     SANDBOX_GENERATED_SYSTEMS_DIR,
     SANDBOX_TASK_SETUP_DIR,
     SANDBOX_TASK_SPEC_PATH,
+    get_core_package_versions,
     is_package_excluded,
     normalize_package_name,
     validate_package_requirement,
@@ -123,9 +124,12 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
             except Exception:
                 target_agentic_system.installed_packages[name_only] = package_name.strip()
 
-            target_agentic_system.packages_info = get_filtered_packages(DEFAULT_EXCLUDED_PACKAGES) + [
-                "langchain-core 0.3.75"
-            ]
+            core_package_names = {"langchain-core", "langgraph"}
+            target_agentic_system.packages_info = [
+                package
+                for package in get_filtered_packages(DEFAULT_EXCLUDED_PACKAGES)
+                if normalize_package_name(package.split(maxsplit=1)[0]) not in core_package_names
+            ] + get_core_package_versions()
             return f"Successfully installed {package_name}"
         else:
             return f"ERROR: installing {package_name}:\n{process.stdout}"

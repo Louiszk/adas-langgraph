@@ -10,6 +10,37 @@ from adas_core.task_spec import TaskSpec
 
 
 class TestInvokeTargetCLI:
+    def test_shared_metrics_parser_reads_metrics_string(self, tmp_path):
+        from adas_core.environment import get_installed_packages_from_metrics
+
+        metrics_dir = tmp_path / "generated_systems" / "metrics"
+        metrics_dir.mkdir(parents=True)
+        metrics_path = metrics_dir / "Target.json"
+        metrics_path.write_text(json.dumps({"installed_packages": "scipy==1.14.1 seaborn"}), encoding="utf-8")
+
+        assert get_installed_packages_from_metrics(metrics_path) == ["scipy==1.14.1", "seaborn"]
+
+    def test_provision_target_dependencies_installs_in_sandbox(self, tmp_path, monkeypatch):
+        metrics_dir = tmp_path / "generated_systems" / "metrics"
+        metrics_dir.mkdir(parents=True)
+        (metrics_dir / "Target.json").write_text(
+            json.dumps({"installed_packages": ["scikit-learn==1.5.1", "seaborn"]}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        session = MagicMock()
+        session.execute_command.return_value.exit_code = 0
+
+        assert invoke_target.provision_target_dependencies(session, "Target")
+        command = session.execute_command.call_args.args[0]
+        assert command == "python3 -m pip install --disable-pip-version-check scikit-learn==1.5.1 seaborn"
+
+    def test_provision_target_dependencies_skips_without_metrics(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session = MagicMock()
+
+        assert invoke_target.provision_target_dependencies(session, "Target")
+        session.execute_command.assert_not_called()
+
     def test_invoke_target_rejects_invalid_system_name(self, monkeypatch):
         with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
             monkeypatch.setattr(

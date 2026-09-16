@@ -8,6 +8,36 @@ from benchmark.benchmark_base import benchmark_cli_main, run_benchmark_in_sandbo
 
 
 class TestRunBenchmarkInSandbox:
+    def test_required_packages_use_exit_codes_and_install_missing_packages(self):
+        mock_session = MagicMock()
+        show_result = MagicMock(exit_code=1)
+        install_result = MagicMock(exit_code=0)
+
+        def execute_command(command):
+            if command.startswith("pip show"):
+                return show_result
+            if command.startswith("pip install"):
+                return install_result
+            if "ls -la" in command:
+                return "benchmark_results_TestSystem.json"
+            return ""
+
+        mock_session.execute_command.side_effect = execute_command
+        mock_session.execute_command_streaming.return_value = ["\n__ADAS_BENCH_EXIT__0\n"]
+
+        with patch("benchmark.benchmark_base.os.makedirs"):
+            assert run_benchmark_in_sandbox(
+                session=mock_session,
+                benchmark_name="gsm8k",
+                system_name="TestSystem",
+                runner_script="benchmark/gsm8k/run_gsm8k_bench.py",
+                required_packages=["scikit-learn==1.5.1"],
+            )
+
+        commands = [call.args[0] for call in mock_session.execute_command.call_args_list]
+        assert "pip show scikit-learn==1.5.1" in commands
+        assert "pip install scikit-learn==1.5.1" in commands
+
     def test_container_marker_failure_returns_false(self, tmp_path):
         mock_session = MagicMock()
         mock_session.execute_command_streaming.return_value = [

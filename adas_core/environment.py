@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,17 @@ from config.dependencies import DEFAULT_EXCLUDED_PACKAGES
 from config.logging import get_logger
 
 logger = get_logger("adas_core.environment")
+
+
+def get_core_package_versions() -> list[str]:
+    """Return installed versions of the core LangChain packages."""
+    packages: list[str] = []
+    for package_name in ("langchain-core", "langgraph"):
+        try:
+            packages.append(f"{package_name} {importlib.metadata.version(package_name)}")
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return packages
 
 
 def load_environment() -> None:
@@ -160,6 +172,32 @@ def ensure_packages_installed(
         err_msg = f"Failed to install packages {missing}: {e.stderr or e.stdout}"
         logger.error(err_msg)
         raise RuntimeError(err_msg) from e
+
+
+def get_installed_packages_from_metrics(metrics_file: str | Path) -> list[str]:
+    """Extract dynamically installed package requirements from a metrics file."""
+    path = Path(metrics_file)
+    if not path.is_file():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        packages_value = data.get("installed_packages")
+        if isinstance(packages_value, list):
+            packages = [str(package).strip() for package in packages_value if str(package).strip()]
+        elif isinstance(packages_value, str):
+            packages = [package.strip() for package in packages_value.split() if package.strip()]
+        else:
+            return []
+
+        invalid = [package for package in packages if not validate_package_requirement(package)]
+        if invalid:
+            raise ValueError(f"Invalid package requirement(s) in {path}: {invalid}")
+        return list(dict.fromkeys(packages))
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError) as exc:
+        logger.warning("Failed to parse installed packages from %s: %s", path, exc)
+    return []
 
 
 PROVISIONING_SCRIPT_PREFIXES = ("generate_", "seed_", "mock_", "setup_")

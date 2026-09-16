@@ -13,6 +13,7 @@ from typing import Any
 from adas_core.environment import (
     SANDBOX_TARGET_METRICS_DIR,
     SANDBOX_WORKSPACE_DIR,
+    get_installed_packages_from_metrics,
     load_environment,
 )
 from adas_core.helpers import validate_identifier
@@ -28,6 +29,30 @@ from sandbox.sandbox import (
 )
 
 logger = get_logger("invoke_target")
+
+
+def provision_target_dependencies(session: StreamingSandboxSession, system_name: str) -> bool:
+    """Install design-time target dependencies inside the active sandbox."""
+    try:
+        metrics_path = Path("generated_systems") / "metrics" / f"{system_name}.json"
+        packages = get_installed_packages_from_metrics(metrics_path)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return False
+
+    if not packages:
+        return True
+
+    command = "python3 -m pip install --disable-pip-version-check " + " ".join(
+        shlex.quote(package) for package in packages
+    )
+    logger.info("Provisioning target dependencies in sandbox: %s", ", ".join(packages))
+    result = session.execute_command(command)
+    exit_code = getattr(result, "exit_code", 0) if result is not None else 1
+    if exit_code != 0:
+        logger.error("Failed to provision target dependencies in sandbox: %s", result)
+        return False
+    return True
 
 
 def run_target_system_in_sandbox(
@@ -278,6 +303,8 @@ def main() -> int:
         session.open()
 
         if setup_sandbox_environment(session, reinstall=args.reinstall):
+            if not provision_target_dependencies(session, args.system_name):
+                return 1
             runtime_task_dir: str | None = None
             if args.task_spec:
                 task_dir = args.task_spec.resolve().parent

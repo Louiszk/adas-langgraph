@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
 import random
 import shutil
@@ -18,7 +17,7 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from adas_core.environment import load_environment  # noqa: E402
+from adas_core.environment import get_installed_packages_from_metrics, load_environment  # noqa: E402
 from config.logging import get_logger, setup_logging  # noqa: E402
 from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
 
@@ -177,27 +176,8 @@ class DependencyParser:
 
     @staticmethod
     def get_installed_packages(metrics_file: str | Path) -> list[str]:
-        """Extract installed_packages from a JSON metrics file.
-
-        Supports both list format (e.g. ['pkg1', 'pkg2']) and space-delimited string format.
-        """
-        path = Path(metrics_file)
-        if not path.is_file():
-            return []
-
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            packages_val = data.get("installed_packages")
-            if not packages_val:
-                return []
-            if isinstance(packages_val, list):
-                return [str(pkg).strip() for pkg in packages_val if str(pkg).strip()]
-            if isinstance(packages_val, str):
-                return [pkg.strip() for pkg in packages_val.split() if pkg.strip()]
-        except Exception as e:
-            logger.warning(f"Failed to parse installed_packages from {path}: {e}")
-        return []
+        """Extract installed packages from a generated-system metrics file."""
+        return get_installed_packages_from_metrics(metrics_file)
 
 
 class ExecutionManager:
