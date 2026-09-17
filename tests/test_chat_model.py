@@ -785,9 +785,10 @@ class TestExecuteToolCalls:
         with pytest.raises(ToolProtocolError, match="Duplicate tool call ID 'duplicate'"):
             execute_tool_calls(response, {})
 
-        reserved_response = AIMessage(content="", tool_calls=[{"id": "errors", "name": "tool", "args": {}}])
-        with pytest.raises(ToolProtocolError, match="Tool call ID 'errors' is reserved"):
-            execute_tool_calls(reserved_response, {})
+        for reserved_id in ("errors", "invalid_tool_call_0", "malformed_tool_call_0"):
+            reserved_response = AIMessage(content="", tool_calls=[{"id": reserved_id, "name": "tool", "args": {}}])
+            with pytest.raises(ToolProtocolError, match=f"Tool call ID '{reserved_id}' is reserved"):
+                execute_tool_calls(reserved_response, {})
 
     def test_execute_tool_calls_skips_tool_messages_for_calls_lacking_ids_and_surfaces_errors(self):
         @tool
@@ -1059,7 +1060,7 @@ class TestWebSearchCapabilities:
 
         schema = {"type": "object", "properties": {"is_pass": {"type": "boolean"}}}
         llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
-        structured_llm = llm.with_structured_output(schema)
+        structured_llm = llm.with_structured_output(schema, method="json_schema", strict=True)
 
         assert structured_llm._runnable is mock_structured
         mock_model.with_structured_output.assert_called_once_with(

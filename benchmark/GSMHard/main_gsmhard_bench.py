@@ -11,7 +11,7 @@ def run_gsmhard_benchmark_in_sandbox(session, system_name: str) -> bool:
         benchmark_name="GSMHard",
         system_name=system_name,
         runner_script="benchmark/GSMHard/run_gsmhard_bench.py",
-        required_packages=["datasets"],
+        dataset_file="benchmark/GSMHard/problem_subset.json",
     )
 
 

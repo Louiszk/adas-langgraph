@@ -14,6 +14,7 @@ from adas_core.task_spec import (
     MCPFixtureSpec,
     MockServiceFixtureSpec,
     ModelSpec,
+    PersistenceContract,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -156,6 +157,14 @@ class TestTaskSpecModel:
             ArchitectureContract(
                 execution_mode="multi_turn",
                 state_schema={"messages": "Annotated[list[AnyMessage], add_messages]"},
+            )
+
+    def test_single_turn_rejects_persistence(self):
+        with pytest.raises(ValidationError, match="Persistence is not supported for 'single_turn'"):
+            ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str"},
+                persistence=PersistenceContract(checkpointer="memory"),
             )
 
     def test_full_fixtures_and_required_packages_serialization(self, tmp_path):
@@ -681,6 +690,23 @@ class TestTaskSpecValidation:
             description="Valid env.",
         )
         assert seed.namespace_env == "PGDATABASE"
+
+    def test_custom_external_database_seed_requires_explicit_safety_contract(self):
+        seed_kwargs = {
+            "name": "custom_seed",
+            "resource_name": "evaluation_db",
+            "db_type": "custom",
+            "driver": "vendor_driver",
+            "connection_env": {"uri": "EVALUATION_DB_URI"},
+            "namespace_kind": "namespace",
+            "namespace": "adas-test-custom",
+            "description": "Custom seed with namespace-scoped cleanup.",
+        }
+        with pytest.raises(ValidationError, match="safety_contract"):
+            ExternalDatabaseSeedSpec(**seed_kwargs)
+
+        seed = ExternalDatabaseSeedSpec(**seed_kwargs, safety_contract="namespace_scoped_cleanup")
+        assert seed.safety_contract == "namespace_scoped_cleanup"
 
         with pytest.raises(ValidationError, match="valid environment-variable name"):
             ExternalDatabaseSeedSpec(

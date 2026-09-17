@@ -16,7 +16,7 @@ from adas_core.environment import (
     get_installed_packages_from_metrics,
     load_environment,
 )
-from adas_core.helpers import validate_identifier, validate_system_name
+from adas_core.helpers import parse_streaming_exit_code, validate_identifier, validate_system_name
 from adas_core.runtime_resources import RuntimeResourceProfile
 from adas_core.task_spec import TaskSpec
 from config.logging import get_logger, setup_logging
@@ -31,8 +31,10 @@ from sandbox.sandbox import (
 logger = get_logger("invoke_target")
 
 
-def provision_target_dependencies(session: StreamingSandboxSession, system_name: str) -> bool:
-    """Install design-time target dependencies inside the active sandbox."""
+def provision_target_dependencies(
+    session: StreamingSandboxSession, system_name: str, additional_packages: list[str] | None = None
+) -> bool:
+    """Install generated-system and per-invocation runtime dependencies in the active sandbox."""
     try:
         metrics_path = Path("generated_systems") / "metrics" / f"{system_name}.json"
         packages = get_installed_packages_from_metrics(metrics_path)
@@ -40,6 +42,11 @@ def provision_target_dependencies(session: StreamingSandboxSession, system_name:
         logger.error(str(exc))
         return False
 
+    combined_packages: list[str] = []
+    for package in [*packages, *(additional_packages or [])]:
+        if package not in combined_packages:
+            combined_packages.append(package)
+    packages = combined_packages
     if not packages:
         return True
 
@@ -48,7 +55,7 @@ def provision_target_dependencies(session: StreamingSandboxSession, system_name:
     )
     logger.info("Provisioning target dependencies in sandbox: %s", ", ".join(packages))
     result = session.execute_command(command)
-    exit_code = getattr(result, "exit_code", 0) if result is not None else 1
+    exit_code = getattr(result, "exit_code", 1) if result is not None else 1
     if exit_code != 0:
         logger.error("Failed to provision target dependencies in sandbox: %s", result)
         return False
@@ -92,7 +99,8 @@ def run_target_system_in_sandbox(
         output_chunks.append(chunk)
         print(chunk, end="", flush=True)
 
-    succeeded = "__ADAS_TARGET_EXIT__0" in "".join(output_chunks)
+    exit_code = parse_streaming_exit_code(output_chunks, "TARGET")
+    succeeded = exit_code == 0
     if succeeded:
         logger.info("Target system execution completed")
     else:
@@ -158,7 +166,7 @@ def main() -> int:
         "--runtime-config",
         type=Path,
         default=None,
-        help="Optional runtime resource profile JSON overriding selected fixture providers.",
+        help="Optional RuntimeResourceProfile JSON overriding selected fixture providers.",
     )
     state_group = parser.add_mutually_exclusive_group(required=True)
     state_group.add_argument(
@@ -266,21 +274,26 @@ def main() -> int:
     runtime_profile: RuntimeResourceProfile | None = None
     task_spec: TaskSpec | None = None
 
-    if args.task_spec:
-        task_spec_path = args.task_spec.resolve()
-        task_spec = TaskSpec.from_file(task_spec_path)
-        if args.auto_setup or not setup_manifest_is_current(task_spec_path):
-            logger.info(
-                "Task setup is missing, stale, or --auto-setup was requested; ensuring setup for %s...",
-                task_spec_path,
-            )
-            run_setup_for_task(
-                task_spec_path,
-                force=args.auto_setup,
-                reinstall=args.reinstall,
-                container=args.container,
-                base_image=args.base_image,
-            )
+    try:
+        if args.task_spec:
+            task_spec_path = args.task_spec.resolve()
+            task_spec = TaskSpec.from_file(task_spec_path)
+            setup_current = setup_manifest_is_current(task_spec_path)
+            if not setup_current and not args.auto_setup:
+                logger.error("Task setup is missing or stale. Re-run with --auto-setup to regenerate it.")
+                return 1
+            if not setup_current:
+                logger.info("Task setup is missing or stale; regenerating setup for %s...", task_spec_path)
+                run_setup_for_task(
+                    task_spec_path,
+                    force=False,
+                    reinstall=args.reinstall,
+                    container=args.container,
+                    base_image=args.base_image,
+                )
+    except Exception as exc:
+        logger.exception("TaskSpec loading or setup failed: %s", exc)
+        return 1
     if args.runtime_config:
         if task_spec is None:
             logger.error("--runtime-config requires --task-spec.")
@@ -303,7 +316,8 @@ def main() -> int:
         session.open()
 
         if setup_sandbox_environment(session, reinstall=args.reinstall):
-            if not provision_target_dependencies(session, args.system_name):
+            runtime_packages = runtime_profile.additional_packages if runtime_profile else None
+            if not provision_target_dependencies(session, args.system_name, runtime_packages):
                 return 1
             runtime_task_dir: str | None = None
             if args.task_spec:

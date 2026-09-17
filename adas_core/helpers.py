@@ -13,6 +13,15 @@ SAFE_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_-]+$")
 SAFE_SYSTEM_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
+def parse_streaming_exit_code(output_chunks: list[str], marker_name: str) -> int | None:
+    """Parse the exact final-line exit marker emitted by a streaming command wrapper."""
+    marker = re.search(
+        rf"(?:^|\n)__ADAS_{re.escape(marker_name)}_EXIT__(\d+)\s*$",
+        "".join(output_chunks),
+    )
+    return int(marker.group(1)) if marker else None
+
+
 def validate_identifier(name: str, field_name: str = "identifier") -> str:
     """Validate that an identifier contains only safe alphanumeric, underscore, and hyphen characters."""
     if not isinstance(name, str) or not name.strip():

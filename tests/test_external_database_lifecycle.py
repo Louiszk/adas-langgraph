@@ -62,6 +62,7 @@ def _write_script(root: Path, body: str) -> Path:
 def _script(event_file: Path, *, seed_body: str = "", cleanup_body: str = "") -> str:
     return (
         "from pathlib import Path\n"
+        "import os\n"
         f"EVENT_FILE = Path({str(event_file)!r})\n"
         "def _event(value):\n"
         "    EVENT_FILE.write_text(EVENT_FILE.read_text() + value + '\\n' if EVENT_FILE.exists() else value + '\\n')\n"
@@ -147,6 +148,24 @@ def test_lifecycle_exports_and_restores_namespace_environment(tmp_path, monkeypa
     spec.test_fixtures.external_database_seeds[0].namespace_env = "CUSTOM_NAMESPACE_ENV"
 
     assert "ADAS_TEST_NAMESPACE" not in os.environ
+    assert "CUSTOM_NAMESPACE_ENV" not in os.environ
+
+
+def test_cleanup_runs_before_namespace_environment_is_restored(tmp_path, monkeypatch):
+    events = tmp_path / "events.txt"
+    _write_script(
+        tmp_path,
+        _script(events, cleanup_body="assert os.environ['CUSTOM_NAMESPACE_ENV'] == namespace"),
+    )
+    monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
+    monkeypatch.delenv("CUSTOM_NAMESPACE_ENV", raising=False)
+
+    spec = _task_spec()
+    spec.test_fixtures.external_database_seeds[0].namespace_env = "CUSTOM_NAMESPACE_ENV"
+
+    with external_database_seed_lifecycle(spec, ["orders_seed"], tmp_path):
+        pass
+
     assert "CUSTOM_NAMESPACE_ENV" not in os.environ
 
     with external_database_seed_lifecycle(spec, ["orders_seed"], tmp_path):

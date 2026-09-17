@@ -1,6 +1,7 @@
 """Unit tests for AST helpers used to edit utility definitions."""
 
 import ast
+import textwrap
 
 from adas_core.ast_parser import (
     RemoveDefinitionsTransformer,
@@ -47,3 +48,26 @@ def setting() -> int:
     replacement_result = RemoveDefinitionsTransformer({"setting"}).visit(ast.parse("setting = 1\n"))
     assert isinstance(replacement_result, ast.Module)
     assert replacement_result.body == []
+
+
+def test_name_replacement_does_not_remove_nested_same_named_methods():
+    module = ast.parse(
+        textwrap.dedent(
+            """
+        def parse(value):
+            return value
+
+        class Parser:
+            def parse(self, value):
+                return value
+            """
+        )
+    )
+
+    result = RemoveDefinitionsTransformer({"parse"}).visit(module)
+
+    assert isinstance(result, ast.Module)
+    assert len(result.body) == 1
+    parser_class = result.body[0]
+    assert isinstance(parser_class, ast.ClassDef)
+    assert [node.name for node in parser_class.body if isinstance(node, ast.FunctionDef)] == ["parse"]

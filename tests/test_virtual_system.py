@@ -86,6 +86,14 @@ class TestImportManagement:
         assert "import math" not in empty_system.imports
         assert "import json" in empty_system.imports
 
+    def test_deduplicate_imports_preserves_distinct_alias_bindings(self, empty_system: VirtualAgenticSystem):
+        existing = ["from package import value as first"]
+        new_imports = ["from package import value as second"]
+
+        deduped = empty_system.deduplicate_imports(new_imports, existing_import_statements=existing)
+
+        assert deduped == new_imports
+
 
 class TestComponentLifecycleAndCascadeDeletion:
     def test_create_node_registers_code_and_description(
@@ -106,7 +114,7 @@ class TestComponentLifecycleAndCascadeDeletion:
 
         assert func is None
         assert error == (
-            "ERROR: Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
+            "ERROR: Asynchronous tool, node, and conditional-edge functions are not currently supported. Use 'def'."
         )
 
     def test_delete_node_cascades_to_edges(

@@ -43,23 +43,28 @@ class RemoveDefinitionsTransformer(ast.NodeTransformer):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
         if node.name in self.names_to_remove:
             return None
-        return self.generic_visit(node)
+        return node
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | None:
         if node.name in self.names_to_remove:
             return None
-        return self.generic_visit(node)
+        return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id in self.names_to_remove:
-                return None
-        return self.generic_visit(node)
+        remaining_targets = [
+            target
+            for target in node.targets
+            if not (isinstance(target, ast.Name) and target.id in self.names_to_remove)
+        ]
+        if not remaining_targets:
+            return None
+        node.targets = remaining_targets
+        return node
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | None:
         if isinstance(node.target, ast.Name) and node.target.id in self.names_to_remove:
             return None
-        return self.generic_visit(node)
+        return node
 
 
 class RemoveTypedUtilityDefinitionsTransformer(ast.NodeTransformer):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import os
 import sys
 import time
@@ -103,7 +104,10 @@ def _dispatch_validator(
         "output": str(workspace_dirs.get("output", "")),
     }
 
-    is_pass, message = validator_fn(final_state, workspace_dirs_str)
+    result = validator_fn(final_state, workspace_dirs_str)
+    if inspect.isawaitable(result):
+        raise ValidatorContractError(f"Validator for {test_case.id} must be synchronous, got an awaitable result")
+    is_pass, message = result
     if not isinstance(is_pass, bool):
         raise ValidatorContractError(
             f"Validator for {test_case.id} must return tuple[bool, str], got {type(is_pass).__name__}"

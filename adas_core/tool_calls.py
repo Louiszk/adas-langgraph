@@ -10,6 +10,7 @@ Provides:
 
 from __future__ import annotations
 
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -46,6 +47,8 @@ def validate_tool_history(messages: list[BaseMessage]) -> None:
                 cname = call.get("name") if isinstance(call, dict) else getattr(call, "name", "unknown")
                 if cid and str(cid).strip():
                     cid_str = str(cid).strip()
+                    if cid_str in seen_call_ids:
+                        raise ToolProtocolError(f"Duplicate AI tool call ID '{cid_str}'.")
                     seen_call_ids.add(cid_str)
                     active_pending_calls[cid_str] = str(cname)
 
@@ -84,7 +87,7 @@ def execute_tool_calls(
 ) -> tuple[list[ToolMessage], dict[str, Any]]:
     """Execute available tool calls from an AIMessage response.
 
-    - Executes multiple eligible calls concurrently while preserving the original
+    - Executes multiple eligible calls concurrently while preserving executable
       tool-call order in the returned messages and results.
     - Only emits ToolMessage objects for tool calls having valid, non-empty IDs.
     - Malformed calls or calls lacking valid IDs do not emit ToolMessages into strict history.
@@ -98,8 +101,8 @@ def execute_tool_calls(
         call_id = str(raw_id).strip() if raw_id and str(raw_id).strip() else None
         if not call_id:
             return None
-        if call_id == "errors":
-            raise ToolProtocolError("Tool call ID 'errors' is reserved for protocol diagnostics.")
+        if call_id == "errors" or call_id.startswith(("invalid_tool_call_", "malformed_tool_call_")):
+            raise ToolProtocolError(f"Tool call ID '{call_id}' is reserved for protocol diagnostics.")
         if call_id in seen_call_ids:
             raise ToolProtocolError(f"Duplicate tool call ID '{call_id}'.")
         seen_call_ids.add(call_id)
@@ -186,10 +189,24 @@ def execute_tool_calls(
             error_message = f"Error executing tool {tool_name}: {exc!r}"
             return idx, tool_id, error_message, ToolMessage(content=error_message, tool_call_id=tool_id, name=tool_name)
 
+    completed_calls: list[tuple[int, str, Any, ToolMessage]] = []
+    if len(executable_calls) == 1:
+        context = contextvars.copy_context()
+        completed_calls = [context.run(execute_one, executable_calls[0])]
+    elif executable_calls:
+        contextual_calls = [(contextvars.copy_context(), call) for call in executable_calls]
+
+        def execute_in_context(
+            item: tuple[contextvars.Context, tuple[int, str, str | None, Any]],
+        ) -> tuple[int, str, Any, ToolMessage]:
+            context, call = item
+            return context.run(execute_one, call)
+
+        with ThreadPoolExecutor(max_workers=min(32, len(contextual_calls))) as executor:
+            completed_calls = list(executor.map(execute_in_context, contextual_calls))
+
     if executable_calls:
-        with ThreadPoolExecutor(max_workers=min(32, len(executable_calls))) as executor:
-            completed_calls = list(executor.map(execute_one, executable_calls))
-        for _, tool_id, result, message in completed_calls:
+        for _, tool_id, result, message in sorted(completed_calls, key=lambda call: call[0]):
             tool_messages.append(message)
             tool_results[tool_id] = result
 

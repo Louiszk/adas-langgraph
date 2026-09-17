@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.metadata
 import importlib.util
 import json
@@ -70,6 +71,46 @@ def validate_package_requirement(requirement: str, *, raise_on_error: bool = Fal
             raise ValueError(f"Invalid package requirement: '{requirement}'")
         return False
     return True
+
+
+def extract_literal_package_requirements(code: str, declaration_name: str) -> list[str]:
+    """Extract and validate a literal package declaration from generated source code."""
+    try:
+        parsed = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    for node in parsed.body:
+        value_node: ast.expr | None = None
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == declaration_name for target in node.targets
+        ):
+            value_node = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == declaration_name
+            and node.value is not None
+        ):
+            value_node = node.value
+
+        if value_node is None:
+            continue
+
+        try:
+            value = ast.literal_eval(value_node)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(value, list):
+            return []
+
+        requirements = [str(item) for item in value]
+        invalid = [requirement for requirement in requirements if not validate_package_requirement(requirement)]
+        if invalid:
+            raise ValueError(f"Invalid {declaration_name} package requirement(s): {invalid}")
+        return requirements
+
+    return []
 
 
 def normalize_package_name(package_spec: str) -> str:
@@ -375,7 +416,7 @@ def run_preflight_check(
 
         check_func = getattr(module, "check_environment", None)
         if not check_func or not callable(check_func):
-            return True, "preflight.py does not define check_environment(); skipping."
+            return False, "preflight.py must define callable check_environment()."
 
         result = check_func(dirs_dict)
         if isinstance(result, tuple) and len(result) == 2:

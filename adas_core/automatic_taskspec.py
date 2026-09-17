@@ -148,8 +148,9 @@ Your output JSON must strictly conform to the following JSON Schema generated di
 
 ### MANDATORY ARCHITECTURAL RULES:
 1. SINGLE-TURN VS. MULTI-TURN CONTRACT:
+   - Multi-turn target systems are not currently supported by the ADAS execution and test harness. Always use 'single_turn' when generating a TaskSpec; do not select 'multi_turn'.
    - If execution_mode is 'single_turn', persistence must be null, and each test case turn must provide the required input state.
-   - If execution_mode is 'multi_turn', state_schema must declare a message history key (e.g. 'messages'), and persistence must specify 'checkpointer': 'memory' and 'requires_thread_id': true.
+   - The 'multi_turn' schema option is reserved for future support and must not be used in generated specifications.
 
 2. VALID JSON OUTPUT:
    - When providing a specification, output a complete, valid JSON object in a ```json ... ``` block.

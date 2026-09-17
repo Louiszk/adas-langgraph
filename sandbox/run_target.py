@@ -218,7 +218,7 @@ def main() -> int:
         except Exception as e:
             logger.error(f"Could not save metrics file: {e}")
 
-        if final_state_snapshot:
+        if final_state_snapshot is not None:
             state_filename = f"{args.system_name}_{run_id}_final_state.txt"
             state_filepath = os.path.join(metrics_dir, state_filename)
             try:

@@ -19,6 +19,7 @@ class MetaState(TypedDict, total=False):
     best_candidate: CandidateRecord | None
     system_passed: bool
     design_completed: bool
+    finalization_succeeded: bool
     design_status: str
     design_message: str
     initial_task: str

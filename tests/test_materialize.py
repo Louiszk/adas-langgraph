@@ -59,6 +59,15 @@ class TestMaterializeSystemSpecification:
             parsed_ast = ast.parse(code_content)
             assert isinstance(parsed_ast, ast.Module)
 
+    def test_multiline_descriptions_remain_comments(self):
+        system = VirtualAgenticSystem("CommentSafeSystem")
+        add_node_to_system(system, "node_a", "def node_a(state): return state", "first line\nmalicious = True")
+
+        code_content = materialize_system(system, output_dir=None)
+
+        ast.parse(code_content)
+        assert "# Description: first line\n# malicious = True" in code_content
+
     def test_materialized_code_contains_required_graph_components(self, fully_configured_system: VirtualAgenticSystem):
         """
         Contract verification: The generated script must define AgentState, StateGraph, nodes, edges, tools, and compilation.

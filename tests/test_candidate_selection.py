@@ -289,7 +289,10 @@ class TestCandidateSelection:
         final_sys = finalize_best_candidate(state, code_dir=code_dir)
         assert final_sys is not None
         assert final_sys.system_name == "SafeFallback"
+        assert state["finalization_succeeded"] is True
         assert os.path.exists(os.path.join(code_dir, "SafeFallback.pkl"))
+        with open(os.path.join(code_dir, "SafeFallback.pkl"), "rb") as f:
+            assert pickle.load(f).system_name == "SafeFallback"
 
     def test_finalize_best_candidate_no_system_returns_none(self):
         state: dict[str, Any] = {"candidates": []}
@@ -353,9 +356,7 @@ class TestCandidateSelection:
             ],
         }
         res = design_completed_condition(state)
-        assert res == "__end__"
-        assert state["best_candidate"] is not None
-        assert state["best_candidate"].get("iteration") == 1
+        assert res == "Finalize"
 
     def test_missing_telemetry_ranked_after_known_measurements(self):
         c_known: CandidateRecord = {

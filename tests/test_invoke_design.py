@@ -3,10 +3,30 @@
 from unittest.mock import MagicMock, patch
 
 import invoke_design
-from adas_core.task_spec import TaskSpec
+from adas_core.task_spec import ArchitectureContract, TaskSpec
 
 
 class TestInvokeDesignCLI:
+    def test_rejects_empty_development_suite(self, tmp_path, monkeypatch):
+        spec_file = tmp_path / "task.json"
+        spec = TaskSpec(
+            name="NoDevCasesTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"messages": "list[dict]"},
+                required_tools=[],
+            ),
+            dev_suite=[],
+        )
+        spec.save(spec_file)
+
+        with patch("invoke_design.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr("sys.argv", ["invoke_design.py", "--task-spec", str(spec_file)])
+            assert invoke_design.main() == 1
+
+        mock_session_cls.assert_not_called()
+
     def test_system_name_override(self, tmp_path, monkeypatch):
         spec_file = tmp_path / "task.json"
         spec_data = {
@@ -15,7 +35,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -66,7 +85,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -104,7 +122,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -148,7 +165,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -194,7 +210,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -233,7 +248,6 @@ class TestInvokeDesignCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},

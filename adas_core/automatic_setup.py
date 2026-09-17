@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.environment import normalize_package_name
+from adas_core.environment import extract_literal_package_requirements, normalize_package_name
 from adas_core.exceptions import FixtureExecutionError
 from adas_core.helpers import normalize_fixture_path, normalize_future_imports, safe_write_text
 from adas_core.markdown_parser import find_code_blocks
@@ -47,18 +48,7 @@ def extract_code_block(content: str) -> str:
 
 def extract_setup_requirements(code: str) -> list[str]:
     """Extract SETUP_REQUIREMENTS list from generated Python code if declared."""
-    try:
-        parsed = ast.parse(code)
-        for node in parsed.body:
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "SETUP_REQUIREMENTS":
-                        val = ast.literal_eval(node.value)
-                        if isinstance(val, list):
-                            return [str(item) for item in val]
-    except Exception as e:
-        logger.debug(f"Could not parse SETUP_REQUIREMENTS from code: {e}")
-    return []
+    return extract_literal_package_requirements(code, "SETUP_REQUIREMENTS")
 
 
 BASE_GENERATION_SYSTEM_PROMPT = """You are generating automated setup and fixture code for AI agent evaluation.
@@ -396,9 +386,18 @@ class AutomaticSetup:
         api_keys = [
             f"{k.env_var} ({k.description})" for k in task_spec.resource_manifest.available_api_keys if not k.optional
         ]
+        resource_contract = task_spec.resource_manifest.model_dump(mode="json")
+        fixture_contract = {
+            category: [
+                {key: value for key, value in fixture.items() if key != "private_description"} for fixture in fixtures
+            ]
+            for category, fixtures in task_spec.test_fixtures.model_dump(mode="json").items()
+        }
         user_prompt = (
             f"{self._format_task_context(task_spec)}\n"
             f"Required API Keys: {api_keys}\n"
+            f"Resource Manifest (authoritative runtime contract): {json.dumps(resource_contract, sort_keys=True)}\n"
+            f"Fixture Contracts (authoritative generated-fixture contract): {json.dumps(fixture_contract, sort_keys=True)}\n"
             f"Discovered Packages: {all_discovered_packages}\n\n"
             "Write the complete preflight.py module:"
         )
@@ -407,8 +406,34 @@ class AutomaticSetup:
         code = normalize_future_imports(extract_code_block(str(response.content)))
         try:
             compile(code, "<preflight>", "exec")
+            tree = ast.parse(code, filename="<preflight>")
         except SyntaxError as exc:
-            logger.warning("Generated preflight script failed syntax validation: %s", exc)
+            raise FixtureExecutionError(f"Generated preflight script is invalid Python: {exc}") from exc
+        check_environment = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check_environment"
+            ),
+            None,
+        )
+        if check_environment is None:
+            raise FixtureExecutionError("Generated preflight script must define check_environment().")
+        if isinstance(check_environment, ast.AsyncFunctionDef):
+            raise FixtureExecutionError(
+                "Generated preflight script must define synchronous check_environment(workspace_dirs)."
+            )
+        positional_parameters = [*check_environment.args.posonlyargs, *check_environment.args.args]
+        has_compatible_signature = (
+            len(positional_parameters) == 1
+            and check_environment.args.vararg is None
+            and not check_environment.args.kwonlyargs
+            and check_environment.args.kwarg is None
+        )
+        if not has_compatible_signature:
+            raise FixtureExecutionError(
+                "Generated preflight check_environment must accept exactly one positional parameter (workspace_dirs)."
+            )
         return code
 
     def generate_all(
@@ -487,6 +512,9 @@ class AutomaticSetup:
         # 6. Generate preflight.py
         all_packages = sorted(discovered_packages)
         preflight_code = self.generate_preflight_script(task_spec, all_packages)
+        preflight_packages = extract_setup_requirements(preflight_code)
+        discovered_packages.update(preflight_packages)
+        all_packages = sorted(discovered_packages)
         preflight_path = root / "preflight.py"
         safe_write_text(preflight_path, preflight_code, root_dir=root)
         created_files.append(preflight_path)
@@ -536,7 +564,7 @@ class AutomaticSetup:
             else:
                 dest.mkdir(parents=True, exist_ok=True)
             try:
-                ns: dict[str, Any] = {"Path": Path}
+                ns: dict[str, Any] = {"Path": Path, "__name__": "__generated_setup__", "__file__": str(script)}
                 exec(script.read_text(encoding="utf-8"), ns)
                 generator = ns.get("generate_files")
                 if not callable(generator):
@@ -555,7 +583,7 @@ class AutomaticSetup:
             if not script.is_file():
                 script = fixtures_dir / f"seed_{db_fix.name}.py"
             try:
-                ns = {"Path": Path}
+                ns = {"Path": Path, "__name__": "__generated_setup__", "__file__": str(script)}
                 exec(script.read_text(encoding="utf-8"), ns)
                 seed_database = ns.get("seed_database")
                 if not callable(seed_database):
@@ -573,7 +601,7 @@ class AutomaticSetup:
             if not script.is_file():
                 script = fixtures_dir / f"setup_{custom_fix.name}.py"
             try:
-                ns = {"Path": Path}
+                ns = {"Path": Path, "__name__": "__generated_setup__", "__file__": str(script)}
                 exec(script.read_text(encoding="utf-8"), ns)
                 setup_environment = ns.get("setup_environment")
                 if not callable(setup_environment):

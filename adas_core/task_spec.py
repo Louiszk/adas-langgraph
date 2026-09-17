@@ -86,8 +86,9 @@ class ArchitectureContract(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_multi_turn_persistence(self) -> ArchitectureContract:
-        # Execution-mode validation rejects multi_turn before this model validator runs.
+    def validate_persistence_contract(self) -> ArchitectureContract:
+        if self.execution_mode == "single_turn" and self.persistence is not None:
+            raise ValueError("Persistence is not supported for 'single_turn' execution mode; set persistence to null.")
         return self
 
 
@@ -393,6 +394,13 @@ class ExternalDatabaseSeedSpec(BaseModel):
     cleanup_policy: Literal["drop_namespace"] = Field(
         default="drop_namespace", description="Required conservative cleanup action after every case"
     )
+    safety_contract: Literal["namespace_scoped_cleanup"] | None = Field(
+        default=None,
+        description=(
+            "Required explicit opt-in for custom database cleanup; confirms that seed and cleanup functions only "
+            "operate on the supplied namespace"
+        ),
+    )
     description: str = Field(..., min_length=1, description="Schema and deterministic seed-data requirements")
     private_description: str = Field(
         default="",
@@ -436,6 +444,11 @@ class ExternalDatabaseSeedSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_engine_safe_namespace(self) -> ExternalDatabaseSeedSpec:
+        if not re.fullmatch(r"(?:adas_test_|adas-test-)[a-z0-9](?:[a-z0-9_.-]{0,62}[a-z0-9])?", self.namespace):
+            raise ValueError(
+                "External database seed namespaces must use the 'adas_test_' or 'adas-test-' evaluation prefix "
+                "and contain only lowercase letters, digits, underscores, periods, and dashes."
+            )
         if self.db_type == "postgres" and not re.fullmatch(r"adas_test_[a-z0-9_]{1,52}", self.namespace):
             raise ValueError(
                 "PostgreSQL external database seed namespaces must use lowercase letters, digits, and underscores "
@@ -447,6 +460,11 @@ class ExternalDatabaseSeedSpec(BaseModel):
             raise ValueError(
                 "Neo4j external database seed namespaces must use lowercase letters, digits, and dashes "
                 "with the 'adas-test-' prefix. Neo4j database names reject underscores."
+            )
+        if self.db_type == "custom" and self.safety_contract != "namespace_scoped_cleanup":
+            raise ValueError(
+                "Custom external database seeds require safety_contract='namespace_scoped_cleanup' "
+                "before destructive cleanup is allowed."
             )
         return self
 
@@ -833,7 +851,14 @@ class TaskSpec(BaseModel):
         """Validate available models and web search declarations against ModelRegistry."""
         from adas_core.chat_model import ModelRegistry
 
+        seen_models: set[tuple[str, str]] = set()
         for m in self.available_models:
+            model_key = (m.provider, m.model_name)
+            if model_key in seen_models:
+                raise ValueError(
+                    f"Duplicate available model declaration for provider '{m.provider}' and model '{m.model_name}'."
+                )
+            seen_models.add(model_key)
             if not ModelRegistry.is_registered_model(m.provider, m.model_name):
                 raise ValueError(
                     f"ModelSpec '{m.model_name}' for provider '{m.provider}' is not registered in ModelRegistry. "

@@ -5,8 +5,10 @@ import shlex
 from collections.abc import Callable
 from typing import Any
 
+from packaging.requirements import Requirement
+
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
-from adas_core.helpers import validate_python_module_path
+from adas_core.helpers import parse_streaming_exit_code, validate_python_module_path
 from config.logging import get_logger
 
 logger = get_logger("benchmark_base")
@@ -166,6 +168,7 @@ def run_benchmark_in_sandbox(
     runner_script: str,
     extra_files: list[str] | None = None,
     required_packages: list[str] | None = None,
+    dataset_file: str | None = None,
 ) -> bool:
     """Shared implementation for executing benchmarks inside an isolated sandbox session."""
     try:
@@ -186,12 +189,22 @@ def run_benchmark_in_sandbox(
     if os.path.dirname(system_path):
         session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/{os.path.dirname(system_path)}")
 
-    # Copy benchmark runner and target system files to sandbox
+    # Copy the shared benchmark implementation, runner, and target system files.
+    session.copy_to_runtime(
+        "benchmark/benchmark_base.py",
+        f"{SANDBOX_WORKSPACE_DIR}/benchmark/benchmark_base.py",
+    )
     session.copy_to_runtime(
         runner_script,
         f"{SANDBOX_WORKSPACE_DIR}/{runner_script}",
     )
     session.copy_to_runtime(system_path, f"{SANDBOX_WORKSPACE_DIR}/{system_path}")
+
+    if dataset_file:
+        if not os.path.isfile(dataset_file):
+            logger.error("Benchmark dataset was not found: %s", dataset_file)
+            return False
+        session.copy_to_runtime(dataset_file, f"{SANDBOX_WORKSPACE_DIR}/{dataset_file}")
 
     if extra_files:
         for fpath in extra_files:
@@ -199,8 +212,21 @@ def run_benchmark_in_sandbox(
 
     if required_packages:
         for pkg in required_packages:
-            show_result = session.execute_command(f"pip show {shlex.quote(pkg)}")
-            if getattr(show_result, "exit_code", 1) != 0:
+            try:
+                requirement = Requirement(pkg)
+            except Exception as exc:
+                logger.error("Invalid benchmark dependency %r: %s", pkg, exc)
+                return False
+            show_result = session.execute_command(f"pip show {shlex.quote(requirement.name)}")
+            installed_version = None
+            for line in str(getattr(show_result, "stdout", "") or "").splitlines():
+                if line.startswith("Version:"):
+                    installed_version = line.partition(":")[2].strip()
+                    break
+            installed = getattr(show_result, "exit_code", 1) == 0 and installed_version is not None
+            if installed and requirement.specifier and installed_version is not None:
+                installed = installed_version in requirement.specifier
+            if not installed:
                 install_result = session.execute_command(f"pip install {shlex.quote(pkg)}")
                 if getattr(install_result, "exit_code", 1) != 0:
                     logger.error("Failed to install benchmark dependency: %s", pkg)
@@ -218,7 +244,8 @@ def run_benchmark_in_sandbox(
         output_chunks.append(chunk)
         print(chunk, end="", flush=True)
 
-    bench_succeeded = "__ADAS_BENCH_EXIT__0" in "".join(output_chunks)
+    exit_code = parse_streaming_exit_code(output_chunks, "BENCH")
+    bench_succeeded = exit_code == 0
     if not bench_succeeded:
         logger.error("Benchmark execution failed in container")
         return False

@@ -64,6 +64,9 @@ jobs:
         source adasvenv/bin/activate
         if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; elif [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+    - name: Create empty environment file for sandbox tests
+      run: touch .env
+
     - name: Run Pytest
       run: |
         source adasvenv/bin/activate

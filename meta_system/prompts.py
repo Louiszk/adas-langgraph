@@ -112,6 +112,11 @@ Tools in the `tools` dictionary can also be invoked directly inside nodes:
 result = tools["SearchTool"].invoke({"query": "LangGraph documentation"})
 ```
 
+### Tool Reliability
+
+- Tool implementations that perform network or other blocking I/O must use explicit, finite timeouts.
+- Tool implementations that start subprocesses must use explicit, finite subprocess timeouts and handle timeout failures.
+
 ---
 
 ## Parallel Execution & State Reducers

@@ -15,7 +15,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.environment import is_provisioning_script
+from adas_core.environment import extract_literal_package_requirements, is_provisioning_script
 from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_identifier, sanitize_test_id
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import TaskSpec, TestCaseSpec
@@ -167,25 +167,7 @@ def extract_code_block(content: str) -> str:
 
 def extract_validation_requirements(code: str) -> list[str]:
     """Read a literal VALIDATION_REQUIREMENTS declaration from validator source."""
-    try:
-        for node in ast.parse(code).body:
-            if isinstance(node, ast.Assign):
-                if any(
-                    isinstance(target, ast.Name) and target.id == "VALIDATION_REQUIREMENTS" for target in node.targets
-                ):
-                    value = ast.literal_eval(node.value)
-                    return [str(item) for item in value] if isinstance(value, list) else []
-            elif isinstance(node, ast.AnnAssign):
-                if (
-                    isinstance(node.target, ast.Name)
-                    and node.target.id == "VALIDATION_REQUIREMENTS"
-                    and node.value is not None
-                ):
-                    value = ast.literal_eval(node.value)
-                    return [str(item) for item in value] if isinstance(value, list) else []
-    except (SyntaxError, ValueError, TypeError) as exc:
-        logger.debug("Could not parse VALIDATION_REQUIREMENTS: %r", exc)
-    return []
+    return extract_literal_package_requirements(code, "VALIDATION_REQUIREMENTS")
 
 
 CASE_VALIDATION_SYSTEM_PROMPT = """You are generating automated validation test code for an AI agentic system.
@@ -626,9 +608,12 @@ class AutomaticValidation:
         except Exception as exc:
             raise RuntimeError(f"Validation generation for '{test_case.id}' failed: {exc!r}") from exc
 
-        function_names = {
-            node.name for node in parsed.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        function_names = {node.name for node in parsed.body if isinstance(node, ast.FunctionDef)}
+        async_function_names = {node.name for node in parsed.body if isinstance(node, ast.AsyncFunctionDef)}
+        if expected_fn in async_function_names:
+            raise ValueError(
+                f"Generated validator '{expected_fn}' must be synchronous; async validators are unsupported."
+            )
         if expected_fn not in function_names:
             raise ValueError(
                 f"Generated validation code for '{test_case.id}' is missing expected function '{expected_fn}'."

@@ -11,7 +11,7 @@ def run_mmlupro_benchmark_in_sandbox(session, system_name: str) -> bool:
         benchmark_name="MMLUPro",
         system_name=system_name,
         runner_script="benchmark/MMLUPro/run_mmlupro_bench.py",
-        required_packages=["datasets"],
+        dataset_file="benchmark/MMLUPro/problem_subset.json",
     )
 
 

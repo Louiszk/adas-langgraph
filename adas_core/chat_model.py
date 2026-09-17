@@ -782,13 +782,16 @@ class ChatModel:
 
             # LangChain's public API supports provider tools with structured output only via json_schema + strict + include_raw.
             structured_tools = [*self._bound_client_tools, *self.default_tools]
+            structured_kwargs = dict(kwargs)
+            structured_kwargs.pop("method", None)
+            structured_kwargs.pop("strict", None)
             structured = self._raw_model.with_structured_output(
                 schema,
                 method="json_schema",
                 strict=True,
                 include_raw=True,
                 tools=structured_tools,
-                **kwargs,
+                **structured_kwargs,
             )
         else:
             structured = self._runnable.with_structured_output(schema, include_raw=True, **kwargs)

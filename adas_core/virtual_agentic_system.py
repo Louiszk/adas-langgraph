@@ -86,18 +86,19 @@ class VirtualAgenticSystem:
         return "AgentState defined successfully."
 
     def _parse_from_import(self, imp_str: str):
-        """Parse strings like 'from module import a, b as c' into (module, set(names))"""
+        """Parse a from-import into its module and complete alias bindings."""
         clean = imp_str.strip()
         if not clean.startswith("from ") or " import " not in clean:
             return None, None
         try:
-            parts = clean.split(" import ", 1)
-            left = parts[0].strip()
-            module = left[len("from ") :].strip() if left.startswith("from ") else left
-            names_part = parts[1].strip()
-            names = {name.split(" as ")[0].strip() for name in names_part.split(",") if name.strip()}
-            return module, names
-        except Exception:
+            tree = ast.parse(clean)
+            if len(tree.body) != 1 or not isinstance(tree.body[0], ast.ImportFrom):
+                return None, None
+            node = tree.body[0]
+            module = "." * node.level + (node.module or "")
+            bindings = {(alias.name, alias.asname) for alias in node.names}
+            return module, bindings
+        except SyntaxError:
             return None, None
 
     def deduplicate_imports(
@@ -322,7 +323,7 @@ class VirtualAgenticSystem:
 
             func_def_node = None
             for node in tree.body:
-                # TODO: allow AsyncFunctionDef nodes
+                # TODO: allow AsyncFunctionDef tools and nodes
                 if (
                     isinstance(node, ast.AsyncFunctionDef)
                     and component_type
@@ -330,11 +331,12 @@ class VirtualAgenticSystem:
                     in [
                         "node",
                         "conditional_edge",
+                        "tool",
                     ]
                 ):
                     return (
                         None,
-                        "ERROR: Asynchronous node and conditional-edge functions are not currently supported. "
+                        "ERROR: Asynchronous tool, node, and conditional-edge functions are not currently supported. "
                         "Use 'def'.",
                     )
                 if isinstance(node, ast.FunctionDef):

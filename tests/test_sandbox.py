@@ -2,6 +2,8 @@
 Specification tests for sandbox runtime initialization and configuration.
 """
 
+import contextlib
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -454,3 +456,27 @@ class TestSetupSandboxUtilities:
         mock_session.execute_command.return_value = mock_result
 
         assert run_sandbox_preflight(mock_session) is False
+
+    def test_default_preflight_does_not_install_validation_packages(self, monkeypatch, tmp_path):
+        import sandbox.run_preflight as run_preflight
+
+        manifest_path = tmp_path / "setup_manifest.json"
+        manifest_path.write_text('{"required_packages": ["setup-package"]}', encoding="utf-8")
+        task_spec = MagicMock()
+        installed_packages = MagicMock()
+
+        monkeypatch.setattr(sys, "argv", ["run_preflight.py", "--task-dir", str(tmp_path)])
+        with (
+            patch.object(run_preflight.TaskSpec, "from_file", return_value=task_spec),
+            patch.object(run_preflight, "validation_requirements") as validation_requirements,
+            patch.object(run_preflight, "ensure_packages_installed", installed_packages),
+            patch.object(run_preflight, "fixture_paths_for_profile", return_value=[]),
+            patch.object(run_preflight, "isolated_case_workspace", return_value=contextlib.nullcontext({})),
+            patch.object(run_preflight, "process_fixture_lifecycle", return_value=contextlib.nullcontext()),
+            patch.object(run_preflight, "external_url_overrides", return_value=contextlib.nullcontext()),
+            patch.object(run_preflight, "run_preflight_check", return_value=(True, "ok")),
+        ):
+            assert run_preflight.main() == 0
+
+        validation_requirements.assert_not_called()
+        installed_packages.assert_called_once_with(["setup-package"])

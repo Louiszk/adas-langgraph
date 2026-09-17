@@ -82,6 +82,16 @@ def test_runtime_profile_rejects_wrong_provider_and_unknown_fixture(tmp_path):
         RuntimeResourceProfile.model_validate({"overrides": {"transit_api": {"provider": "external", "url": "x"}}})
 
 
+def test_runtime_profile_validates_and_deduplicates_additional_packages():
+    profile = RuntimeResourceProfile.model_validate(
+        {"additional_packages": ["external-client>=2", "external-client>=2", "urllib3"]}
+    )
+
+    assert profile.additional_packages == ["external-client>=2", "urllib3"]
+    with pytest.raises(ValidationError, match="Invalid runtime package"):
+        RuntimeResourceProfile.model_validate({"additional_packages": ["bad package; rm -rf /"]})
+
+
 def test_runtime_profile_validates_local_source_shape(tmp_path):
     spec = _spec()
     file_profile = RuntimeResourceProfile.model_validate(

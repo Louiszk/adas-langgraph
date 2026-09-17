@@ -54,6 +54,20 @@ class RuntimeResourceProfile(BaseModel):
 
     default_provider: Literal["fixture"] = "fixture"
     overrides: dict[str, RuntimeResourceOverride] = Field(default_factory=dict)
+    additional_packages: list[str] = Field(
+        default_factory=list,
+        description="Additional Python package requirements needed only for this runtime invocation.",
+    )
+
+    @field_validator("additional_packages")
+    @classmethod
+    def validate_additional_packages(cls, packages: list[str]) -> list[str]:
+        from adas_core.environment import validate_package_requirement
+
+        invalid = [package for package in packages if not validate_package_requirement(package)]
+        if invalid:
+            raise ValueError(f"Invalid runtime package requirement(s): {invalid}")
+        return list(dict.fromkeys(packages))
 
     @classmethod
     def from_file(cls, path: Path | str) -> RuntimeResourceProfile:

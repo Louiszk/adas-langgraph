@@ -99,6 +99,7 @@ def main() -> int:
     design_status = "in_progress"
     design_message = ""
     passing_candidate_found = False
+    finalization_succeeded = False
     success = False
     task_spec: TaskSpec | None = None
     problem_statement = ""
@@ -125,6 +126,18 @@ def main() -> int:
                 raise RuntimeError(f"Error initializing from file: {e}") from e
         else:
             target_agentic_system = VirtualAgenticSystem(system_name)
+
+        # Do not allow artifacts from an earlier invocation to satisfy this run's
+        # completion check. Optimization has already loaded its source system.
+        escaped_name = escape_system_name(system_name)
+        for artifact_path in (
+            Path(SANDBOX_GENERATED_SYSTEMS_DIR) / f"{escaped_name}.pkl",
+            Path(SANDBOX_GENERATED_SYSTEMS_DIR) / f"{escaped_name}.py",
+        ):
+            try:
+                artifact_path.unlink()
+            except FileNotFoundError:
+                pass
 
         task_dir_path = str(task_spec_path.parent) if task_spec_path.parent.name else SANDBOX_TASK_SETUP_DIR
 
@@ -165,6 +178,8 @@ def main() -> int:
                     if out.get("design_completed"):
                         logger.info("Design completed.")
                         design_completed = True
+                    if out.get("finalization_succeeded") is True:
+                        finalization_succeeded = True
                     if isinstance(out.get("design_status"), str):
                         design_status = out["design_status"]
                     if isinstance(out.get("design_message"), str):
@@ -189,7 +204,16 @@ def main() -> int:
             design_status = "completed"
             design_message = design_message or "A passing candidate was finalized."
 
+        final_artifacts_valid = False
         if design_completed and os.path.exists(final_system_path) and os.path.exists(final_code_path):
+            try:
+                with open(final_system_path, "rb") as f:
+                    pickle.load(f)
+                final_artifacts_valid = True
+            except Exception as exc:
+                logger.error("Final system pickle is invalid: %r", exc)
+
+        if finalization_succeeded and final_artifacts_valid:
             metrics["status"] = design_status if design_status in {"completed", "partial"} else "completed"
             metrics["design_status"] = metrics["status"]
             metrics["design_message"] = design_message
@@ -198,6 +222,8 @@ def main() -> int:
             metrics["status"] = "error"
             if not design_completed:
                 reason = "Design loop ended without design_completed flag."
+            elif not finalization_succeeded:
+                reason = "Design completed without a successful finalization signal."
             else:
                 reason = f"Expected artifacts not found: {final_system_path} and/or {final_code_path}"
             logger.error(f"Design did not complete successfully: {reason}")

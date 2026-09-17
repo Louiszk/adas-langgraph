@@ -200,6 +200,33 @@ Run via standard module invocation (`python -m scripts.orchestrator`) or direct 
   python -m scripts.orchestrator --task target --task-spec example_specs/data_analyst_agent/task.json --system-names data_analyst_iter1_gpt --state-file path/to/state.json
   ```
 
+#### Benchmark dataset preparation
+
+Benchmark datasets are intentionally not committed to the repository. Run these commands from the repository root before using the benchmark wrappers.
+
+GSM-Hard and MMLU-Pro use the Hugging Face `datasets` package:
+
+```bash
+python -m pip install datasets
+python benchmark/GSMHard/create_gsmhard_subset.py
+python benchmark/MMLUPro/create_mmlupro_subset.py
+```
+
+These scripts download `reasoning-machines/gsm-hard` and `TIGER-Lab/MMLU-Pro`, select the deterministic 120-item subsets, and write:
+
+```text
+benchmark/GSMHard/problem_subset.json
+benchmark/MMLUPro/problem_subset.json
+```
+
+FEVER requires the source `train.jsonl` file to be downloaded separately from the [FEVER dataset](https://fever.ai/dataset/fever.html). Place it at `benchmark/FEVER/train.jsonl`, then run:
+
+```bash
+python benchmark/FEVER/create_fever_subset.py
+```
+
+The script writes the deterministic label-balanced subset to `benchmark/FEVER/problem_subset.json` (up to 40 examples per label).
+
 #### 2. HPC / SLURM Wrappers
 Thin wrappers isolate SLURM `#SBATCH` directives and environment activation from application logic:
 * `scripts/slurm_benchmark.sh`: Submits benchmark jobs via `sbatch scripts/slurm_benchmark.sh`.
