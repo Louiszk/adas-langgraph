@@ -55,11 +55,12 @@ BASE_GENERATION_SYSTEM_PROMPT = """You are generating automated setup and fixtur
 
 MANDATORY PACKAGE DECLARATION RULE:
 If ANY third-party or non-standard library packages are needed by your code (e.g. neo4j, psycopg2-binary, duckdb, fastapi, uvicorn, mcp, langchain-mcp-adapters, faker, pandas, httpx), you must declare them at the top of the file:
-SETUP_REQUIREMENTS = ["package1", "package2"]
-If no third-party packages are needed, declare:
-SETUP_REQUIREMENTS = []
-
-CODE CONSTRAINTS:
+ SETUP_REQUIREMENTS = ["package1", "package2"]
+ If no third-party packages are needed, declare:
+ SETUP_REQUIREMENTS = []
+`adas_core` is provided locally, never add it to SETUP_REQUIREMENTS; import `adas_core` directly when needed.
+ 
+ CODE CONSTRAINTS:
 - Output valid, complete, runnable Python code only.
 - Do not use conversational filler, markdown explanations, or commentary outside the code.
 - Never hardcode absolute host paths, sandbox paths, service URLs, or connection strings. Use the function arguments and declared environment variables supplied at runtime.

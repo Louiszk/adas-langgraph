@@ -175,10 +175,11 @@ CASE_VALIDATION_SYSTEM_PROMPT = """You are generating automated validation test 
 MANDATORY RULES:
 1. PACKAGE DECLARATION:
    If any third-party packages are needed for validation (e.g. pandas, neo4j, duckdb, pytest), declare at top:
-   VALIDATION_REQUIREMENTS = ["pkg1", "pkg2"]
-   Otherwise:
-   VALIDATION_REQUIREMENTS = []
-
+    VALIDATION_REQUIREMENTS = ["pkg1", "pkg2"]
+    Otherwise:
+    VALIDATION_REQUIREMENTS = []
+   `adas_core` is provided locally, never add it to VALIDATION_REQUIREMENTS; import `adas_core` directly when needed.
+ 
 2. DEDICATED VALIDATOR FUNCTION:
    You must define a dedicated validator function named:
    `def validate_{clean_id}(final_state: dict[str, Any], workspace_dirs: dict[str, str]) -> tuple[bool, str]:`
@@ -210,6 +211,8 @@ MANDATORY RULES:
      Collect the image path(s) and pass them via the `images` parameter:
      `eval_result = judge.evaluate(prompt=evaluation_prompt, images=[str(output_dir / "chart.png")])`
      LLMJudge automatically encodes images and inspects them using vision capabilities.
+   - Judge-context budget: do not interpolate an unbounded full state, tool history, or raw logs into the prompt.
+     Select only fields relevant to the rubric and truncate repetitive material as necessary to stay within the context limit.
 
 5. SCOPE ASSERTIONS STRICTLY TO DECLARED OUTPUTS & GROUND TRUTH:
    - Use deterministic assertions strictly for hard operational boundaries (e.g., state schema types, file existence/creation, side-effect counts, structural constraints like character limits, API audit logs).

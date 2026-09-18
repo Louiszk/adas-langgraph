@@ -22,6 +22,7 @@ DEFAULT_EXCLUDED_PACKAGES: list[str] = [
     "podman",
     "python-dotenv",
     "setuptools",
+    "adas-core",
 ]
 
 

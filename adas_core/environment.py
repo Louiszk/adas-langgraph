@@ -108,7 +108,8 @@ def extract_literal_package_requirements(code: str, declaration_name: str) -> li
         invalid = [requirement for requirement in requirements if not validate_package_requirement(requirement)]
         if invalid:
             raise ValueError(f"Invalid {declaration_name} package requirement(s): {invalid}")
-        return requirements
+
+        return [requirement for requirement in requirements if not is_package_excluded(requirement)]
 
     return []
 
@@ -191,8 +192,9 @@ def ensure_packages_installed(
     if invalid:
         raise ValueError(f"Invalid package requirement(s): {invalid}")
 
+    installable = [pkg for pkg in packages if not is_package_excluded(pkg)]
     missing: list[str] = []
-    for pkg in packages:
+    for pkg in installable:
         pkg_clean = pkg.strip()
         if not is_package_installed(pkg_clean):
             missing.append(pkg_clean)

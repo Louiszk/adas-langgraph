@@ -165,6 +165,9 @@ trimmed_messages = trim_messages(
 )
 ```
 
+Additionally, make sure each new message is within the context limit on its own.
+For example, truncate repetitive material as necessary or summarize parts of it.
+
 ---
 
 ## Understanding the TaskSpec Contract
