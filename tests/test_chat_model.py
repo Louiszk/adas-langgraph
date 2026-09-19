@@ -23,6 +23,7 @@ from adas_core.chat_model import (
     _normalize_ai_message,
     convert_to_messages,
     execute_tool_calls,
+    has_image_content,
     usage_scope,
     validate_tool_history,
 )
@@ -299,16 +300,12 @@ class TestCompositionAndToolBinding:
         assert record.total_tokens == 16
 
     def test_normalize_ai_message_text_blocks(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[{"type": "text", "text": "Hello, world!", "index": 0}])
         normalized = _normalize_ai_message(msg)
         assert normalized.content == "Hello, world!"
         assert isinstance(normalized.content, str)
 
     def test_normalize_ai_message_tool_calls(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(
             content=[{"type": "function_call", "name": "calc", "arguments": "{}", "call_id": "c1"}],
             tool_calls=[{"name": "calc", "args": {}, "id": "c1"}],
@@ -319,23 +316,17 @@ class TestCompositionAndToolBinding:
         assert len(normalized.tool_calls) == 1
 
     def test_normalize_ai_message_empty_content(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[])
         normalized = _normalize_ai_message(msg)
         assert normalized.content == ""
         assert isinstance(normalized.content, str)
 
     def test_normalize_ai_message_preserves_multimodal(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[{"type": "image_url", "image_url": {"url": "http://img"}}])
         normalized = _normalize_ai_message(msg)
         assert isinstance(normalized.content, list)
 
     def test_normalize_ai_message_preserves_reasoning_in_additional_kwargs(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         reasoning_block = {"type": "reasoning", "id": "rs_123", "summary": "Thinking about steps"}
         func_block = {"type": "function_call", "name": "foo", "call_id": "c1"}
         msg = AIMessage(
@@ -349,8 +340,6 @@ class TestCompositionAndToolBinding:
 
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_invoke_normalizes_responses_api_blocks_to_string(self, mock_chat_openai):
-        from adas_core.chat_model import ChatModel
-
         mock_model = MagicMock()
         mock_model.invoke.return_value = AIMessage(content=[{"type": "text", "text": "Normalized answer"}])
         mock_chat_openai.return_value = mock_model
@@ -362,12 +351,6 @@ class TestCompositionAndToolBinding:
 
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_invoke_with_tool_calls_and_execute_tool_calls(self, mock_chat_openai):
-        from langchain_core.messages import HumanMessage
-        from langchain_core.tools import tool
-
-        from adas_core.chat_model import ChatModel
-        from adas_core.tool_calls import execute_tool_calls, validate_tool_history
-
         @tool
         def add(a: int, b: int) -> int:
             """Add two numbers."""
@@ -890,8 +873,6 @@ class TestVisionCapabilities:
         assert ModelRegistry.is_registered_model("openai", "gpt-5.6-luna-unintended-model") is False
 
     def test_has_image_content_detection(self):
-        from adas_core.chat_model import has_image_content
-
         msg_text = [HumanMessage(content="Simple text prompt")]
         assert has_image_content(msg_text) is False
 

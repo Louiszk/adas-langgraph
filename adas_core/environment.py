@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
+from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
@@ -82,15 +83,15 @@ def extract_literal_package_requirements(code: str, declaration_name: str) -> li
 
     for node in parsed.body:
         value_node: ast.expr | None = None
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == declaration_name for target in node.targets
-        ):
-            value_node = node.value
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == declaration_name
-            and node.value is not None
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == declaration_name for target in node.targets)
+            or (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == declaration_name
+                and node.value is not None
+            )
         ):
             value_node = node.value
 
@@ -137,15 +138,11 @@ def is_package_excluded(
 def is_package_installed(package_name: str) -> bool:
     """Check if a package distribution is installed in the current environment and satisfies any version constraints."""
     try:
-        from packaging.requirements import Requirement
-
         req = Requirement(package_name)
         canonical = canonicalize_name(req.name)
         try:
             installed_ver = importlib.metadata.version(canonical)
-            if req.specifier and installed_ver not in req.specifier:
-                return False
-            return True
+            return not (req.specifier and installed_ver not in req.specifier)
         except (importlib.metadata.PackageNotFoundError, ValueError):
             if req.specifier:
                 return False

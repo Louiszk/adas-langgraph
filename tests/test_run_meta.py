@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import dill
 import pytest
 
 from adas_core.task_spec import TaskSpec
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from sandbox import run_meta
 
 
@@ -53,10 +55,6 @@ def test_run_meta_success_with_design_completed(
     metrics_dir.mkdir(parents=True)
 
     monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
-
-    import dill
-
-    from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
     mock_workflow = MagicMock()
 
@@ -166,10 +164,6 @@ def test_run_meta_exits_with_code_1_when_pickle_exists_but_design_incomplete(
     monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
 
     # Existing pickle and py from a prior run (e.g. optimization baseline)
-    import dill
-
-    from adas_core.virtual_agentic_system import VirtualAgenticSystem
-
     old_pickle = sandbox_gen_dir / "OptimizedSystem.pkl"
     old_pickle.write_bytes(dill.dumps(VirtualAgenticSystem("OptimizedSystem")))
     old_py = sandbox_gen_dir / "OptimizedSystem.py"
@@ -207,10 +201,6 @@ def test_run_meta_does_not_accept_stale_same_name_artifacts(
     sandbox_gen_dir.mkdir(parents=True)
     metrics_dir.mkdir(parents=True)
     monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
-
-    import dill
-
-    from adas_core.virtual_agentic_system import VirtualAgenticSystem
 
     (sandbox_gen_dir / "StaleSystem.pkl").write_bytes(dill.dumps(VirtualAgenticSystem("StaleSystem")))
     (sandbox_gen_dir / "StaleSystem.py").write_text("# stale artifact", encoding="utf-8")

@@ -215,8 +215,8 @@ def main() -> int:
                 if val_path is None:
                     logger.error("Failed to generate frozen validation module for TaskSpec '%s'.", task_spec.name)
                     return 1
-    except Exception as exc:
-        logger.exception("Task setup or validation failed for '%s': %s", task_spec.name, exc)
+    except Exception:
+        logger.exception("Task setup or validation failed for '%s'", task_spec.name)
         return 1
 
     session = StreamingSandboxSession(
@@ -251,8 +251,8 @@ def main() -> int:
         else:
             logger.error("Failed to set up sandbox environment")
             return 1
-    except Exception as e:
-        logger.exception(f"Error during execution: {e}")
+    except Exception:
+        logger.exception("Error during execution")
         return 1
     finally:
         logger.info("Session closed.")

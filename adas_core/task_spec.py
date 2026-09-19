@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adas_core.environment import validate_package_requirement
 from adas_core.exceptions import FeatureNotImplementedError
 from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier, validate_system_name
 from config import settings
@@ -789,8 +790,6 @@ class TaskSpec(BaseModel):
     @field_validator("required_packages")
     @classmethod
     def validate_required_packages(cls, v: list[str]) -> list[str]:
-        from adas_core.environment import validate_package_requirement
-
         for pkg in v:
             if not validate_package_requirement(pkg):
                 raise ValueError(f"Invalid package requirement '{pkg}'. Must be a valid PEP 508 requirement.")

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +17,10 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from adas_core.environment import get_installed_packages_from_metrics, load_environment  # noqa: E402
-from adas_core.helpers import sanitize_identifier  # noqa: E402
-from config.logging import get_logger, setup_logging  # noqa: E402
-from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
+from adas_core.environment import get_installed_packages_from_metrics, load_environment
+from adas_core.helpers import sanitize_identifier
+from config.logging import get_logger, setup_logging
+from sandbox.sandbox import ensure_cached_sandbox_image
 
 logger = get_logger("orchestrator")
 
@@ -317,7 +317,7 @@ class ResultAggregator:
         """Export a human-readable text summary."""
         txt_path = self.results_dir / filename
         with txt_path.open("w", encoding="utf-8") as f:
-            f.write(f"Benchmark Test Summary ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n")
+            f.write(f"Benchmark Test Summary ({datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')})\n")
             f.write(f"Job ID: {job_id}\n")
             f.write("=========================================\n")
             for rec in records:

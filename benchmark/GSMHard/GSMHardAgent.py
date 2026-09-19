@@ -84,9 +84,11 @@ def tool_node(state):
 
 
 def execution_condition(state):
-    if state.get("code_execution_error", False):
-        if len([msg for msg in state["messages"] if isinstance(msg, AIMessage)]) <= 2:
-            return "AgentNode"
+    if (
+        state.get("code_execution_error", False)
+        and len([msg for msg in state["messages"] if isinstance(msg, AIMessage)]) <= 2
+    ):
+        return "AgentNode"
 
     return END
 

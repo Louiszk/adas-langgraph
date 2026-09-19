@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adas_core.environment import validate_package_requirement
 from adas_core.task_spec import DatabaseFixtureSpec, FileFixtureSpec, MCPFixtureSpec, MockServiceFixtureSpec, TaskSpec
 
 
@@ -62,8 +63,6 @@ class RuntimeResourceProfile(BaseModel):
     @field_validator("additional_packages")
     @classmethod
     def validate_additional_packages(cls, packages: list[str]) -> list[str]:
-        from adas_core.environment import validate_package_requirement
-
         invalid = [package for package in packages if not validate_package_requirement(package)]
         if invalid:
             raise ValueError(f"Invalid runtime package requirement(s): {invalid}")
@@ -150,12 +149,11 @@ def stage_local_overrides(
         if not destination_rel:
             continue
         source, destination = Path(override.source or ""), input_dir / destination_rel
-        if destination.exists():
-            if source.is_dir() or destination.is_dir() != source.is_dir():
-                if destination.is_dir():
-                    shutil.rmtree(destination)
-                else:
-                    destination.unlink()
+        if destination.exists() and (source.is_dir() or destination.is_dir() != source.is_dir()):
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
         if source.is_dir():
             shutil.copytree(source, destination)
         else:

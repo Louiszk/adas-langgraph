@@ -141,8 +141,6 @@ class TestRunBenchmarkInSandbox:
                 runner_script="benchmark/gsm8k/run_gsm8k_bench.py",
             )
 
-        from adas_core.environment import SANDBOX_WORKSPACE_DIR
-
         mock_session.copy_to_runtime.assert_any_call(
             "generated_systems/TestSystem.py",
             f"{SANDBOX_WORKSPACE_DIR}/generated_systems/TestSystem.py",

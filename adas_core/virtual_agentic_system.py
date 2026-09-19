@@ -336,8 +336,10 @@ class VirtualAgenticSystem:
                 ):
                     return (
                         None,
-                        "ERROR: Asynchronous tool, node, and conditional-edge functions are not currently supported. "
-                        "Use 'def'.",
+                        (
+                            "ERROR: Asynchronous tool, node, and conditional-edge functions are not currently supported. "
+                            "Use 'def'."
+                        ),
                     )
                 if isinstance(node, ast.FunctionDef):
                     func_def_node = node
@@ -666,11 +668,10 @@ class VirtualAgenticSystem:
             return False
 
         for node in all_defined_nodes:
-            if node not in visited:
-                if _detect_standard_edge_cycle(node):
-                    errors.append(
-                        "The standard edges form a cycle, resulting in an infinite loop without an exit condition."
-                    )
-                    break
+            if node not in visited and _detect_standard_edge_cycle(node):
+                errors.append(
+                    "The standard edges form a cycle, resulting in an infinite loop without an exit condition."
+                )
+                break
 
         return sorted(set(errors))

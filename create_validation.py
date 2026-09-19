@@ -106,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
         )
         return 0 if val_path is not None else 1
-    except Exception as exc:
-        logger.error("Validation generation failed: %r", exc, exc_info=True)
+    except Exception:
+        logger.exception("Validation generation failed")
         return 1
 
 

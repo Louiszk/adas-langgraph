@@ -385,11 +385,7 @@ def assemble_validation_module(
         excluded_names = {"VALIDATION_REQUIREMENTS", "VALIDATORS", "validate", target_func_name}
 
         def _is_excluded(name: str, excluded: set[str] = excluded_names) -> bool:
-            if name in excluded:
-                return True
-            if name.startswith("__") and name.endswith("__"):
-                return True
-            return False
+            return name in excluded or (name.startswith("__") and name.endswith("__"))
 
         names_to_rename: set[str] = set()
         for node in parsed.body:
@@ -401,11 +397,7 @@ def assemble_validation_module(
                     for name in _extract_target_names(target):
                         if not _is_excluded(name):
                             names_to_rename.add(name)
-            elif isinstance(node, ast.AnnAssign):
-                for name in _extract_target_names(node.target):
-                    if not _is_excluded(name):
-                        names_to_rename.add(name)
-            elif isinstance(node, ast.AugAssign):
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
                 for name in _extract_target_names(node.target):
                     if not _is_excluded(name):
                         names_to_rename.add(name)
@@ -432,18 +424,16 @@ def assemble_validation_module(
         for node in parsed.body:
             if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                 continue
-            if isinstance(node, ast.Assign):
-                if any(
-                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
-                    for target in node.targets
-                    for name in _extract_target_names(target)
-                ):
-                    continue
-            if isinstance(node, ast.AnnAssign):
-                if any(
-                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS") for name in _extract_target_names(node.target)
-                ):
-                    continue
+            if isinstance(node, ast.Assign) and any(
+                name in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
+                for target in node.targets
+                for name in _extract_target_names(target)
+            ):
+                continue
+            if isinstance(node, ast.AnnAssign) and any(
+                name in ("VALIDATION_REQUIREMENTS", "VALIDATORS") for name in _extract_target_names(node.target)
+            ):
+                continue
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "validate":
                 continue
             kept_nodes.append(node)
@@ -570,9 +560,11 @@ class AutomaticValidation:
             context_parts.extend(
                 [
                     "",
-                    "FIXTURE GENERATION CODE:\n"
-                    "The following Python scripts generate the input fixtures mounted for this test case. "
-                    "Inspect their exact column names, schemas, formulas, and planted edge cases to write grounded, accurate assertions:",
+                    (
+                        "FIXTURE GENERATION CODE:\n"
+                        "The following Python scripts generate the input fixtures mounted for this test case. "
+                        "Inspect their exact column names, schemas, formulas, and planted edge cases to write grounded, accurate assertions:"
+                    ),
                     "\n\n".join(generator_blocks),
                 ]
             )
@@ -580,8 +572,10 @@ class AutomaticValidation:
             context_parts.extend(
                 [
                     "",
-                    "FIXTURE GENERATION CODE:\n"
-                    "No input fixtures are mounted for this test case. Rely on final_state or outputs produced during execution.",
+                    (
+                        "FIXTURE GENERATION CODE:\n"
+                        "No input fixtures are mounted for this test case. Rely on final_state or outputs produced during execution."
+                    ),
                 ]
             )
 

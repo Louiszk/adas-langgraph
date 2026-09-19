@@ -302,66 +302,74 @@ class TestDirectoryIsolationAndWorkspace:
             assert (ws["input"] / "generate_data.py").exists()
 
     def test_isolated_case_workspace_rejects_unsafe_allowed_files(self, tmp_path):
-        import pytest
-
         fixtures_dir = tmp_path / "fixtures"
         fixtures_dir.mkdir()
         (fixtures_dir / "safe.csv").write_text("safe")
 
         # Rejection of directory traversal
-        with pytest.raises(ValueError, match="path traversal"):
-            with isolated_case_workspace(
+        with (
+            pytest.raises(ValueError, match="path traversal"),
+            isolated_case_workspace(
                 base_dir=tmp_path / "runs",
                 run_id="run_bad_traversal",
                 case_id="case_1",
                 fixtures_dir=fixtures_dir,
                 allowed_files=["../../outside.txt"],
-            ):
-                pass
+            ),
+        ):
+            pass
 
         # Rejection of absolute paths
-        with pytest.raises(ValueError, match="absolute paths are not allowed"):
-            with isolated_case_workspace(
+        with (
+            pytest.raises(ValueError, match="absolute paths are not allowed"),
+            isolated_case_workspace(
                 base_dir=tmp_path / "runs",
                 run_id="run_bad_abs",
                 case_id="case_1",
                 fixtures_dir=fixtures_dir,
                 allowed_files=["/etc/passwd"],
-            ):
-                pass
+            ),
+        ):
+            pass
 
         # Rejection of Windows drive absolute paths
-        with pytest.raises(ValueError, match="absolute paths are not allowed"):
-            with isolated_case_workspace(
+        with (
+            pytest.raises(ValueError, match="absolute paths are not allowed"),
+            isolated_case_workspace(
                 base_dir=tmp_path / "runs",
                 run_id="run_bad_drive",
                 case_id="case_1",
                 fixtures_dir=fixtures_dir,
                 allowed_files=["C:/Windows/System32"],
-            ):
-                pass
+            ),
+        ):
+            pass
 
         # Rejection of empty paths
-        with pytest.raises(ValueError, match="path cannot be empty"):
-            with isolated_case_workspace(
+        with (
+            pytest.raises(ValueError, match="path cannot be empty"),
+            isolated_case_workspace(
                 base_dir=tmp_path / "runs",
                 run_id="run_bad_empty",
                 case_id="case_1",
                 fixtures_dir=fixtures_dir,
                 allowed_files=[""],
-            ):
-                pass
+            ),
+        ):
+            pass
 
         # Rejection of root/current directory paths
-        with pytest.raises(ValueError, match="empty or root normalized path"):
-            with isolated_case_workspace(
+        with (
+            pytest.raises(ValueError, match="empty or root normalized path"),
+            isolated_case_workspace(
                 base_dir=tmp_path / "runs",
                 run_id="run_bad_dot",
                 case_id="case_1",
                 fixtures_dir=fixtures_dir,
                 allowed_files=["."],
-            ):
-                pass
+            ),
+        ):
+            pass
 
 
 class TestPreflightExecution:

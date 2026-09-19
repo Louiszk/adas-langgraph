@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from adas_core.chat_model import UsageRecorder
 from adas_core.task_spec import (
     ArchitectureContract,
     ExternalDatabaseSeedSpec,
@@ -18,6 +21,7 @@ from adas_core.task_spec import (
 )
 from adas_core.test_runner import execute_test_suite
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
+from meta_system.tools import test_system as run_test_system
 
 
 def _create_dummy_system(name: str = "TestSystem") -> VirtualAgenticSystem:
@@ -99,8 +103,6 @@ class TestExecuteTestSuite:
         assert events.read_text(encoding="utf-8").splitlines() == ["seed:adas_test_orders", "cleanup:adas_test_orders"]
 
     def test_execute_test_suite_runs_selected_process_fixture(self, tmp_path):
-        import socket
-
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -323,11 +325,6 @@ class TestExecuteTestSuite:
         assert any("corrupted AST" in err for err in result.structural_errors)
 
     def test_test_system_catches_unhandled_exception(self, tmp_path):
-        from unittest.mock import patch
-
-        from adas_core.task_spec import ArchitectureContract, TaskSpec
-        from meta_system.tools import test_system
-
         system = _create_dummy_system("CrashSystem")
         spec = TaskSpec(
             name="CrashTask",
@@ -344,7 +341,7 @@ class TestExecuteTestSuite:
         }
 
         with patch("meta_system.tools.execute_test_suite", side_effect=RuntimeError("catastrophic failure")):
-            output = test_system(state)
+            output = run_test_system(state)
 
         assert "ERROR: running the test_system tool:" in output
         assert "catastrophic failure" in output
@@ -388,9 +385,6 @@ class TestExecuteTestSuite:
         assert result.max_iterations == result.case_results[0].total_iterations
 
     def test_test_system_bases_averages_on_executed_count(self, tmp_path):
-        from adas_core.task_spec import ArchitectureContract, TaskSpec
-        from meta_system.tools import test_system
-
         system = _create_dummy_system("EarlyStopAveragesSystem")
         spec = TaskSpec(
             name="EarlyStopTask",
@@ -417,7 +411,7 @@ class TestExecuteTestSuite:
             "messages": [],
         }
 
-        output = test_system(state)
+        output = run_test_system(state)
         assert "Overall: FAILED" in output
         assert state["test_metrics"]["executed_count"] == 1
         assert state["test_metrics"]["total"] == 4
@@ -425,10 +419,6 @@ class TestExecuteTestSuite:
         assert "Avg. Graph Iterations:" in output
 
     def test_incomplete_usage_marks_telemetry_none(self, tmp_path):
-        from unittest.mock import patch
-
-        from adas_core.chat_model import UsageRecorder
-
         system = _create_dummy_system("IncompleteUsageSystem")
         test_cases = [TestCaseSpec(id="case_1", description="first", turns=[{"query": "1"}])]
 

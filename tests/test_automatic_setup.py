@@ -1,9 +1,11 @@
+import json
 import textwrap
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
 
+import create_setup
 from adas_core.automatic_setup import (
     AutomaticSetup,
     ensure_automatic_setup,
@@ -273,7 +275,7 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         )
 
         setup = AutomaticSetup(llm=mock_llm)
-        code, reqs = setup.generate_custom_fixture_script(spec, custom_fixture)
+        _code, reqs = setup.generate_custom_fixture_script(spec, custom_fixture)
 
         assert "gitpython" in reqs
         invoked_messages = mock_llm.invoke.call_args[0][0]
@@ -358,11 +360,6 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
             AutomaticSetup(llm=mock_llm).generate_preflight_script(spec, [])
 
     def test_create_setup_cli_verify_flag(self, tmp_path):
-        import json
-
-        import create_setup
-        from adas_core.task_spec import TaskSpec
-
         spec_file = tmp_path / "task.json"
         spec_data = {
             "name": "VerifySetupTask",

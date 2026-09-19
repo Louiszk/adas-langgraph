@@ -1,3 +1,4 @@
+import argparse
 import concurrent.futures
 import json
 import os
@@ -7,9 +8,11 @@ from typing import Any
 
 from packaging.requirements import Requirement
 
+from adas_core.chat_model import ChatModel
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
 from adas_core.helpers import parse_streaming_exit_code, validate_python_module_path
-from config.logging import get_logger
+from config.logging import get_logger, setup_logging
+from sandbox import sandbox
 
 logger = get_logger("benchmark_base")
 
@@ -137,8 +140,6 @@ def run_benchmark_parallel(
 
 def reset_target_usage() -> None:
     """Reset target usage telemetry in ChatModel."""
-    from adas_core.chat_model import ChatModel
-
     ChatModel.usage_metrics.setdefault("target_usage", {})["overall"] = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -149,8 +150,6 @@ def reset_target_usage() -> None:
 
 def extract_target_usage(duration_seconds: float) -> dict[str, Any]:
     """Extract captured target token and call usage from ChatModel."""
-    from adas_core.chat_model import ChatModel
-
     usage = ChatModel.usage_metrics.get("target_usage", {}).get("overall", {})
     return {
         "duration_seconds": duration_seconds,
@@ -272,11 +271,6 @@ def benchmark_cli_main(
     run_in_sandbox_fn: Callable[[Any, str], bool],
 ) -> int:
     """Unified CLI entry point for benchmark sandbox runners."""
-    import argparse
-
-    from config.logging import setup_logging
-    from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
-
     setup_logging()
 
     parser = argparse.ArgumentParser(description=f"Run {benchmark_name} benchmark in a sandboxed environment")
@@ -306,7 +300,7 @@ def benchmark_cli_main(
         logger.error(str(exc))
         return 1
 
-    session = StreamingSandboxSession(
+    session = sandbox.StreamingSandboxSession(
         image=args.base_image,
         verbose=True,
         container_type=args.container,
@@ -316,7 +310,7 @@ def benchmark_cli_main(
         session.open()
         logger.info("Sandbox session opened")
 
-        if setup_sandbox_environment(session, args.reinstall):
+        if sandbox.setup_sandbox_environment(session, args.reinstall):
             success = run_in_sandbox_fn(session, args.system)
             if success:
                 logger.info("Benchmark finished successfully!")
@@ -328,8 +322,8 @@ def benchmark_cli_main(
             logger.error("Failed to set up sandbox environment")
             return 1
 
-    except Exception as e:
-        logger.exception(f"Error during benchmark execution: {e!s}")
+    except Exception:
+        logger.exception("Error during benchmark execution")
         return 1
     finally:
         logger.info("Closing session...")

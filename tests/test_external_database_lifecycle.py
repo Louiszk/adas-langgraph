@@ -91,9 +91,11 @@ def test_lifecycle_cleans_after_workflow_or_validator_failure(tmp_path, monkeypa
     _write_script(tmp_path, _script(events))
     monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
 
-    with pytest.raises(RuntimeError, match="workflow failed"):
-        with external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path):
-            raise RuntimeError("workflow failed")
+    with (
+        pytest.raises(RuntimeError, match="workflow failed"),
+        external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path),
+    ):
+        raise RuntimeError("workflow failed")
 
     assert events.read_text(encoding="utf-8").splitlines()[-1] == "cleanup:adas_test_orders"
 
@@ -104,9 +106,11 @@ def test_lifecycle_attempts_cleanup_after_seed_failure_without_leaking_credentia
     secret = "postgres://super-secret@example/test"
     monkeypatch.setenv("EVALUATION_DB_URI", secret)
 
-    with pytest.raises(FixtureExecutionError, match="orders_seed.*failed during setup") as exc_info:
-        with external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="orders_seed.*failed during setup") as exc_info,
+        external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path),
+    ):
+        pass
 
     assert secret not in str(exc_info.value)
     assert events.read_text(encoding="utf-8").splitlines() == ["seed:adas_test_orders", "cleanup:adas_test_orders"]
@@ -116,9 +120,11 @@ def test_lifecycle_rejects_missing_connection_variable_by_name_only(tmp_path, mo
     _write_script(tmp_path, _script(tmp_path / "events.txt"))
     monkeypatch.delenv("EVALUATION_DB_URI", raising=False)
 
-    with pytest.raises(FixtureExecutionError, match="EVALUATION_DB_URI") as exc_info:
-        with external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="EVALUATION_DB_URI") as exc_info,
+        external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path),
+    ):
+        pass
 
     assert "postgres://" not in str(exc_info.value)
 
@@ -132,9 +138,11 @@ def test_lifecycle_requires_cleanup_contract_before_seeding(tmp_path, monkeypatc
     )
     monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
 
-    with pytest.raises(FixtureExecutionError, match="must define both"):
-        with external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="must define both"),
+        external_database_seed_lifecycle(_task_spec(), ["orders_seed"], tmp_path),
+    ):
+        pass
 
 
 def test_lifecycle_exports_and_restores_namespace_environment(tmp_path, monkeypatch):
@@ -193,9 +201,11 @@ def test_lifecycle_rejects_multiple_seeds_without_explicit_namespace_environment
         )
     )
 
-    with pytest.raises(FixtureExecutionError, match="require an explicit namespace_env"):
-        with external_database_seed_lifecycle(spec, None, tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="require an explicit namespace_env"),
+        external_database_seed_lifecycle(spec, None, tmp_path),
+    ):
+        pass
 
 
 def test_lifecycle_exports_only_explicit_namespace_environments_for_multiple_seeds(tmp_path, monkeypatch):
@@ -250,9 +260,11 @@ def test_lifecycle_rejects_namespace_export_collision_with_selected_seed_connect
     monkeypatch.setenv("EVALUATION_DB_URI", "postgres://secret@example/test")
     monkeypatch.setenv("SECONDARY_DB_URI", "postgres://other@example/test")
 
-    with pytest.raises(FixtureExecutionError, match="collides with connection configuration"):
-        with external_database_seed_lifecycle(spec, ["orders_seed", "other_seed"], tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="collides with connection configuration"),
+        external_database_seed_lifecycle(spec, ["orders_seed", "other_seed"], tmp_path),
+    ):
+        pass
 
 
 def test_lifecycle_rejects_namespace_export_collision_with_process_fixture(tmp_path):
@@ -260,6 +272,8 @@ def test_lifecycle_rejects_namespace_export_collision_with_process_fixture(tmp_p
     spec.test_fixtures.external_database_seeds[0].namespace_env = "MCP_URL"
     spec.test_fixtures.mcps.append(MCPFixtureSpec(name="tools", port=8090, url_env="MCP_URL"))
 
-    with pytest.raises(FixtureExecutionError, match="process-fixture URL"):
-        with external_database_seed_lifecycle(spec, ["orders_seed", "tools"], tmp_path):
-            pass
+    with (
+        pytest.raises(FixtureExecutionError, match="process-fixture URL"),
+        external_database_seed_lifecycle(spec, ["orders_seed", "tools"], tmp_path),
+    ):
+        pass

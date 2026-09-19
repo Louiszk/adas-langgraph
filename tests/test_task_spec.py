@@ -1,8 +1,12 @@
 import json
+import py_compile
+from pathlib import Path
 
 import pytest
+import tiktoken
 from pydantic import ValidationError
 
+from adas_core.automatic_validation import is_validation_manifest_current, load_validation_module
 from adas_core.chat_model import ModelCapabilities, ModelRegistry
 from adas_core.task_spec import (
     ApiKeyRequirement,
@@ -23,6 +27,7 @@ from adas_core.task_spec import (
     ToolRequirement,
 )
 from config import settings
+from create_setup import setup_manifest_is_current
 
 
 class TestTaskSpecModel:
@@ -470,8 +475,6 @@ class TestTaskSpecModel:
             )
 
     def test_vision_judge_checks_default_model_capability(self, monkeypatch):
-        from config import settings
-
         ModelRegistry.register_capabilities("openai", "text-default-model", ModelCapabilities(supports_vision=False))
         monkeypatch.setattr(settings, "validation_model", "text-default-model")
         with pytest.raises(ValidationError, match="not vision-capable"):
@@ -826,8 +829,6 @@ class TestTaskSpecValidation:
 
 class TestExampleSpecs:
     def test_example_specs_conform_to_schema(self):
-        from pathlib import Path
-
         repo_root = Path(__file__).resolve().parent.parent
         example_specs_dir = repo_root / "example_specs"
         assert example_specs_dir.is_dir(), "example_specs directory should exist"
@@ -856,8 +857,6 @@ class TestExampleSpecs:
 
 class TestBenchmarkSpecs:
     def test_benchmark_specs_conform_to_schema(self):
-        from pathlib import Path
-
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
         assert benchmark_dir.is_dir(), "benchmark directory should exist"
@@ -880,11 +879,6 @@ class TestBenchmarkSpecs:
             assert spec.dev_suite[0].id.startswith("case_0_smoke"), f"First case in {spec_path} should be smoke test"
 
     def test_benchmark_setup_manifests_are_current(self):
-        from pathlib import Path
-
-        from adas_core.automatic_validation import is_validation_manifest_current
-        from create_setup import setup_manifest_is_current
-
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
         spec_files = sorted(benchmark_dir.glob("*/spec/task.json"))
@@ -911,10 +905,6 @@ class TestBenchmarkSpecs:
             )
 
             # Compile preflight and validator scripts to ensure valid Python syntax
-            import py_compile
-
-            from adas_core.automatic_validation import load_validation_module
-
             py_compile.compile(str(preflight_file), doraise=True)
             py_compile.compile(str(validation_file), doraise=True)
 
@@ -1025,8 +1015,6 @@ class TestBenchmarkSpecs:
         assert "# API Reference\nEndpoint details." in loaded
 
     def test_additional_documentation_skips_invalid_utf8_and_respects_token_budget(self, tmp_path, monkeypatch):
-        import tiktoken
-
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir()
         (docs_dir / "invalid.txt").write_bytes(b"\xff\xfe")

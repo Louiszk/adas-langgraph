@@ -210,8 +210,8 @@ def main(argv: list[str] | None = None) -> int:
             container=args.container,
             base_image=args.base_image,
         )
-    except Exception as exc:
-        logger.exception("Task setup failed for '%s': %s", args.task_spec, exc)
+    except Exception:
+        logger.exception("Task setup failed for '%s'", args.task_spec)
         return 1
     return 0
 

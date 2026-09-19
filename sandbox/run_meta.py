@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any, cast
 
@@ -231,8 +232,6 @@ def main() -> int:
             success = False
 
     except Exception as e:
-        import traceback
-
         error_traceback = traceback.format_exc()
         logger.error(f"Error running meta system: {e!s}\n{error_traceback}")
 

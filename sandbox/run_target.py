@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +72,7 @@ def main() -> int:
     # --- Metrics Initialization ---
     start_time = time.time()
     step_counter = 0
-    run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = args.run_id or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
 
     metrics: dict[str, Any] = {
         "system_name": args.system_name,
@@ -169,28 +170,26 @@ def main() -> int:
                 else contextlib.nullcontext()
             )
             url_context = external_url_overrides(task_spec, runtime_profile) if task_spec else contextlib.nullcontext()
-            with fixture_context, url_context:
-                with usage_scope(system="target", run_id=run_id):
-                    for mode, payload in workflow.stream(
-                        initial_state,
-                        config={"recursion_limit": TARGET_SYSTEM_RECURSION_LIMIT},
-                        stream_mode=["updates", "values"],
-                    ):
-                        if mode == "updates" and isinstance(payload, dict):
-                            step_counter += 1
-                            logger.info(f"[Step {step_counter}]")
-                            for node_name, state_update in payload.items():
-                                logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
+            with fixture_context, url_context, usage_scope(system="target", run_id=run_id):
+                for mode, payload in workflow.stream(
+                    initial_state,
+                    config={"recursion_limit": TARGET_SYSTEM_RECURSION_LIMIT},
+                    stream_mode=["updates", "values"],
+                ):
+                    if mode == "updates" and isinstance(payload, dict):
+                        step_counter += 1
+                        logger.info(f"[Step {step_counter}]")
+                        for node_name, state_update in payload.items():
+                            logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
 
-                        elif mode == "values":
-                            final_state_snapshot = payload
+                    elif mode == "values":
+                        final_state_snapshot = payload
 
         metrics["status"] = "completed"
         logger.info("System execution finished successfully")
 
     except Exception as e:
         exit_code = 1
-        import traceback
 
         metrics["status"] = "error"
         error_info = {

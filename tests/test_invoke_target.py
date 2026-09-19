@@ -6,13 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import invoke_target
+from adas_core.environment import get_installed_packages_from_metrics
 from adas_core.task_spec import TaskSpec
 
 
 class TestInvokeTargetCLI:
     def test_shared_metrics_parser_reads_metrics_string(self, tmp_path):
-        from adas_core.environment import get_installed_packages_from_metrics
-
         metrics_dir = tmp_path / "generated_systems" / "metrics"
         metrics_dir.mkdir(parents=True)
         metrics_path = metrics_dir / "Target.json"

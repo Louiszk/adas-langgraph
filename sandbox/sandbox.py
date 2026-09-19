@@ -295,9 +295,7 @@ def check_podman_running():
         from podman import PodmanClient  # type: ignore
 
         client = PodmanClient()  # type: ignore
-        if client.info()["host"]["remoteSocket"] is None:
-            return False
-        return True
+        return client.info()["host"]["remoteSocket"] is not None
     except (ImportError, Exception):
         return False
 

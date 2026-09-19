@@ -45,8 +45,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
     code_lines.append("")
 
     if system.imports:
-        for imp in system.imports:
-            code_lines.append(imp)
+        code_lines.extend(system.imports)
 
     if system.utility_code:
         code_lines.extend(["", "# ===== Utilities =====", system.utility_code, ""])

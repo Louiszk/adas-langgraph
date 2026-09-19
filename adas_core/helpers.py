@@ -166,7 +166,7 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
     from adas_core.environment import normalize_package_name
 
     excluded_canonical = {normalize_package_name(p) for p in exclude_packages}
-    result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True)
+    result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True, check=False)
 
     packages = []
     for line in result.stdout.strip().split("\n")[2:]:  # Skip header lines
@@ -301,11 +301,14 @@ def truncate_state(state: dict[str, Any], max_chars: int = 1200) -> dict[str, An
 
             # Truncate the content of each message
             for msg in cleaned_msgs:
-                if hasattr(msg, "content") and isinstance(msg.content, str):
-                    if len(msg.content) > (max_chars + len(msg_content_truncated_template)):
-                        start_chunk = msg.content[: (max_chars // 2)]
-                        end_chunk = msg.content[-(max_chars // 2) :]
-                        msg.content = start_chunk + msg_content_truncated_template + end_chunk
+                if (
+                    hasattr(msg, "content")
+                    and isinstance(msg.content, str)
+                    and len(msg.content) > (max_chars + len(msg_content_truncated_template))
+                ):
+                    start_chunk = msg.content[: (max_chars // 2)]
+                    end_chunk = msg.content[-(max_chars // 2) :]
+                    msg.content = start_chunk + msg_content_truncated_template + end_chunk
 
             truncated_state[key] = cleaned_msgs
         else:

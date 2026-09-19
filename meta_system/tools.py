@@ -100,6 +100,7 @@ def install_package(package_name: str, state: dict[str, Any]) -> str:
             stderr=subprocess.STDOUT,
             text=True,
             shell=False,
+            check=False,
         )
 
         if process.returncode == 0:

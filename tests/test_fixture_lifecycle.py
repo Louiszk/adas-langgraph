@@ -90,9 +90,11 @@ def test_process_fixture_lifecycle_reports_crashing_script_output(tmp_path):
     )
     spec = TestFixturesSpec(mock_services=[MockServiceFixtureSpec(name="broken", port=port)])
 
-    with pytest.raises(FixtureStartupError, match="safe diagnostic"):
-        with process_fixture_lifecycle(spec, None, tmp_path, _workspace(tmp_path)):
-            pass
+    with (
+        pytest.raises(FixtureStartupError, match="safe diagnostic"),
+        process_fixture_lifecycle(spec, None, tmp_path, _workspace(tmp_path)),
+    ):
+        pass
 
 
 def test_process_fixture_lifecycle_rejects_an_already_occupied_port(tmp_path, monkeypatch):
@@ -106,11 +108,13 @@ def test_process_fixture_lifecycle_rejects_an_already_occupied_port(tmp_path, mo
     listener.listen()
     monkeypatch.delenv("WEATHER_BASE_URL", raising=False)
     try:
-        with pytest.raises(FixtureStartupError, match="already occupied before launch"):
-            with process_fixture_lifecycle(
+        with (
+            pytest.raises(FixtureStartupError, match="already occupied before launch"),
+            process_fixture_lifecycle(
                 TestFixturesSpec(mock_services=[fixture]), ["weather"], tmp_path, _workspace(tmp_path)
-            ):
-                pass
+            ),
+        ):
+            pass
     finally:
         listener.close()
     assert "WEATHER_BASE_URL" not in os.environ
@@ -130,11 +134,13 @@ def test_mcp_endpoint_readiness_accepts_post_only_route_and_rejects_wrong_path(t
     wrong_port = _free_port()
     (fixtures_dir / "mock_wrong_tools.py").write_text(_mcp_endpoint_script(wrong_port), encoding="utf-8")
     wrong_fixture = MCPFixtureSpec(name="wrong_tools", port=wrong_port, endpoint_path="/wrong", url_env="WRONG_MCP_URL")
-    with pytest.raises(FixtureStartupError, match="returned HTTP 404"):
-        with process_fixture_lifecycle(
+    with (
+        pytest.raises(FixtureStartupError, match="returned HTTP 404"),
+        process_fixture_lifecycle(
             TestFixturesSpec(mcps=[wrong_fixture]), ["wrong_tools"], tmp_path, _workspace(tmp_path / "wrong")
-        ):
-            pass
+        ),
+    ):
+        pass
     deadline = time.monotonic() + 2
     while True:
         try:

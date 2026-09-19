@@ -72,9 +72,11 @@ def run_target_system_in_sandbox(
 ) -> bool:
     """Constructs and executes the command to run the target system inside the sandbox."""
     cmd_parts = [
-        "python3 "
-        f"{shlex.quote(SANDBOX_WORKSPACE_DIR + '/run_target.py')} "
-        f"--system_name={shlex.quote(system_name)} --run-id={shlex.quote(run_id)}"
+        (
+            "python3 "
+            f"{shlex.quote(SANDBOX_WORKSPACE_DIR + '/run_target.py')} "
+            f"--system_name={shlex.quote(system_name)} --run-id={shlex.quote(run_id)}"
+        )
     ]
     if task_dir:
         cmd_parts.append(f"--task-dir={shlex.quote(task_dir)}")
@@ -212,7 +214,7 @@ def main() -> int:
         logger.error(str(exc))
         return 1
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
 
     cases: list[tuple[str, dict[str, Any]]] = []
 
@@ -291,8 +293,8 @@ def main() -> int:
                     container=args.container,
                     base_image=args.base_image,
                 )
-    except Exception as exc:
-        logger.exception("TaskSpec loading or setup failed: %s", exc)
+    except Exception:
+        logger.exception("TaskSpec loading or setup failed")
         return 1
     if args.runtime_config:
         if task_spec is None:
@@ -400,8 +402,8 @@ def main() -> int:
             logger.error("Failed to set up the sandbox environment.")
             return 1
 
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred: {e}")
+    except Exception:
+        logger.exception("An unexpected error occurred")
         return 1
 
     finally:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage
 
@@ -16,6 +16,7 @@ from adas_core.automatic_taskspec import (
     run_interactive_wizard,
 )
 from adas_core.task_spec import TaskSpec
+from create_taskspec import main, parse_args
 
 SAMPLE_VALID_TASKSPEC_DICT = {
     "schema_version": "1.0",
@@ -368,18 +369,12 @@ class TestInteractiveWizard:
 
 class TestCreateTaskSpecCLI:
     def test_parse_args(self):
-        from create_taskspec import parse_args
-
         args = parse_args(["--name", "CustomAgent", "--goal", "Do task", "--non-interactive"])
         assert args.name == "CustomAgent"
         assert args.goal == "Do task"
         assert args.non_interactive is True
 
     def test_main_cli_execution(self, monkeypatch, tmp_path):
-        from unittest.mock import patch
-
-        from create_taskspec import main
-
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = AIMessage(content=f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```")
 
