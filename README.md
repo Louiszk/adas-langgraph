@@ -4,12 +4,13 @@ A framework for the automated design, testing, and optimization of graph-structu
 
 Manual engineering of complex, multi-agent workflows is time-intensive and limits the exploration of effective architectures. This project provides a **meta-system** that iteratively builds, tests, and refines target agentic systems using the [LangGraph](https://github.com/langchain-ai/langgraph) library. By operating on a code-based search space, the meta-system can autonomously discover novel control flows, integrate custom tools, and install external dependencies.
 
+Generate a precise TaskSpec and reproducible setup and validation artifacts only once, and then run hundreds of automated design iterations over the same contract.
+
 ## Key Features & Findings
 
-* **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent uses `manage_node`, `manage_tool`, `manage_conditional_edge`, `manage_edge`, and `manage_utilities` to make targeted changes to a virtual system.
-* **Explicit Lifecycle and Routing:** Nodes, tools, conditional edges, and utilities use `create`, `update`, and `delete` actions. Conditional edges require an explicit `path_map` from each condition-function return value to a destination node or `END`.
-* **Safe Graph and Utility Changes:** Deleting a node also removes standard edges connected to it and conditional edges that route to it. Utility deletion identifies the exact top-level `function`, `class`, or `assignment`, so same-named definitions can be removed unambiguously.
-* **Automated Validation Guardrails:** Relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends, invalid path-map destinations, or infinite loops), and improves target system accuracy.
+* **Modular Component Editing:** Instead of whole-file replacements or unified diffs, this framework uses component-level modifications. The meta-agent uses `manage_node`, `manage_tool`, `manage_conditional_edge`, `manage_edge`, and `manage_utilities` to make targeted changes (`create`, `update`, `delete`) to a virtual system.
+* **Materialization in LangGraph:** The virtual system is rendered as executable Python source that compiles a LangGraph `StateGraph`. Utility parsing identifies the exact top-level `function`, `class`, or `assignment`, so same-named definitions can be removed unambiguously.
+* **Automated Validation Guardrails:** The framework relies on programmatic test validation and structural graph checks rather than purely subjective LLM-as-a-judge approaches. This prevents premature finalization, effectively catches structural flaws (like dead ends, invalid path-map destinations, or infinite loops), and improves target system accuracy.
 
 ## Repository Structure
 
@@ -77,6 +78,8 @@ docker --version
 
 ADAS provides a 5-stage lifecycle for defining, provisioning, validating, designing, and executing agentic systems.
 
+CLI agents can use [`adas-skill.md`](adas-skill.md) to create and verify the TaskSpec, setup, and validation artifacts that form the foundation for the design loop.
+
 ### 1. Define Task Specification (`create_taskspec.py`)
 Synthesize a schema-validated task specification (`task.json`) defining the agent's goals, architecture contract, resource requirements, fixtures, and evaluation suite:
 ```bash
@@ -93,10 +96,10 @@ Pre-built specifications are available in the `example_specs/` and `benchmark/` 
 - `benchmark/FEVER/spec/task.json`: Factual claim verification with Wikipedia retrieval.
 - `benchmark/MMLUPro/spec/task.json`: Computer science multiple-choice reasoning benchmark.
 
-Task specifications can also specify `additional_documentation` as a list of relative file paths (e.g., `["example_docs/mcp-documentation.md"]`). When provided, the system automatically loads and injects this reference documentation into the agent's system prompt, providing target design guidance (e.g. library patterns, protocol references).
+Task specifications can also specify `additional_documentation` as a list of relative file paths (e.g., `["example_docs/mcp-documentation.md"]`). When provided, the system automatically loads and injects this reference documentation into the agent's system prompt, providing target design guidance (e.g., library patterns, protocol references).
 
 ### 2. Synthesize Fixtures & Setup (`create_setup.py`)
-Materialize deterministic sandbox fixtures (files, sqlite tables, mock endpoints) and preflight verification scripts based on `task.json`:
+Materialize deterministic sandbox fixtures (files, SQLite tables, mock endpoints) and preflight verification scripts based on `task.json`:
 ```bash
 python create_setup.py --task-spec example_specs/data_analyst_agent/task.json
 ```
@@ -105,7 +108,7 @@ python create_setup.py --task-spec example_specs/data_analyst_agent/task.json
 
 Use `resource_manifest` for user-owned resources: files, directories, HTTP APIs, Streamable HTTP MCP servers, and external databases. Declare paths or connection details as resources and required credentials as API keys; the preflight step verifies availability, while ADAS does not start or mock them.
 
-Use `test_fixtures` for deterministic, harness-owned evaluation inputs. ADAS can generate file data, create and seed embedded SQLite/DuckDB database files, and run mock HTTP or Streamable HTTP MCP services for a test case. External databases such as Postgres, Neo4j, Redis, and Qdrant cannot be mocked by this fixture mechanism; they must be available beforehand. An `external_database_seeds` entry may seed one only for development tests, and only through a declared database resource, named connection environment variables (never credentials), and an isolated engine-safe namespace that the lifecycle drops after every case. Direct `invoke_target` never seeds external databases by default.
+Use `test_fixtures` for deterministic, harness-owned evaluation inputs. ADAS can generate file data, create and seed embedded SQLite/DuckDB database files, and run mock HTTP or Streamable HTTP MCP services for a test case. External databases such as Postgres, Neo4j, Redis, and Qdrant cannot be mocked by this fixture mechanism; they must be available beforehand. An `external_database_seeds` entry may seed one only for development tests, and only through a declared database resource, named connection environment variables (never credentials), and an isolated engine-safe namespace that the lifecycle drops after every case. Direct invocations of `invoke_target` never seed external databases by default.
 
 For a direct invocation, use a runtime profile to replace selected fixture providers without changing the target system. The profile keys are declared fixture IDs: use `external` with a URL for HTTP/MCP fixtures, or `local_file` with a host file/directory path for file and embedded SQLite/DuckDB fixtures. ADAS stages local paths into the isolated workspace at the fixture's declared path.
 
@@ -141,7 +144,7 @@ python invoke_design.py --task-spec example_specs/data_analyst_agent/task.json -
 * `--task-spec`: Required path to validated `task.json`.
 * `--system-name`: Target system output identifier (defaults to TaskSpec name).
 * `--auto-setup`: Automatically generate frozen fixtures and preflight artifacts if missing or stale.
-* `--optimize-system`: Specify existing target system name to optimize/refine.
+* `--optimize-system`: Specify an existing target system name to optimize/refine.
 * `--reinstall`: Force re-installation of dependencies.
 
 ### 5. Execute Target System (`invoke_target.py`)
@@ -172,7 +175,7 @@ The batch file is a JSON array of objects, each with an `id` and a `state`:
 
 Each case produces its own output directory (`data/output/<system>_<timestamp>_<id>/`) and metrics file. A single `--runtime-config` applies to all cases in the batch.
 
-This can be used to evaluate a designed system against held-out test cases not seen during design. Combine with a custom post-processing script to validate outputs against expected results.
+This can be used to evaluate a designed system against held-out test cases not seen during design. Combine it with a custom post-processing script to validate outputs against expected results.
 
 ---
 
@@ -200,7 +203,7 @@ Run via standard module invocation (`python -m scripts.orchestrator`) or direct 
   python -m scripts.orchestrator --task target --task-spec example_specs/data_analyst_agent/task.json --system-names data_analyst_iter1_gpt --state-file path/to/state.json
   ```
 
-#### Benchmark dataset preparation
+#### Benchmark Dataset Preparation
 
 Benchmark datasets are intentionally not committed to the repository. Run these commands from the repository root before using the benchmark wrappers.
 
