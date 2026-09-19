@@ -839,9 +839,11 @@ class TestExampleSpecs:
         expected_dirs = {
             "botanical_agent",
             "data_analyst_agent",
+            "github_agent",
             "mcp_agent",
             "movie_agent",
             "neo4j_agent",
+            "research_agent",
             "social_agent",
         }
         found_dirs = {p.parent.name for p in spec_files}
@@ -853,6 +855,25 @@ class TestExampleSpecs:
             assert spec.system_goal, f"Spec at {spec_path} must have a system_goal"
             assert spec.architecture_contract.execution_mode in {"single_turn", "multi_turn"}
             assert len(spec.dev_suite) > 0, f"Spec at {spec_path} must have at least one test case in dev_suite"
+
+    def test_example_specs_test_cases_and_documentation_contract(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        example_specs_dir = repo_root / "example_specs"
+        spec_files = sorted(example_specs_dir.glob("*/task.json"))
+
+        for spec_path in spec_files:
+            spec = TaskSpec.from_file(spec_path)
+            case_ids = [case.id for case in spec.dev_suite]
+            assert len(case_ids) == len(set(case_ids)), f"Duplicate test case IDs in {spec_path}"
+            for case in spec.dev_suite:
+                assert case.id, f"Test case ID cannot be empty in {spec_path}"
+                assert case.description, f"Test case {case.id} in {spec_path} must have a description"
+                assert len(case.turns) > 0, f"Test case {case.id} in {spec_path} must have at least one turn"
+
+            for doc_path in spec.additional_documentation:
+                full_path = repo_root / doc_path
+                assert full_path.is_file(), f"Declared doc file {doc_path} for {spec_path} does not exist"
+                assert full_path.stat().st_size > 0, f"Declared doc file {doc_path} for {spec_path} is empty"
 
 
 class TestBenchmarkSpecs:
