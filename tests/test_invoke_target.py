@@ -1,14 +1,59 @@
 """Specification tests for invoke_target CLI."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import invoke_target
+from adas_core.environment import get_installed_packages_from_metrics
 from adas_core.task_spec import TaskSpec
 
 
 class TestInvokeTargetCLI:
+    def test_shared_metrics_parser_reads_metrics_string(self, tmp_path):
+        metrics_dir = tmp_path / "generated_systems" / "metrics"
+        metrics_dir.mkdir(parents=True)
+        metrics_path = metrics_dir / "Target.json"
+        metrics_path.write_text(json.dumps({"installed_packages": "scipy==1.14.1 seaborn"}), encoding="utf-8")
+
+        assert get_installed_packages_from_metrics(metrics_path) == ["scipy==1.14.1", "seaborn"]
+
+    def test_provision_target_dependencies_installs_in_sandbox(self, tmp_path, monkeypatch):
+        metrics_dir = tmp_path / "generated_systems" / "metrics"
+        metrics_dir.mkdir(parents=True)
+        (metrics_dir / "Target.json").write_text(
+            json.dumps({"installed_packages": ["scikit-learn==1.5.1", "seaborn"]}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        session = MagicMock()
+        session.execute_command.return_value.exit_code = 0
+
+        assert invoke_target.provision_target_dependencies(session, "Target")
+        command = session.execute_command.call_args.args[0]
+        assert command == "python3 -m pip install --disable-pip-version-check scikit-learn==1.5.1 seaborn"
+
+    def test_provision_target_dependencies_skips_without_metrics(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session = MagicMock()
+
+        assert invoke_target.provision_target_dependencies(session, "Target")
+        session.execute_command.assert_not_called()
+
+    def test_provision_target_dependencies_includes_runtime_profile_packages(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session = MagicMock()
+        session.execute_command.return_value.exit_code = 0
+
+        assert invoke_target.provision_target_dependencies(
+            session, "Target", ["external-client>=2", "external-client>=2"]
+        )
+
+        assert (
+            session.execute_command.call_args.args[0]
+            == "python3 -m pip install --disable-pip-version-check 'external-client>=2'"
+        )
+
     def test_invoke_target_rejects_invalid_system_name(self, monkeypatch):
         with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
             monkeypatch.setattr(
@@ -45,7 +90,6 @@ class TestInvokeTargetCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -136,6 +180,80 @@ class TestInvokeTargetCLI:
         with pytest.raises(SystemExit, match="2"):
             invoke_target.main()
 
+    @pytest.mark.parametrize(
+        "batch_data",
+        [
+            [{"state": {}}],
+            [{"id": "case_1"}],
+            [{"id": "case_1", "state": []}],
+            [{"id": "../escape", "state": {}}],
+            [{"id": "case/one", "state": {}}],
+            [{"id": ".", "state": {}}],
+            [{"id": "", "state": {}}],
+            [{"id": 1, "state": {}}],
+        ],
+    )
+    def test_batch_rejects_malformed_entries(self, batch_data, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(json.dumps(batch_data), encoding="utf-8")
+
+        with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        mock_session_cls.assert_not_called()
+
+    def test_batch_rejects_duplicate_ids(self, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(
+            '[{"id": "case_1", "state": {}}, {"id": "case_1", "state": {}}]',
+            encoding="utf-8",
+        )
+
+        with patch("invoke_target.StreamingSandboxSession") as mock_session_cls:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        mock_session_cls.assert_not_called()
+
+    def test_batch_runs_safe_ids_and_returns_failure_if_any_case_fails(self, tmp_path, monkeypatch):
+        batch_file = tmp_path / "batch.json"
+        batch_file.write_text(
+            '[{"id": "case-1", "state": {"query": "one"}}, {"id": "case_2", "state": {"query": "two"}}]',
+            encoding="utf-8",
+        )
+        mock_session = MagicMock()
+        mock_session.execute_command.return_value = ""
+
+        with (
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.run_target_system_in_sandbox", side_effect=[True, False]) as mock_run_target,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "TestSystem", "--batch", str(batch_file)],
+            )
+            assert invoke_target.main() == 1
+
+        assert mock_run_target.call_count == 2
+        run_ids = [call.kwargs["run_id"] for call in mock_run_target.call_args_list]
+        assert all(run_id.endswith(case_id) for run_id, case_id in zip(run_ids, ["case-1", "case_2"], strict=True))
+        assert all("/" not in run_id and "\\" not in run_id for run_id in run_ids)
+        copied_destinations = [
+            call.kwargs["dest_dir"] for call in mock_session.copy_dir_from_runtime.call_args_list[:2]
+        ]
+        assert copied_destinations == [
+            f"data/output/TestSystem_{run_ids[0]}",
+            f"data/output/TestSystem_{run_ids[1]}",
+        ]
+
     def test_run_target_system_in_sandbox_command_formatting(self):
         mock_session = MagicMock()
         mock_session.execute_command_streaming.return_value = ["__ADAS_TARGET_EXIT__0\n"]
@@ -155,6 +273,28 @@ class TestInvokeTargetCLI:
         assert "--task-dir=/sandbox/workspace/task_setup" in cmd
         assert "--state='{" + '"query": "test"' + "}'" in cmd
 
+    def test_run_target_rejects_nonzero_final_marker(self):
+        mock_session = MagicMock()
+        mock_session.execute_command_streaming.return_value = ["\n__ADAS_TARGET_EXIT__1\n"]
+
+        assert not invoke_target.run_target_system_in_sandbox(
+            session=mock_session,
+            system_name="MySystem",
+            state={},
+            run_id="run_123",
+        )
+
+    def test_run_target_requires_marker_to_be_final_line_for_legacy_sessions(self):
+        mock_session = MagicMock()
+        mock_session.execute_command_streaming.return_value = ["\n__ADAS_TARGET_EXIT__0\ncommand failed\n"]
+
+        assert not invoke_target.run_target_system_in_sandbox(
+            session=mock_session,
+            system_name="MySystem",
+            state={},
+            run_id="run_123",
+        )
+
     def test_invoke_target_aborts_on_preflight_failure(self, tmp_path, monkeypatch):
         spec_file = tmp_path / "task.json"
         spec_data = {
@@ -163,7 +303,6 @@ class TestInvokeTargetCLI:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -196,3 +335,78 @@ class TestInvokeTargetCLI:
             exit_code = invoke_target.main()
             assert exit_code == 1
             mock_run_target.assert_not_called()
+
+    def test_task_spec_requires_current_setup_and_validation_without_auto_setup(self, tmp_path, monkeypatch):
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "StaleTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [],
+        }
+        TaskSpec.model_validate(spec_data).save(spec_file)
+
+        with (
+            patch("invoke_target.setup_manifest_is_current", return_value=False),
+            patch("invoke_target.StreamingSandboxSession") as mock_session_cls,
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                ["invoke_target.py", "--system-name", "StaleTask_v0", "--task-spec", str(spec_file), "--state", "{}"],
+            )
+            assert invoke_target.main() == 1
+
+        mock_session_cls.assert_not_called()
+
+    def test_auto_setup_regenerates_only_stale_artifacts(self, tmp_path, monkeypatch):
+        spec_file = tmp_path / "task.json"
+        spec_data = {
+            "name": "StaleTask",
+            "system_goal": "Goal",
+            "architecture_contract": {
+                "execution_mode": "single_turn",
+                "state_schema": {"messages": "list[dict]"},
+                "required_tools": [],
+            },
+            "resource_manifest": {"available_resources": [], "available_api_keys": []},
+            "dev_suite": [],
+        }
+        TaskSpec.model_validate(spec_data).save(spec_file)
+        mock_session = MagicMock()
+
+        with (
+            patch("invoke_target.setup_manifest_is_current", return_value=False),
+            patch("invoke_target.run_setup_for_task") as mock_setup,
+            patch("invoke_target.StreamingSandboxSession", return_value=mock_session),
+            patch("invoke_target.setup_sandbox_environment", return_value=True),
+            patch("invoke_target.copy_task_setup_to_sandbox", return_value="/sandbox/task_setup"),
+            patch("invoke_target.run_sandbox_preflight", return_value=True),
+            patch("invoke_target.run_target_system_in_sandbox", return_value=True),
+        ):
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "invoke_target.py",
+                    "--system-name",
+                    "StaleTask_v0",
+                    "--task-spec",
+                    str(spec_file),
+                    "--auto-setup",
+                    "--state",
+                    "{}",
+                ],
+            )
+            assert invoke_target.main() == 0
+
+        mock_setup.assert_called_once_with(
+            spec_file.resolve(),
+            force=False,
+            reinstall=False,
+            container="auto",
+            base_image=None,
+        )

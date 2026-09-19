@@ -54,6 +54,7 @@ def main() -> int:
     parser.add_argument(
         "--runtime-profile", default=None, help="Runtime resource profile JSON supplied by invoke_target."
     )
+    parser.add_argument("--require-validation", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -66,7 +67,7 @@ def main() -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"Invalid TaskSpec {args.task_dir / 'task.json'}: {exc}", file=sys.stderr)
         return 1
-    if not is_validation_manifest_current(task_spec, args.task_dir):
+    if args.require_validation and not is_validation_manifest_current(task_spec, args.task_dir):
         print("Frozen validation manifest is missing or stale.", file=sys.stderr)
         return 1
 
@@ -80,7 +81,8 @@ def main() -> int:
 
     try:
         packages = [str(package) for package in packages]
-        packages.extend(validation_requirements(args.task_dir, manifest))
+        if args.require_validation:
+            packages.extend(validation_requirements(args.task_dir, manifest))
         ensure_packages_installed(list(dict.fromkeys(packages)))
     except (RuntimeError, ValueError) as exc:
         print(f"Package provisioning failed: {exc}", file=sys.stderr)

@@ -7,7 +7,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,8 +15,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from adas_core.chat_model import ChatModel, usage_scope
-from adas_core.environment import is_provisioning_script
-from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_test_id
+from adas_core.environment import extract_literal_package_requirements, is_provisioning_script
+from adas_core.helpers import normalize_future_imports, safe_write_text, sanitize_identifier, sanitize_test_id
 from adas_core.markdown_parser import find_code_blocks
 from adas_core.task_spec import TaskSpec, TestCaseSpec
 from config.logging import get_logger
@@ -168,25 +167,7 @@ def extract_code_block(content: str) -> str:
 
 def extract_validation_requirements(code: str) -> list[str]:
     """Read a literal VALIDATION_REQUIREMENTS declaration from validator source."""
-    try:
-        for node in ast.parse(code).body:
-            if isinstance(node, ast.Assign):
-                if any(
-                    isinstance(target, ast.Name) and target.id == "VALIDATION_REQUIREMENTS" for target in node.targets
-                ):
-                    value = ast.literal_eval(node.value)
-                    return [str(item) for item in value] if isinstance(value, list) else []
-            elif isinstance(node, ast.AnnAssign):
-                if (
-                    isinstance(node.target, ast.Name)
-                    and node.target.id == "VALIDATION_REQUIREMENTS"
-                    and node.value is not None
-                ):
-                    value = ast.literal_eval(node.value)
-                    return [str(item) for item in value] if isinstance(value, list) else []
-    except (SyntaxError, ValueError, TypeError) as exc:
-        logger.debug("Could not parse VALIDATION_REQUIREMENTS: %r", exc)
-    return []
+    return extract_literal_package_requirements(code, "VALIDATION_REQUIREMENTS")
 
 
 CASE_VALIDATION_SYSTEM_PROMPT = """You are generating automated validation test code for an AI agentic system.
@@ -194,10 +175,11 @@ CASE_VALIDATION_SYSTEM_PROMPT = """You are generating automated validation test 
 MANDATORY RULES:
 1. PACKAGE DECLARATION:
    If any third-party packages are needed for validation (e.g. pandas, neo4j, duckdb, pytest), declare at top:
-   VALIDATION_REQUIREMENTS = ["pkg1", "pkg2"]
-   Otherwise:
-   VALIDATION_REQUIREMENTS = []
-
+    VALIDATION_REQUIREMENTS = ["pkg1", "pkg2"]
+    Otherwise:
+    VALIDATION_REQUIREMENTS = []
+   `adas_core` is provided locally, never add it to VALIDATION_REQUIREMENTS; import `adas_core` directly when needed.
+ 
 2. DEDICATED VALIDATOR FUNCTION:
    You must define a dedicated validator function named:
    `def validate_{clean_id}(final_state: dict[str, Any], workspace_dirs: dict[str, str]) -> tuple[bool, str]:`
@@ -229,6 +211,8 @@ MANDATORY RULES:
      Collect the image path(s) and pass them via the `images` parameter:
      `eval_result = judge.evaluate(prompt=evaluation_prompt, images=[str(output_dir / "chart.png")])`
      LLMJudge automatically encodes images and inspects them using vision capabilities.
+   - Judge-context budget: do not interpolate an unbounded full state, tool history, or raw logs into the prompt.
+     Select only fields relevant to the rubric and truncate repetitive material as necessary to stay within the context limit.
 
 5. SCOPE ASSERTIONS STRICTLY TO DECLARED OUTPUTS & GROUND TRUTH:
    - Use deterministic assertions strictly for hard operational boundaries (e.g., state schema types, file existence/creation, side-effect counts, structural constraints like character limits, API audit logs).
@@ -401,11 +385,7 @@ def assemble_validation_module(
         excluded_names = {"VALIDATION_REQUIREMENTS", "VALIDATORS", "validate", target_func_name}
 
         def _is_excluded(name: str, excluded: set[str] = excluded_names) -> bool:
-            if name in excluded:
-                return True
-            if name.startswith("__") and name.endswith("__"):
-                return True
-            return False
+            return name in excluded or (name.startswith("__") and name.endswith("__"))
 
         names_to_rename: set[str] = set()
         for node in parsed.body:
@@ -417,11 +397,7 @@ def assemble_validation_module(
                     for name in _extract_target_names(target):
                         if not _is_excluded(name):
                             names_to_rename.add(name)
-            elif isinstance(node, ast.AnnAssign):
-                for name in _extract_target_names(node.target):
-                    if not _is_excluded(name):
-                        names_to_rename.add(name)
-            elif isinstance(node, ast.AugAssign):
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
                 for name in _extract_target_names(node.target):
                     if not _is_excluded(name):
                         names_to_rename.add(name)
@@ -448,18 +424,16 @@ def assemble_validation_module(
         for node in parsed.body:
             if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                 continue
-            if isinstance(node, ast.Assign):
-                if any(
-                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
-                    for target in node.targets
-                    for name in _extract_target_names(target)
-                ):
-                    continue
-            if isinstance(node, ast.AnnAssign):
-                if any(
-                    name in ("VALIDATION_REQUIREMENTS", "VALIDATORS") for name in _extract_target_names(node.target)
-                ):
-                    continue
+            if isinstance(node, ast.Assign) and any(
+                name in ("VALIDATION_REQUIREMENTS", "VALIDATORS")
+                for target in node.targets
+                for name in _extract_target_names(target)
+            ):
+                continue
+            if isinstance(node, ast.AnnAssign) and any(
+                name in ("VALIDATION_REQUIREMENTS", "VALIDATORS") for name in _extract_target_names(node.target)
+            ):
+                continue
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "validate":
                 continue
             kept_nodes.append(node)
@@ -586,9 +560,11 @@ class AutomaticValidation:
             context_parts.extend(
                 [
                     "",
-                    "FIXTURE GENERATION CODE:\n"
-                    "The following Python scripts generate the input fixtures mounted for this test case. "
-                    "Inspect their exact column names, schemas, formulas, and planted edge cases to write grounded, accurate assertions:",
+                    (
+                        "FIXTURE GENERATION CODE:\n"
+                        "The following Python scripts generate the input fixtures mounted for this test case. "
+                        "Inspect their exact column names, schemas, formulas, and planted edge cases to write grounded, accurate assertions:"
+                    ),
                     "\n\n".join(generator_blocks),
                 ]
             )
@@ -596,8 +572,10 @@ class AutomaticValidation:
             context_parts.extend(
                 [
                     "",
-                    "FIXTURE GENERATION CODE:\n"
-                    "No input fixtures are mounted for this test case. Rely on final_state or outputs produced during execution.",
+                    (
+                        "FIXTURE GENERATION CODE:\n"
+                        "No input fixtures are mounted for this test case. Rely on final_state or outputs produced during execution."
+                    ),
                 ]
             )
 
@@ -627,9 +605,12 @@ class AutomaticValidation:
         except Exception as exc:
             raise RuntimeError(f"Validation generation for '{test_case.id}' failed: {exc!r}") from exc
 
-        function_names = {
-            node.name for node in parsed.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        function_names = {node.name for node in parsed.body if isinstance(node, ast.FunctionDef)}
+        async_function_names = {node.name for node in parsed.body if isinstance(node, ast.AsyncFunctionDef)}
+        if expected_fn in async_function_names:
+            raise ValueError(
+                f"Generated validator '{expected_fn}' must be synchronous; async validators are unsupported."
+            )
         if expected_fn not in function_names:
             raise ValueError(
                 f"Generated validation code for '{test_case.id}' is missing expected function '{expected_fn}'."
@@ -671,7 +652,7 @@ class AutomaticValidation:
         destination = Path(target_path_or_dir)
         if destination.is_dir() or not destination.suffix:
             destination.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+            safe_name = sanitize_identifier(task_spec.name)
             validation_file = destination / f"{safe_name}.validation.py"
         else:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +705,7 @@ def ensure_automatic_validation(
 ) -> ValidationGenerationResult | None:
     """Create a validator only when explicitly invoked by the validation stage."""
     root = Path(task_dir)
-    safe_name = re.sub(r"[^0-9a-zA-Z_]", "_", task_spec.name)
+    safe_name = sanitize_identifier(task_spec.name)
     expected_files = [
         root / f"{safe_name}.validation.py",
         root / f"{task_spec.name}.validation.py",

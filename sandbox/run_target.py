@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from adas_core.environment import (
     load_environment,
 )
 from adas_core.fixture_lifecycle import process_fixture_lifecycle
-from adas_core.helpers import escape_system_name, validate_identifier
+from adas_core.helpers import escape_system_name, validate_system_name
 from adas_core.runtime_resources import (
     RuntimeResourceProfile,
     external_url_overrides,
@@ -29,6 +30,7 @@ from adas_core.runtime_resources import (
 )
 from adas_core.task_spec import TaskSpec
 from config.logging import get_logger, setup_logging
+from config.settings import TARGET_SYSTEM_RECURSION_LIMIT
 
 logger = get_logger("run_target")
 
@@ -70,7 +72,7 @@ def main() -> int:
     # --- Metrics Initialization ---
     start_time = time.time()
     step_counter = 0
-    run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = args.run_id or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
 
     metrics: dict[str, Any] = {
         "system_name": args.system_name,
@@ -89,7 +91,7 @@ def main() -> int:
     exit_code = 0
 
     try:
-        validate_identifier(args.system_name, field_name="target system name")
+        validate_system_name(args.system_name, field_name="target system name")
         try:
             raw_state: Any = json.loads(args.state)
         except json.JSONDecodeError as e:
@@ -168,28 +170,26 @@ def main() -> int:
                 else contextlib.nullcontext()
             )
             url_context = external_url_overrides(task_spec, runtime_profile) if task_spec else contextlib.nullcontext()
-            with fixture_context, url_context:
-                with usage_scope(system="target", run_id=run_id):
-                    for mode, payload in workflow.stream(
-                        initial_state,
-                        config={"recursion_limit": 20},
-                        stream_mode=["updates", "values"],
-                    ):
-                        if mode == "updates" and isinstance(payload, dict):
-                            step_counter += 1
-                            logger.info(f"[Step {step_counter}]")
-                            for node_name, state_update in payload.items():
-                                logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
+            with fixture_context, url_context, usage_scope(system="target", run_id=run_id):
+                for mode, payload in workflow.stream(
+                    initial_state,
+                    config={"recursion_limit": TARGET_SYSTEM_RECURSION_LIMIT},
+                    stream_mode=["updates", "values"],
+                ):
+                    if mode == "updates" and isinstance(payload, dict):
+                        step_counter += 1
+                        logger.info(f"[Step {step_counter}]")
+                        for node_name, state_update in payload.items():
+                            logger.info(f"Update from node '{node_name}': {json.dumps(state_update, default=str)}")
 
-                        elif mode == "values":
-                            final_state_snapshot = payload
+                    elif mode == "values":
+                        final_state_snapshot = payload
 
         metrics["status"] = "completed"
         logger.info("System execution finished successfully")
 
     except Exception as e:
         exit_code = 1
-        import traceback
 
         metrics["status"] = "error"
         error_info = {
@@ -217,7 +217,7 @@ def main() -> int:
         except Exception as e:
             logger.error(f"Could not save metrics file: {e}")
 
-        if final_state_snapshot:
+        if final_state_snapshot is not None:
             state_filename = f"{args.system_name}_{run_id}_final_state.txt"
             state_filepath = os.path.join(metrics_dir, state_filename)
             try:

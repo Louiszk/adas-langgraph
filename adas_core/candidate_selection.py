@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -171,6 +172,7 @@ def finalize_best_candidate(
     If no candidates exist, falls back to materializing the current state["target_agentic_system"].
     """
     target_dir = code_dir or state.get("generated_systems_dir") or SANDBOX_GENERATED_SYSTEMS_DIR
+    state["finalization_succeeded"] = False
     raw_candidates = state.get("candidates")
     candidates: list[CandidateRecord] = raw_candidates if isinstance(raw_candidates, list) else []
     current_system: VirtualAgenticSystem | None = state.get("target_agentic_system")
@@ -225,18 +227,20 @@ def finalize_best_candidate(
         escaped_name = getattr(selected_system, "escaped_name", "agentic_system")
         final_system_path = os.path.join(target_dir, f"{escaped_name}.pkl")
 
-        checkpoint_path = best_candidate.get("checkpoint_path", "") if best_candidate else ""
-        if (
-            checkpoint_path
-            and os.path.exists(checkpoint_path)
-            and os.path.abspath(checkpoint_path) != os.path.abspath(final_system_path)
-        ):
-            shutil.copy2(checkpoint_path, final_system_path)
-        else:
-            with open(final_system_path, "wb") as f:
+        temporary_output_dir = tempfile.mkdtemp(prefix=f".{escaped_name}-finalize-", dir=target_dir)
+        temporary_final_path = os.path.join(temporary_output_dir, f"{escaped_name}.pkl")
+        temporary_code_path = os.path.join(temporary_output_dir, f"{escaped_name}.py")
+        try:
+            with open(temporary_final_path, "wb") as f:
                 pickle.dump(selected_system, f)
-
-        materialize_system(selected_system, output_dir=target_dir)
+            materialize_system(selected_system, output_dir=temporary_output_dir)
+            if not os.path.isfile(temporary_code_path):
+                raise RuntimeError("Final system code was not materialized.")
+            os.replace(temporary_final_path, final_system_path)
+            os.replace(temporary_code_path, os.path.join(target_dir, f"{escaped_name}.py"))
+        finally:
+            shutil.rmtree(temporary_output_dir, ignore_errors=True)
+        state["finalization_succeeded"] = True
         logger.info("Successfully finalized system '%s' in %s", escaped_name, target_dir)
 
         # Cleanup intermediate candidate checkpoints if enabled

@@ -9,7 +9,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from typing import Any
 
@@ -110,7 +110,7 @@ def _wait_for_mcp_endpoint(
         try:
             connection.request("OPTIONS", fixture.endpoint_path)
             status = connection.getresponse().status
-        except OSError:
+        except (OSError, HTTPException):
             time.sleep(0.05)
             continue
         finally:
@@ -377,22 +377,24 @@ def external_database_seed_lifecycle(
         primary_error = exc
         raise
     finally:
-        for key, value in previous_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
         cleanup_failures: list[str] = []
         for seed, config, cleanup_fn in reversed(prepared):
             try:
                 cleanup_fn(config, seed.namespace)
             except Exception as cleanup_exc:
                 cleanup_failures.append(f"{seed.id} ({type(cleanup_exc).__name__})")
-        if cleanup_failures and primary_error is None:
-            raise FixtureExecutionError(
-                "External database cleanup failed for seed(s): " + ", ".join(cleanup_failures) + "."
-            )
-        if cleanup_failures and primary_error is not None:
-            primary_error.add_note(
-                "External database cleanup also failed for seed(s): " + ", ".join(cleanup_failures) + "."
-            )
+        try:
+            if cleanup_failures and primary_error is None:
+                raise FixtureExecutionError(
+                    "External database cleanup failed for seed(s): " + ", ".join(cleanup_failures) + "."
+                )
+            if cleanup_failures and primary_error is not None:
+                primary_error.add_note(
+                    "External database cleanup also failed for seed(s): " + ", ".join(cleanup_failures) + "."
+                )
+        finally:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value

@@ -14,6 +14,7 @@ from adas_core.helpers import (
     truncate_state,
     validate_identifier,
     validate_node_conditional_edge_signature,
+    validate_system_name,
 )
 
 
@@ -24,6 +25,14 @@ class TestNodeConditionalEdgeSignatureValidation:
         is_valid, err = validate_node_conditional_edge_signature(valid_code)
         assert is_valid is True
         assert err is None
+
+    def test_async_signature_is_rejected_explicitly(self):
+        is_valid, err = validate_node_conditional_edge_signature(
+            "async def my_node(state: dict) -> dict:\n    return state"
+        )
+
+        assert is_valid is False
+        assert err == "Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
 
     def test_invalid_param_name(self):
         """Contract: Functions accepting a parameter not named 'state' must be rejected."""
@@ -228,6 +237,16 @@ class TestValidateIdentifier:
             validate_identifier("name/slash")
 
 
+class TestValidateSystemName:
+    def test_accepts_python_module_names(self):
+        assert validate_system_name("agent_v2") == "agent_v2"
+
+    @pytest.mark.parametrize("name", ["my-agent", "123agent", "agent.name", "class"])
+    def test_rejects_non_module_names(self, name):
+        with pytest.raises(ValueError, match="non-reserved Python identifier"):
+            validate_system_name(name)
+
+
 class TestSafeWriteText:
     def test_writes_within_root(self, tmp_path):
         root = tmp_path / "allowed_root"
@@ -250,6 +269,7 @@ class TestEscapeSystemName:
         assert escape_system_name("Folder/Subfolder\\MySystem:v1") == "FolderSubfolderMySystemv1"
         assert escape_system_name("../../evil;name$") == "evilname"
         assert escape_system_name("simple_system") == "simple_system"
+        assert escape_system_name("my-agent") == "my_agent"
 
     def test_defaults_when_empty_after_cleaning(self):
         assert escape_system_name("///\\\\:::") == "default_system"

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
 import random
 import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +17,10 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from adas_core.environment import load_environment  # noqa: E402
-from config.logging import get_logger, setup_logging  # noqa: E402
-from sandbox.sandbox import ensure_cached_sandbox_image  # noqa: E402
+from adas_core.environment import get_installed_packages_from_metrics, load_environment
+from adas_core.helpers import sanitize_identifier
+from config.logging import get_logger, setup_logging
+from sandbox.sandbox import ensure_cached_sandbox_image
 
 logger = get_logger("orchestrator")
 
@@ -36,6 +36,9 @@ class ContainerManager:
     def __init__(self, container_type: str = "auto", unique_id: str | None = None):
         self.container_type = container_type
         self.unique_id = unique_id or str(random.randint(10000, 99999))
+        self.job_label = f"io.adas.job={self.unique_id}"
+        self._created_container_names: set[str] = set()
+        self._created_image_names: set[str] = set()
         self.client = self._init_client()
 
     def _init_client(self) -> Any:
@@ -85,7 +88,9 @@ class ContainerManager:
                     command="sleep 3600",
                     detach=True,
                     name=f"adas-temp-builder-{self.unique_id}-{random.randint(1000, 9999)}",
+                    labels={"io.adas.job": self.unique_id},
                 )
+                self._created_container_names.add(container.name)
                 install_cmd = f"pip install {' '.join(packages)}"
                 exit_code, output = container.exec_run(install_cmd)
                 if exit_code != 0:
@@ -95,6 +100,7 @@ class ContainerManager:
                     container.remove()
                     return False
                 container.commit(repository=temp_image_name)
+                self._created_image_names.add(temp_image_name)
                 container.stop()
                 container.remove()
                 logger.info("Temporary image created.")
@@ -104,8 +110,20 @@ class ContainerManager:
 
         cli = self._get_cli_cmd()
         cid_name = f"adas-temp-builder-{self.unique_id}-{random.randint(1000, 9999)}"
+        self._created_container_names.add(cid_name)
         res = subprocess.run(
-            [cli, "run", "-d", "--name", cid_name, base_image_name, "sleep", "3600"],
+            [
+                cli,
+                "run",
+                "-d",
+                "--name",
+                cid_name,
+                "--label",
+                self.job_label,
+                base_image_name,
+                "sleep",
+                "3600",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -122,6 +140,7 @@ class ContainerManager:
             subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
             return False
         subprocess.run([cli, "commit", cid_name, temp_image_name], check=False)
+        self._created_image_names.add(temp_image_name)
         subprocess.run([cli, "rm", "-f", cid_name], stdout=subprocess.DEVNULL, check=False)
         return True
 
@@ -130,35 +149,44 @@ class ContainerManager:
         if self.client is not None:
             try:
                 self.client.images.remove(image=image_name, force=force)
+                self._created_image_names.discard(image_name)
                 return
             except Exception:
                 pass
         cli = self._get_cli_cmd()
-        subprocess.run(
+        result = subprocess.run(
             [cli, "rmi", "-f", image_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
         )
+        if result.returncode == 0:
+            self._created_image_names.discard(image_name)
 
     def perform_maintenance(self) -> None:
-        """Prune unused containers and networks."""
+        """Clean up resources tracked as belonging to this job."""
         logger.info("--- Performing container maintenance/cleanup ---")
-        if self.client is not None:
-            try:
-                self.client.containers.prune()
-                self.client.networks.prune()
-                return
-            except Exception:
-                pass
-        cli = self._get_cli_cmd()
-        subprocess.run([cli, "container", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
-        subprocess.run([cli, "network", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
+        self.cleanup_job_resources()
 
     def cleanup_job_resources(self) -> None:
-        """Clean up unused containers and dangling image layers created during this job."""
+        """Remove only containers and images created by this job."""
         logger.info(f"--- Cleaning up resources for Job {self.unique_id} ---")
-
-        cli = self._get_cli_cmd()
-        subprocess.run([cli, "container", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
-        subprocess.run([cli, "image", "prune", "-f"], stdout=subprocess.DEVNULL, check=False)
+        if self.client is not None:
+            for container_name in list(self._created_container_names):
+                try:
+                    self.client.containers.get(container_name).remove(force=True)
+                except Exception:
+                    pass
+            for image_name in list(self._created_image_names):
+                try:
+                    self.client.images.remove(image=image_name, force=True)
+                except Exception:
+                    pass
+        else:
+            cli = self._get_cli_cmd()
+            for container_name in self._created_container_names:
+                subprocess.run([cli, "rm", "-f", container_name], stdout=subprocess.DEVNULL, check=False)
+            for image_name in self._created_image_names:
+                subprocess.run([cli, "rmi", "-f", image_name], stdout=subprocess.DEVNULL, check=False)
+        self._created_container_names.clear()
+        self._created_image_names.clear()
 
     def _get_cli_cmd(self) -> str:
         if self.container_type == "podman":
@@ -177,27 +205,8 @@ class DependencyParser:
 
     @staticmethod
     def get_installed_packages(metrics_file: str | Path) -> list[str]:
-        """Extract installed_packages from a JSON metrics file.
-
-        Supports both list format (e.g. ['pkg1', 'pkg2']) and space-delimited string format.
-        """
-        path = Path(metrics_file)
-        if not path.is_file():
-            return []
-
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            packages_val = data.get("installed_packages")
-            if not packages_val:
-                return []
-            if isinstance(packages_val, list):
-                return [str(pkg).strip() for pkg in packages_val if str(pkg).strip()]
-            if isinstance(packages_val, str):
-                return [pkg.strip() for pkg in packages_val.split() if pkg.strip()]
-        except Exception as e:
-            logger.warning(f"Failed to parse installed_packages from {path}: {e}")
-        return []
+        """Extract installed packages from a generated-system metrics file."""
+        return get_installed_packages_from_metrics(metrics_file)
 
 
 class ExecutionManager:
@@ -308,7 +317,7 @@ class ResultAggregator:
         """Export a human-readable text summary."""
         txt_path = self.results_dir / filename
         with txt_path.open("w", encoding="utf-8") as f:
-            f.write(f"Benchmark Test Summary ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n")
+            f.write(f"Benchmark Test Summary ({datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')})\n")
             f.write(f"Job ID: {job_id}\n")
             f.write("=========================================\n")
             for rec in records:
@@ -386,7 +395,8 @@ class Orchestrator:
         overall_exit = 0
 
         iterations = self._parse_iterations(getattr(self.args, "iterations", "1"))
-        bench_dir, bench_name = self._get_benchmark_info(getattr(self.args, "benchmark", "gsm"))
+        benchmark = getattr(self.args, "benchmark", None) or "gsm"
+        bench_dir, bench_name = self._get_benchmark_info(benchmark)
         approach = getattr(self.args, "type", "ablationC")
 
         initial_dir = Path.cwd()
@@ -403,12 +413,12 @@ class Orchestrator:
                 self.container_manager.perform_maintenance()
                 cleanup_counter = 1
 
-            system_name_base = f"{approach}_{getattr(self.args, 'benchmark', 'gsm')}{iter_num}_gpt"
+            system_name_base = f"{approach}_{benchmark}{iter_num}_gpt"
             system_module_path = f"generated_systems.{system_name_base}"
 
             logger.info("-----------------------------------------")
             logger.info(f"Testing System: {system_name_base} (in {work_dir})")
-            logger.info(f"  Benchmark: {getattr(self.args, 'benchmark', 'gsm')}, Iteration: {iter_num}")
+            logger.info(f"  Benchmark: {benchmark}, Iteration: {iter_num}")
 
             system_file = work_dir / "generated_systems" / f"{system_name_base}.py"
             if not system_file.is_file():
@@ -416,7 +426,7 @@ class Orchestrator:
                 records.append(
                     {
                         "approach": approach,
-                        "benchmark": getattr(self.args, "benchmark", "gsm"),
+                        "benchmark": benchmark,
                         "iteration": iter_num,
                         "status": "FAILED_NOT_FOUND",
                     }
@@ -425,7 +435,20 @@ class Orchestrator:
                 continue
 
             metrics_file = work_dir / "generated_systems" / "metrics" / f"{system_name_base}.json"
-            packages = DependencyParser.get_installed_packages(metrics_file)
+            try:
+                packages = DependencyParser.get_installed_packages(metrics_file)
+            except ValueError as exc:
+                logger.error("Invalid dependency metadata for %s: %s", system_name_base, exc)
+                records.append(
+                    {
+                        "approach": approach,
+                        "benchmark": benchmark,
+                        "iteration": iter_num,
+                        "status": "FAILED_INVALID_DEPENDENCIES",
+                    }
+                )
+                overall_exit = 1
+                continue
             image_to_use = None
             temp_image_name: str | None = None
 
@@ -472,7 +495,7 @@ class Orchestrator:
             records.append(
                 {
                     "approach": approach,
-                    "benchmark": getattr(self.args, "benchmark", "gsm"),
+                    "benchmark": benchmark,
                     "iteration": iter_num,
                     "status": status,
                 }
@@ -501,12 +524,19 @@ class Orchestrator:
             logger.error("TaskSpec file not found: %s", task_spec_path)
             return 2
 
-        for iter_num in iterations:
-            if getattr(self.args, "benchmark", None):
-                sys_name = f"{approach}_{self.args.benchmark}{iter_num}_gpt"
+        benchmark = getattr(self.args, "benchmark", None)
+        if benchmark:
+            base_name = benchmark
+        else:
+            parent_dir = task_spec_path.parent
+            if task_spec_path.stem == "task":
+                raw_base = parent_dir.parent.name if parent_dir.name.casefold() == "spec" else parent_dir.name
             else:
-                base_name = task_spec_path.stem.replace(".task", "")
-                sys_name = f"{approach}_{base_name}{iter_num}_gpt" if approach else f"{base_name}_{iter_num}"
+                raw_base = task_spec_path.stem.replace(".task", "")
+            base_name = sanitize_identifier(raw_base)
+
+        for iter_num in iterations:
+            sys_name = f"{approach}_{base_name}{iter_num}_gpt" if approach else f"{base_name}_{iter_num}"
 
             logger.info("=========================================================")
             logger.info("   Running Design Generation for %s (system: %s, run %s)", task_spec_path, sys_name, iter_num)
@@ -538,6 +568,7 @@ class Orchestrator:
 
         state_json = getattr(self.args, "state", None)
         state_file_arg = getattr(self.args, "state_file", None)
+        batch_arg = getattr(self.args, "batch", None)
         data_gen_script = getattr(self.args, "data_gen_script", "")
 
         if data_gen_script and Path(data_gen_script).is_file():
@@ -562,7 +593,9 @@ class Orchestrator:
                 "--container",
                 self.args.container,
             ]
-            if state_file_arg:
+            if batch_arg:
+                cmd.extend(["--batch", str(Path(batch_arg).resolve())])
+            elif state_file_arg:
                 cmd.extend(["--state-file", str(Path(state_file_arg).resolve())])
             elif state_json:
                 cmd.extend(["--state", state_json])
@@ -571,6 +604,10 @@ class Orchestrator:
 
             if task_spec_arg:
                 cmd.extend(["--task-spec", str(Path(task_spec_arg).resolve())])
+
+            runtime_config_arg = getattr(self.args, "runtime_config", None)
+            if runtime_config_arg:
+                cmd.extend(["--runtime-config", str(Path(runtime_config_arg).resolve())])
 
             res = ExecutionManager.run_command(cmd, timeout=getattr(self.args, "timeout", 1200))
             if res["exit_code"] != 0:
@@ -600,7 +637,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Task to execute: benchmark, design, or target.",
     )
     parser.add_argument("--type", "--approach", dest="type", default="ablationC", help="System type/approach prefix.")
-    parser.add_argument("--benchmark", default="gsm", help="Benchmark name (gsm, mmlu, fever).")
+    parser.add_argument("--benchmark", default=None, help="Benchmark name (gsm, mmlu, fever).")
     parser.add_argument(
         "--iterations", "--range", dest="iterations", default="1", help="Iteration range (e.g. 1-16 or 1,2,3)."
     )
@@ -621,6 +658,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Established TaskSpec file for design or target runs.",
     )
     parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=None,
+        help="Optional RuntimeResourceProfile JSON overriding selected fixture providers.",
+    )
+    parser.add_argument(
         "--system-names", nargs="+", default=["data_analyst_gpt5_v0"], help="System names for target execution."
     )
     parser.add_argument("--state", default=None, help="Initial JSON state string for target execution.")
@@ -629,6 +672,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to initial JSON state file for target execution.",
+    )
+    parser.add_argument(
+        "--batch", type=Path, default=None, help="Path to a JSON batch cases file for target execution."
     )
     parser.add_argument(
         "--data-gen-script", default="", help="Optional script for generating input data before running target."

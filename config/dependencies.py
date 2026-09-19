@@ -3,6 +3,12 @@
 from pathlib import Path
 
 SANDBOX_DEPENDENCY_NAMES = frozenset({"langgraph", "langchain-openai", "python-dotenv", "dill"})
+FALLBACK_SANDBOX_DEPENDENCIES = (
+    "dill==0.4.1",
+    "langchain-openai==1.6.2",
+    "langgraph==1.2.11",
+    "python-dotenv==1.2.3",
+)
 
 DEFAULT_EXCLUDED_PACKAGES: list[str] = [
     "datasets",
@@ -16,12 +22,16 @@ DEFAULT_EXCLUDED_PACKAGES: list[str] = [
     "podman",
     "python-dotenv",
     "setuptools",
+    "adas-core",
 ]
 
 
 def load_pinned_sandbox_dependencies() -> list[str]:
     """Read only the minimal sandbox runtime packages from requirements.txt."""
     requirements_file = Path(__file__).resolve().parents[1] / "requirements.txt"
+    if not requirements_file.is_file():
+        return list(FALLBACK_SANDBOX_DEPENDENCIES)
+
     return [
         line.strip()
         for line in requirements_file.read_text(encoding="utf-8").splitlines()

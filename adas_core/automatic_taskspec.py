@@ -102,7 +102,7 @@ def build_architect_system_prompt(task_dir_hint: str | None = None) -> str:
     """Build the conversational system prompt for the interactive architect model."""
     schema_json = json.dumps(TaskSpec.model_json_schema(), indent=2)
     catalog_context = build_model_catalog_context()
-    target_dir = task_dir_hint or "specs/<task_name>/"
+    target_dir = task_dir_hint.rstrip("/\\") + "/" if task_dir_hint else "specs/<task_name>/"
 
     return f"""You are an expert AI agentic system architect conducting an interactive requirements elicitation and specification interview for ADAS (Automated Design of Agentic Systems).
 In ADAS, an autonomous meta-agent automatically designs, implements, and refines a LangGraph target system based on the synthesized task specification and development test cases.
@@ -127,7 +127,7 @@ Your mission is to collaborate with the user to design a robust, production-grad
    - When key dimensions are sufficiently clarified, OR when the user asks you to draft or update the spec:
      * Embed the complete, schema-compliant `TaskSpec` JSON inside a fenced code block ```json ... ```.
      * Accompany the JSON with conversational commentary:
-       - Inform the user that the draft has been generated and will be saved to `{target_dir}<clean_name>.task.json`.
+       - Inform the user that the draft has been generated and will be saved to `{target_dir}task.json`.
        - Summarize the key architectural choices made (state keys, tools, test cases).
        - Point out specific aspects you recommend the user inspect or consider adjusting.
        - Ask if they would like to add edge-case test scenarios or adjust any parameters.
@@ -147,18 +147,15 @@ Your output JSON must strictly conform to the following JSON Schema generated di
 {catalog_context}
 
 ### MANDATORY ARCHITECTURAL RULES:
-1. PHYSICAL HOLDOUT SEPARATION:
-   - Do NOT include any holdout fields (e.g. 'holdout_suite' or 'private_tasks') in this TaskSpec.
-   - The TaskSpec defines ONLY the visible development contract (`dev_suite`).
-
-2. SINGLE-TURN VS. MULTI-TURN CONTRACT:
+1. SINGLE-TURN VS. MULTI-TURN CONTRACT:
+   - Multi-turn target systems are not currently supported by the ADAS execution and test harness. Always use 'single_turn' when generating a TaskSpec; do not select 'multi_turn'.
    - If execution_mode is 'single_turn', persistence must be null, and each test case turn must provide the required input state.
-   - If execution_mode is 'multi_turn', state_schema must declare a message history key (e.g. 'messages'), and persistence must specify 'checkpointer': 'memory' and 'requires_thread_id': true.
+   - The 'multi_turn' schema option is reserved for future support and must not be used in generated specifications.
 
-3. VALID JSON OUTPUT:
+2. VALID JSON OUTPUT:
    - When providing a specification, output a complete, valid JSON object in a ```json ... ``` block.
 
-4. FIXTURE DEFINITIONS AND TEST CASE SCOPING:
+3. FIXTURE DEFINITIONS AND TEST CASE SCOPING:
    - Each fixture declared in `test_fixtures` (files, databases, mcps, mock_services, custom_fixtures, external_database_seeds) must have a clean unique `id` (e.g. 'sales_csv', 'customers_json', 'weather_api', 'analytics_db').
    - Keep public interface contracts, schemas, table/node definitions, and API routes in `description` (visible to the meta-agent). Put deterministic evaluation seed data, specific rows/records, planted secrets, or test-bench ground truth in `private_description` (withheld from the meta-agent to prevent overfitting).
    - When declaring file fixtures in `test_fixtures.files`, `path` must be relative to the input folder (e.g. "sales.csv", "customers.json"). Never use hardcoded sandbox prefixes or absolute paths.
@@ -173,7 +170,7 @@ Your output JSON must strictly conform to the following JSON Schema generated di
    - To seed deterministic evaluation data, declare `test_fixtures.external_database_seeds` with a unique id, the matching database resource name, engine/driver, connection_env mapping containing ENVIRONMENT VARIABLE NAMES only (never credentials), an explicit namespace_kind, cleanup_policy `drop_namespace`, public schema/ontology in `description`, and evaluation-only seed records in `private_description`.
    - Use `adas_test_...` for PostgreSQL namespaces because PostgreSQL rejects unquoted hyphens; use `adas-test-...` for Neo4j database namespaces because Neo4j rejects underscores.
 
-5. DEV SUITE 3-TIER PROGRESSION:
+4. DEV SUITE 3-TIER PROGRESSION:
    - The test cases in `dev_suite` must follow a strictly progressive difficulty gradient:
      * Tier 1 (Baseline / Smoke Test): Minimal viable happy-path test on clean, standard input with 1-2 primary expected outputs.
      * Tier 2 (Core Functional Complexity): Primary domain logic exercising core analytical or multi-step capabilities.
@@ -285,10 +282,10 @@ class AutomaticTaskSpec:
                 target_file = out_p
             else:
                 base_dir = out_p
-                target_file = base_dir / (filename or f"{clean_name}.task.json")
+                target_file = base_dir / (filename or "task.json")
         else:
             base_dir = DEFAULT_SPECS_DIR / clean_name
-            target_file = base_dir / (filename or f"{clean_name}.task.json")
+            target_file = base_dir / (filename or "task.json")
 
         base_dir.mkdir(parents=True, exist_ok=True)
         target_file.write_text(task_spec.to_json(indent=2), encoding="utf-8")
@@ -306,20 +303,28 @@ def find_existing_task_spec_file(
         if out_path.is_file():
             return out_path
         if out_path.is_dir():
+            canonical_file = out_path / "task.json"
+            if canonical_file.is_file():
+                return canonical_file
             if task_name:
                 clean_name = sanitize_identifier(task_name.lower())
-                named_file = out_path / f"{clean_name}.task.json"
-                if named_file.is_file():
-                    return named_file
-            task_files = list(out_path.glob("*.task.json"))
+                legacy_named_file = out_path / f"{clean_name}.task.json"
+                if legacy_named_file.is_file():
+                    return legacy_named_file
+            task_files = [
+                path for path in list(out_path.glob("*.task.json")) + list(out_path.glob("task.json")) if path.is_file()
+            ]
             if len(task_files) == 1:
                 return task_files[0]
 
     if task_name:
         clean_name = sanitize_identifier(task_name.lower())
-        default_file = DEFAULT_SPECS_DIR / clean_name / f"{clean_name}.task.json"
+        default_file = DEFAULT_SPECS_DIR / clean_name / "task.json"
         if default_file.is_file():
             return default_file
+        legacy_default_file = DEFAULT_SPECS_DIR / clean_name / f"{clean_name}.task.json"
+        if legacy_default_file.is_file():
+            return legacy_default_file
 
     return None
 

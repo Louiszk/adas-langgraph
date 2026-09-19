@@ -8,8 +8,9 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adas_core.environment import validate_package_requirement
 from adas_core.exceptions import FeatureNotImplementedError
-from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier
+from adas_core.helpers import normalize_fixture_path, sanitize_test_id, validate_identifier, validate_system_name
 from config import settings
 from config.logging import get_logger
 
@@ -86,8 +87,9 @@ class ArchitectureContract(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_multi_turn_persistence(self) -> ArchitectureContract:
-        # Execution-mode validation rejects multi_turn before this model validator runs.
+    def validate_persistence_contract(self) -> ArchitectureContract:
+        if self.execution_mode == "single_turn" and self.persistence is not None:
+            raise ValueError("Persistence is not supported for 'single_turn' execution mode; set persistence to null.")
         return self
 
 
@@ -393,6 +395,13 @@ class ExternalDatabaseSeedSpec(BaseModel):
     cleanup_policy: Literal["drop_namespace"] = Field(
         default="drop_namespace", description="Required conservative cleanup action after every case"
     )
+    safety_contract: Literal["namespace_scoped_cleanup"] | None = Field(
+        default=None,
+        description=(
+            "Required explicit opt-in for custom database cleanup; confirms that seed and cleanup functions only "
+            "operate on the supplied namespace"
+        ),
+    )
     description: str = Field(..., min_length=1, description="Schema and deterministic seed-data requirements")
     private_description: str = Field(
         default="",
@@ -436,6 +445,11 @@ class ExternalDatabaseSeedSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_engine_safe_namespace(self) -> ExternalDatabaseSeedSpec:
+        if not re.fullmatch(r"(?:adas_test_|adas-test-)[a-z0-9](?:[a-z0-9_.-]{0,62}[a-z0-9])?", self.namespace):
+            raise ValueError(
+                "External database seed namespaces must use the 'adas_test_' or 'adas-test-' evaluation prefix "
+                "and contain only lowercase letters, digits, underscores, periods, and dashes."
+            )
         if self.db_type == "postgres" and not re.fullmatch(r"adas_test_[a-z0-9_]{1,52}", self.namespace):
             raise ValueError(
                 "PostgreSQL external database seed namespaces must use lowercase letters, digits, and underscores "
@@ -447,6 +461,11 @@ class ExternalDatabaseSeedSpec(BaseModel):
             raise ValueError(
                 "Neo4j external database seed namespaces must use lowercase letters, digits, and dashes "
                 "with the 'adas-test-' prefix. Neo4j database names reject underscores."
+            )
+        if self.db_type == "custom" and self.safety_contract != "namespace_scoped_cleanup":
+            raise ValueError(
+                "Custom external database seeds require safety_contract='namespace_scoped_cleanup' "
+                "before destructive cleanup is allowed."
             )
         return self
 
@@ -731,7 +750,7 @@ class TaskSpec(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_task_spec_name(cls, v: str) -> str:
-        return validate_identifier(v, field_name="TaskSpec name")
+        return validate_system_name(v, field_name="TaskSpec name")
 
     architecture_contract: ArchitectureContract = Field(..., description="Execution mode, schema, and persistence")
     available_models: list[ModelSpec] = Field(
@@ -771,8 +790,6 @@ class TaskSpec(BaseModel):
     @field_validator("required_packages")
     @classmethod
     def validate_required_packages(cls, v: list[str]) -> list[str]:
-        from adas_core.environment import validate_package_requirement
-
         for pkg in v:
             if not validate_package_requirement(pkg):
                 raise ValueError(f"Invalid package requirement '{pkg}'. Must be a valid PEP 508 requirement.")
@@ -805,7 +822,7 @@ class TaskSpec(BaseModel):
 
         for test_case in self.dev_suite:
             judge_model_to_check = test_case.judge_model
-            if not judge_model_to_check and not test_case.judge_web_search:
+            if not judge_model_to_check and not test_case.judge_web_search and "vision" not in test_case.modalities:
                 continue
             effective_judge_model = judge_model_to_check or validation_model
             provider = test_case.judge_provider or validation_wrapper
@@ -833,7 +850,14 @@ class TaskSpec(BaseModel):
         """Validate available models and web search declarations against ModelRegistry."""
         from adas_core.chat_model import ModelRegistry
 
+        seen_models: set[tuple[str, str]] = set()
         for m in self.available_models:
+            model_key = (m.provider, m.model_name)
+            if model_key in seen_models:
+                raise ValueError(
+                    f"Duplicate available model declaration for provider '{m.provider}' and model '{m.model_name}'."
+                )
+            seen_models.add(model_key)
             if not ModelRegistry.is_registered_model(m.provider, m.model_name):
                 raise ValueError(
                     f"ModelSpec '{m.model_name}' for provider '{m.provider}' is not registered in ModelRegistry. "
@@ -1004,73 +1028,6 @@ class TaskSpec(BaseModel):
         target_path = Path(path)
         if not target_path.exists():
             raise FileNotFoundError(f"TaskSpec file not found: {target_path}")
-        with open(target_path, encoding="utf-8") as f:
-            data = json.load(f)
-        return cls.from_dict(data)
-
-
-class HoldoutSuiteSpec(BaseModel):
-    """Isolated specification for holdout test cases (stored in private_tasks/)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: str = Field(default="1.0", description="Holdout schema version")
-    task_name: str = Field(..., min_length=1, description="Associated task name")
-    holdout_suite: list[TestCaseSpec] = Field(
-        ..., min_length=1, description="List of private, unseen test cases for final acceptance"
-    )
-
-    @field_validator("schema_version")
-    @classmethod
-    def validate_schema_version(cls, v: str) -> str:
-        if v not in SUPPORTED_SCHEMA_VERSIONS:
-            raise ValueError(f"Unsupported schema_version '{v}'. Supported versions: {list(SUPPORTED_SCHEMA_VERSIONS)}")
-        return v
-
-    @field_validator("holdout_suite")
-    @classmethod
-    def validate_unique_holdout_ids(cls, v: list[TestCaseSpec]) -> list[TestCaseSpec]:
-        seen_ids: set[str] = set()
-        seen_sanitized: dict[str, str] = {}
-        for tc in v:
-            if tc.id in seen_ids:
-                raise ValueError(f"Duplicate test case id '{tc.id}' in holdout_suite.")
-            seen_ids.add(tc.id)
-            clean = sanitize_test_id(tc.id)
-            if clean in seen_sanitized:
-                raise ValueError(
-                    f"Duplicate sanitized test case id '{clean}' in holdout_suite: "
-                    f"'{tc.id}' collides with '{seen_sanitized[clean]}'."
-                )
-            seen_sanitized[clean] = tc.id
-        return v
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-    def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent)
-
-    def save(self, path: str | Path) -> None:
-        target_path = Path(path)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(target_path, "w", encoding="utf-8") as f:
-            f.write(self.to_json())
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> HoldoutSuiteSpec:
-        return cls.model_validate(data)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> HoldoutSuiteSpec:
-        data = json.loads(json_str)
-        return cls.from_dict(data)
-
-    @classmethod
-    def from_file(cls, path: str | Path) -> HoldoutSuiteSpec:
-        target_path = Path(path)
-        if not target_path.exists():
-            raise FileNotFoundError(f"HoldoutSuite file not found: {target_path}")
         with open(target_path, encoding="utf-8") as f:
             data = json.load(f)
         return cls.from_dict(data)

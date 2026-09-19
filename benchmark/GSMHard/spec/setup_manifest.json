@@ -3,6 +3,7 @@
     "preflight.py": "4281bf10415698db153981ebbf2b5dc6514ab24bb904d1dcfb776c390a50dd28",
     "task.json": "688da6f1b995cd65b292c8a56cf64bf4974caf346a19cd1eec049775027096ee"
   },
+  "fixture_lifecycle_version": 1,
   "required_packages": [],
   "schema_version": "1.0",
   "task_name": "gsm_hard",

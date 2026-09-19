@@ -29,6 +29,7 @@ validation_enable_web_search = False
 # Candidate Selection & Checkpoint Management
 CANDIDATE_OPTIMIZATION_METRIC: str = "tokens"
 CLEANUP_CHECKPOINTS_ON_FINALIZATION: bool = True
+STRICT_END_DESIGN: bool = True
 
 max_iterations = 40  # Maximum number of steps the meta system should perform (e.g., LLM calls)
 additional_documentation_max_tokens = 40_000

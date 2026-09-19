@@ -1,6 +1,7 @@
 import ast
 import copy
 import io
+import keyword
 import re
 import subprocess
 from pathlib import Path
@@ -9,6 +10,16 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 SAFE_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_-]+$")
+SAFE_SYSTEM_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def parse_streaming_exit_code(output_chunks: list[str], marker_name: str) -> int | None:
+    """Parse the exact final-line exit marker emitted by a streaming command wrapper."""
+    marker = re.search(
+        rf"(?:^|\n)__ADAS_{re.escape(marker_name)}_EXIT__(\d+)\s*$",
+        "".join(output_chunks),
+    )
+    return int(marker.group(1)) if marker else None
 
 
 def validate_identifier(name: str, field_name: str = "identifier") -> str:
@@ -20,6 +31,16 @@ def validate_identifier(name: str, field_name: str = "identifier") -> str:
         raise ValueError(
             f"Invalid {field_name} '{name}': must match pattern '^[a-zA-Z0-9_-]+$' with no traversal or special characters."
         )
+    return stripped
+
+
+def validate_system_name(name: str, field_name: str = "system name") -> str:
+    """Validate a system name that will also be used as a Python module name."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"Invalid {field_name}: cannot be empty.")
+    stripped = name.strip()
+    if not SAFE_SYSTEM_NAME_PATTERN.fullmatch(stripped) or keyword.iskeyword(stripped):
+        raise ValueError(f"Invalid {field_name} '{name}': must be a valid, non-reserved Python identifier.")
     return stripped
 
 
@@ -39,6 +60,7 @@ def validate_python_module_path(module_path: str, field_name: str = "Python modu
 def escape_system_name(system_name: str) -> str:
     """Sanitize a system name by removing path, filesystem separator, and dangerous shell characters."""
     cleaned = re.sub(r'[/\\:\x00-\x1f`$"\'|&;<>\s]', "", system_name)
+    cleaned = cleaned.replace("-", "_")
     cleaned = cleaned.lstrip(".")
     return cleaned or "default_system"
 
@@ -144,7 +166,7 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
     from adas_core.environment import normalize_package_name
 
     excluded_canonical = {normalize_package_name(p) for p in exclude_packages}
-    result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True)
+    result = subprocess.run(["pip", "list", "--not-required"], capture_output=True, text=True, check=False)
 
     packages = []
     for line in result.stdout.strip().split("\n")[2:]:  # Skip header lines
@@ -162,7 +184,7 @@ def get_filtered_packages(exclude_packages: list[str] | None = None) -> list[str
 def validate_node_conditional_edge_signature(function_code: str) -> tuple[bool, str | None]:
     """
     Validates the signature of a node or conditional-edge function.
-    It should accept exactly one argument named 'state'.
+    It should be a synchronous function accepting exactly one argument named 'state'.
     """
 
     try:
@@ -173,6 +195,9 @@ def validate_node_conditional_edge_signature(function_code: str) -> tuple[bool, 
     # Find the function definition node
     func_def_node = None
     for node in tree.body:
+        # TODO: allow AsyncFunctionDef nodes
+        if isinstance(node, ast.AsyncFunctionDef):
+            return False, "Asynchronous node and conditional-edge functions are not currently supported. Use 'def'."
         if isinstance(node, ast.FunctionDef):
             func_def_node = node
             break
@@ -276,11 +301,14 @@ def truncate_state(state: dict[str, Any], max_chars: int = 1200) -> dict[str, An
 
             # Truncate the content of each message
             for msg in cleaned_msgs:
-                if hasattr(msg, "content") and isinstance(msg.content, str):
-                    if len(msg.content) > (max_chars + len(msg_content_truncated_template)):
-                        start_chunk = msg.content[: (max_chars // 2)]
-                        end_chunk = msg.content[-(max_chars // 2) :]
-                        msg.content = start_chunk + msg_content_truncated_template + end_chunk
+                if (
+                    hasattr(msg, "content")
+                    and isinstance(msg.content, str)
+                    and len(msg.content) > (max_chars + len(msg_content_truncated_template))
+                ):
+                    start_chunk = msg.content[: (max_chars // 2)]
+                    end_chunk = msg.content[-(max_chars // 2) :]
+                    msg.content = start_chunk + msg_content_truncated_template + end_chunk
 
             truncated_state[key] = cleaned_msgs
         else:

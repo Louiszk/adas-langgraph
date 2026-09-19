@@ -1,13 +1,17 @@
+import json
 import textwrap
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 
+import create_setup
 from adas_core.automatic_setup import (
     AutomaticSetup,
     ensure_automatic_setup,
     extract_setup_requirements,
 )
+from adas_core.exceptions import FixtureExecutionError
 from adas_core.task_spec import (
     ApiKeyRequirement,
     ArchitectureContract,
@@ -34,6 +38,13 @@ def seed():
 """
     reqs = extract_setup_requirements(code)
     assert reqs == ["neo4j>=5.0", "fastapi"]
+
+    annotated_code = "SETUP_REQUIREMENTS: list[str] = ['httpx']"
+    assert extract_setup_requirements(annotated_code) == ["httpx"]
+
+    invalid_code = "SETUP_REQUIREMENTS = ['bad requirement']"
+    with pytest.raises(ValueError, match="Invalid SETUP_REQUIREMENTS package requirement"):
+        extract_setup_requirements(invalid_code)
 
     no_reqs_code = "def foo(): pass"
     assert extract_setup_requirements(no_reqs_code) == []
@@ -103,7 +114,7 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
             ),
             AIMessage(
                 content="""```python
-SETUP_REQUIREMENTS = ["gitpython"]
+SETUP_REQUIREMENTS = ["httpx"]
 
 def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
     return True, "Environment verified"
@@ -160,6 +171,7 @@ def check_environment(workspace_dirs: dict[str, str]) -> tuple[bool, str]:
         # Verify discovered packages union
         assert "pydantic" in result.discovered_packages
         assert "gitpython" in result.discovered_packages
+        assert "httpx" in result.discovered_packages
 
     def test_generate_external_database_seed_script_without_executing_it(self, tmp_path):
         mock_llm = MagicMock()
@@ -263,7 +275,7 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         )
 
         setup = AutomaticSetup(llm=mock_llm)
-        code, reqs = setup.generate_custom_fixture_script(spec, custom_fixture)
+        _code, reqs = setup.generate_custom_fixture_script(spec, custom_fixture)
 
         assert "gitpython" in reqs
         invoked_messages = mock_llm.invoke.call_args[0][0]
@@ -321,13 +333,33 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
         system_prompt = mock_llm.invoke.call_args.args[0][0].content
         assert "Never hardcode a host or sandbox path" in system_prompt
         assert "runtime resource profile" in system_prompt
+        user_prompt = mock_llm.invoke.call_args.args[0][1].content
+        assert "Resource Manifest (authoritative runtime contract)" in user_prompt
+        assert "Fixture Contracts (authoritative generated-fixture contract)" in user_prompt
+
+    @pytest.mark.parametrize(
+        "generated_code, error_message",
+        [
+            ("def check_environment(:\n    pass", "invalid Python"),
+            ("SETUP_REQUIREMENTS = []\n", "must define check_environment"),
+            ("async def check_environment(workspace_dirs):\n    return True, 'ok'", "synchronous"),
+            ("def check_environment():\n    return True, 'ok'", "exactly one positional parameter"),
+        ],
+    )
+    def test_generate_preflight_script_rejects_invalid_or_incomplete_code(self, generated_code, error_message):
+        spec = TaskSpec(
+            name="InvalidPreflightTask",
+            system_goal="Goal",
+            architecture_contract=ArchitectureContract(execution_mode="single_turn", state_schema={"q": "str"}),
+            dev_suite=[TestCaseSpec(id="c1", description="desc", turns=[{"q": "value"}])],
+        )
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(content=generated_code)
+
+        with pytest.raises(FixtureExecutionError, match=error_message):
+            AutomaticSetup(llm=mock_llm).generate_preflight_script(spec, [])
 
     def test_create_setup_cli_verify_flag(self, tmp_path):
-        import json
-
-        import create_setup
-        from adas_core.task_spec import TaskSpec
-
         spec_file = tmp_path / "task.json"
         spec_data = {
             "name": "VerifySetupTask",
@@ -335,7 +367,6 @@ def setup_environment(workspace_dirs: dict[str, str]) -> None:
             "architecture_contract": {
                 "execution_mode": "single_turn",
                 "state_schema": {"messages": "list[dict]"},
-                "persistence": {},
                 "required_tools": [],
             },
             "resource_manifest": {"available_resources": [], "available_api_keys": []},

@@ -25,6 +25,12 @@ def format_path_map(path_map: dict) -> str:
     return "{" + ", ".join(entries) + "}"
 
 
+def format_description_comment(description: str) -> list[str]:
+    """Render arbitrary metadata as one safely prefixed comment per line."""
+    lines = str(description).splitlines() or [""]
+    return [f"# Description: {lines[0]}"] + [f"# {line}" for line in lines[1:]]
+
+
 def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "generated_systems") -> str:
     """Generate Python code representation of the system."""
     nodes_count = len(system.nodes)
@@ -39,8 +45,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
     code_lines.append("")
 
     if system.imports:
-        for imp in system.imports:
-            code_lines.append(imp)
+        code_lines.extend(system.imports)
 
     if system.utility_code:
         code_lines.extend(["", "# ===== Utilities =====", system.utility_code, ""])
@@ -79,7 +84,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
             code_lines.extend(
                 [
                     f"# Tool: {tool_name}",
-                    f"# Description: {description}",
+                    *format_description_comment(description),
                     func_source,
                     "",
                     f"tools[{json.dumps(tool_name)}] = tool(runnable={original_name}, name_or_callable={json.dumps(tool_name)})",
@@ -99,7 +104,7 @@ def materialize_system(system: VirtualAgenticSystem, output_dir: str | None = "g
             code_lines.extend(
                 [
                     f"# Node: {node_name}",
-                    f"# Description: {description}",
+                    *format_description_comment(description),
                     func_source,
                     "",
                     f"agentic_system_graph.add_node({json.dumps(node_name)}, {original_name})",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import importlib.metadata
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -15,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
+from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from adas_core.helpers import normalize_fixture_path
@@ -22,6 +25,17 @@ from config.dependencies import DEFAULT_EXCLUDED_PACKAGES
 from config.logging import get_logger
 
 logger = get_logger("adas_core.environment")
+
+
+def get_core_package_versions() -> list[str]:
+    """Return installed versions of the core LangChain packages."""
+    packages: list[str] = []
+    for package_name in ("langchain-core", "langgraph"):
+        try:
+            packages.append(f"{package_name} {importlib.metadata.version(package_name)}")
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return packages
 
 
 def load_environment() -> None:
@@ -60,6 +74,47 @@ def validate_package_requirement(requirement: str, *, raise_on_error: bool = Fal
     return True
 
 
+def extract_literal_package_requirements(code: str, declaration_name: str) -> list[str]:
+    """Extract and validate a literal package declaration from generated source code."""
+    try:
+        parsed = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    for node in parsed.body:
+        value_node: ast.expr | None = None
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == declaration_name for target in node.targets)
+            or (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == declaration_name
+                and node.value is not None
+            )
+        ):
+            value_node = node.value
+
+        if value_node is None:
+            continue
+
+        try:
+            value = ast.literal_eval(value_node)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(value, list):
+            return []
+
+        requirements = [str(item) for item in value]
+        invalid = [requirement for requirement in requirements if not validate_package_requirement(requirement)]
+        if invalid:
+            raise ValueError(f"Invalid {declaration_name} package requirement(s): {invalid}")
+
+        return [requirement for requirement in requirements if not is_package_excluded(requirement)]
+
+    return []
+
+
 def normalize_package_name(package_spec: str) -> str:
     """Extract canonical distribution name from requirement specifier using PEP 503 rules."""
     # Strip extras, versions, and markers: e.g. "uvicorn[standard]>=0.20.0" -> "uvicorn"
@@ -83,15 +138,11 @@ def is_package_excluded(
 def is_package_installed(package_name: str) -> bool:
     """Check if a package distribution is installed in the current environment and satisfies any version constraints."""
     try:
-        from packaging.requirements import Requirement
-
         req = Requirement(package_name)
         canonical = canonicalize_name(req.name)
         try:
             installed_ver = importlib.metadata.version(canonical)
-            if req.specifier and installed_ver not in req.specifier:
-                return False
-            return True
+            return not (req.specifier and installed_ver not in req.specifier)
         except (importlib.metadata.PackageNotFoundError, ValueError):
             if req.specifier:
                 return False
@@ -138,8 +189,9 @@ def ensure_packages_installed(
     if invalid:
         raise ValueError(f"Invalid package requirement(s): {invalid}")
 
+    installable = [pkg for pkg in packages if not is_package_excluded(pkg)]
     missing: list[str] = []
-    for pkg in packages:
+    for pkg in installable:
         pkg_clean = pkg.strip()
         if not is_package_installed(pkg_clean):
             missing.append(pkg_clean)
@@ -160,6 +212,32 @@ def ensure_packages_installed(
         err_msg = f"Failed to install packages {missing}: {e.stderr or e.stdout}"
         logger.error(err_msg)
         raise RuntimeError(err_msg) from e
+
+
+def get_installed_packages_from_metrics(metrics_file: str | Path) -> list[str]:
+    """Extract dynamically installed package requirements from a metrics file."""
+    path = Path(metrics_file)
+    if not path.is_file():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        packages_value = data.get("installed_packages")
+        if isinstance(packages_value, list):
+            packages = [str(package).strip() for package in packages_value if str(package).strip()]
+        elif isinstance(packages_value, str):
+            packages = [package.strip() for package in packages_value.split() if package.strip()]
+        else:
+            return []
+
+        invalid = [package for package in packages if not validate_package_requirement(package)]
+        if invalid:
+            raise ValueError(f"Invalid package requirement(s) in {path}: {invalid}")
+        return list(dict.fromkeys(packages))
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError) as exc:
+        logger.warning("Failed to parse installed packages from %s: %s", path, exc)
+    return []
 
 
 PROVISIONING_SCRIPT_PREFIXES = ("generate_", "seed_", "mock_", "setup_")
@@ -337,7 +415,7 @@ def run_preflight_check(
 
         check_func = getattr(module, "check_environment", None)
         if not check_func or not callable(check_func):
-            return True, "preflight.py does not define check_environment(); skipping."
+            return False, "preflight.py must define callable check_environment()."
 
         result = check_func(dirs_dict)
         if isinstance(result, tuple) and len(result) == 2:

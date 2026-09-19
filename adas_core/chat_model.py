@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -85,7 +85,7 @@ class ModelRegistry:
     """Internal registry of model capabilities and known provider specifications."""
 
     _lock = threading.Lock()
-    _capabilities: dict[tuple[str, str], ModelCapabilities] = {}
+    _capabilities: ClassVar[dict[tuple[str, str], ModelCapabilities]] = {}
 
     @staticmethod
     def _matches_registered_name(configured_model: str, model_name: str) -> bool:
@@ -230,8 +230,8 @@ class UsageRecorder:
     """Thread-safe scoped usage recorder and aggregator."""
 
     _lock = threading.Lock()
-    _records: list[UsageRecord] = []
-    _legacy_metrics: dict[str, Any] = {
+    _records: ClassVar[list[UsageRecord]] = []
+    _legacy_metrics: ClassVar[dict[str, Any]] = {
         "meta_usage": {
             "overall": {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         },
@@ -591,9 +591,8 @@ def _normalize_tool_spec(
             raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support web search.")
         return {"type": "web_search"}
     if isinstance(tool, dict):
-        if tool.get("type") == "web_search":
-            if not capabilities.supports_web_search:
-                raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support web search.")
+        if tool.get("type") == "web_search" and not capabilities.supports_web_search:
+            raise ModelConfigurationError(f"Model '{model}' ({provider}) does not support web search.")
         return tool
     if getattr(tool, "name", None) and callable(getattr(tool, "invoke", None)):
         return tool
@@ -664,11 +663,15 @@ class ChatModel:
         if default_tools:
             for t in default_tools:
                 norm_tool = _normalize_tool_spec(t, capabilities, effective_provider, effective_model)
-                if not is_meta_effective and isinstance(norm_tool, dict) and norm_tool.get("type") == "web_search":
-                    if not is_target_web_search_authorized:
-                        raise ModelConfigurationError(
-                            f"Model '{effective_model}' ({effective_provider}) is not authorized for web search by active TaskSpec."
-                        )
+                if (
+                    not is_meta_effective
+                    and isinstance(norm_tool, dict)
+                    and norm_tool.get("type") == "web_search"
+                    and not is_target_web_search_authorized
+                ):
+                    raise ModelConfigurationError(
+                        f"Model '{effective_model}' ({effective_provider}) is not authorized for web search by active TaskSpec."
+                    )
                 normalized_default_tools.append(norm_tool)
 
         self.model: str = effective_model
@@ -681,7 +684,7 @@ class ChatModel:
         self._bound_client_tools: tuple[Any, ...] = ()
         self._raw_model: Any = runnable
         if self.default_tools:
-            self._runnable = runnable.bind_tools(list(self.default_tools))
+            self._runnable = runnable.bind_tools(list(self.default_tools), parallel_tool_calls=False)
         else:
             self._runnable = runnable
         self._response_transformer: Callable[[Any], Any] | None = None
@@ -718,7 +721,7 @@ class ChatModel:
         self,
         tools: Sequence[Any],
         *,
-        parallel_tool_calls: bool | None = None,
+        parallel_tool_calls: bool = False,
         **kwargs: Any,
     ) -> ChatModel:
         """Return a NEW ChatModel instance with tools bound, preserving telemetry and immutability."""
@@ -746,8 +749,7 @@ class ChatModel:
                 combined.append(t)
 
         bind_kwargs = dict(kwargs)
-        if parallel_tool_calls is not None:
-            bind_kwargs["parallel_tool_calls"] = parallel_tool_calls
+        bind_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
         bound = self._raw_model.bind_tools(combined, **bind_kwargs)
         return ChatModel._from_runnable(
@@ -783,13 +785,16 @@ class ChatModel:
 
             # LangChain's public API supports provider tools with structured output only via json_schema + strict + include_raw.
             structured_tools = [*self._bound_client_tools, *self.default_tools]
+            structured_kwargs = dict(kwargs)
+            structured_kwargs.pop("method", None)
+            structured_kwargs.pop("strict", None)
             structured = self._raw_model.with_structured_output(
                 schema,
                 method="json_schema",
                 strict=True,
                 include_raw=True,
                 tools=structured_tools,
-                **kwargs,
+                **structured_kwargs,
             )
         else:
             structured = self._runnable.with_structured_output(schema, include_raw=True, **kwargs)

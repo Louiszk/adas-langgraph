@@ -5,7 +5,7 @@ Verifies workflow assembly, node logic, conditions, prompts, and tool bindings.
 
 import ast
 
-from langgraph.graph import END
+from langchain_core.messages import AIMessage
 
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.graph import (
@@ -117,12 +117,25 @@ class TestMetaSystemNodesAndRouting:
         assert res["system_passed"] is False
 
     def test_design_completed_condition_routes(self):
-        """design_completed_condition routes to END when design is completed or iteration limit exceeded."""
+        """design_completed_condition routes completed designs through finalization."""
         sys = VirtualAgenticSystem("Dummy")
         assert design_completed_condition({"design_completed": False, "messages": []}) == "MetaAgent"
         assert (
-            design_completed_condition({"design_completed": True, "messages": [], "target_agentic_system": sys}) == END
+            design_completed_condition({"design_completed": True, "messages": [], "target_agentic_system": sys})
+            == "Finalize"
         )
+
+    def test_iteration_exhaustion_marks_passing_candidate_complete(self):
+        sys = VirtualAgenticSystem("ExhaustedSystem")
+        state = {
+            "design_completed": False,
+            "max_iterations": 1,
+            "messages": [AIMessage(content="one"), AIMessage(content="two")],
+            "target_agentic_system": sys,
+            "candidates": [{"dev_pass_rate": 1.0, "passed_count": 1, "total_count": 1}],
+        }
+        assert design_completed_condition(state) == "Finalize"
+        assert state["design_completed"] is True
 
     def test_initial_test_runner_function_skips_when_not_optimize(self):
         """initial_test_runner_function returns empty dict when optimize is not enabled."""

@@ -11,7 +11,8 @@ def run_fever_benchmark_in_sandbox(session, system_name: str, dataset_name: str 
         benchmark_name="FEVER",
         system_name=system_name,
         runner_script="benchmark/FEVER/run_fever_bench.py",
-        extra_files=[f"benchmark/FEVER/{dataset_name}"],
+        required_packages=["wikipedia"],
+        dataset_file=f"benchmark/FEVER/{dataset_name}",
     )
 
 

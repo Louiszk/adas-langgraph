@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.0",
+  "name": "github_repository_research",
+  "system_goal": "Build a single-turn multi-agent research system that answers natural-language questions about the source code, architecture, and structural design of public GitHub repositories using only the official read-only GitHub Streamable HTTP MCP server. A single orchestrator must interpret the request, identify the repository and evidence needed, dynamically assign focused research roles to no more than three subagents, coordinate their independent source code investigations, and produce a concise grounded answer. The answer must include GitHub source links, file paths, and line references where available. The system must never create, modify, merge, or delete GitHub resources and must clearly state when the available repository evidence is insufficient.",
+  "architecture_contract": {
+    "execution_mode": "single_turn",
+    "state_schema": {
+      "user_request": "str",
+      "repository": "str",
+      "research_plan": "list[dict[str, Any]]",
+      "subagent_results": "list[dict[str, Any]]",
+      "evidence": "list[dict[str, Any]]",
+      "tool_history": "list[dict[str, Any]]",
+      "final_answer": "str"
+    },
+    "persistence": null,
+    "required_tools": [
+      {
+        "name": "discover_github_tools",
+        "description": "Connect to the configured official GitHub Streamable HTTP MCP endpoint, discover the available read-only tool definitions and JSON schemas, and return them to the orchestrator. Do not use or expose mutating tools. Authenticate with GITHUB_PAT and use GITHUB_MCP_URL when set, otherwise default to https://api.githubcopilot.com/mcp/readonly."
+      },
+      {
+        "name": "call_github_tool",
+        "description": "Invoke a discovered read-only GitHub MCP tool with validated arguments, return the structured result and source metadata, and append an auditable record to tool_history. Reject calls to mutation-capable tools or calls that do not concern the requested public repository."
+      }
+    ]
+  },
+  "available_models": [
+    {
+      "provider": "openai",
+      "model_name": "gpt-5.4-mini",
+      "enable_web_search": false
+    }
+  ],
+  "resource_manifest": {
+    "available_resources": [
+      {
+        "name": "github_mcp",
+        "type": "api",
+        "path_or_uri": "https://api.githubcopilot.com/mcp/readonly",
+        "description": "Official GitHub-hosted read-only Streamable HTTP MCP server for public repository metadata, repository contents, directory trees, file inspection, and code search. The /readonly endpoint must be used so mutation-capable tools are disabled. The endpoint may be overridden by GITHUB_MCP_URL."
+      }
+    ],
+    "available_api_keys": [
+      {
+        "env_var": "GITHUB_PAT",
+        "description": "GitHub Personal Access Token used to authenticate the official remote GitHub MCP server.",
+        "optional": false
+      },
+      {
+        "env_var": "GITHUB_MCP_URL",
+        "description": "Optional override for the official GitHub read-only MCP endpoint; defaults to https://api.githubcopilot.com/mcp/readonly.",
+        "optional": true
+      }
+    ]
+  },
+  "required_packages": [
+    "mcp>=2"
+  ],
+  "additional_documentation": [
+    "example_docs/mcp-documentation.md"
+  ],
+  "test_fixtures": {
+    "files": [],
+    "databases": [],
+    "mcps": [],
+    "mock_services": [],
+    "custom_fixtures": [],
+    "external_database_seeds": []
+  },
+  "dev_suite": [
+    {
+      "id": "repository_structure_and_entrypoint",
+      "description": "Inspect repository structure, package layout, and primary entry points to answer an introductory architecture question.",
+      "turns": [
+        {
+          "user_request": "For the public repository encode/starlette, identify its primary purpose, core directory layout, and main application entry point (where the Starlette application class is defined and exported). Cite the relevant file paths and links where available."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "repository",
+        "research_plan",
+        "subagent_results",
+        "evidence",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer, identifies the repository as encode/starlette, preserves research_plan, subagent_results, evidence, and tool_history as structured list values, and uses no more than three research roles or subagent results. The validator should verify that evidence and tool_history are non-empty, leaving citation format and qualitative accuracy to the LLM judge.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Evaluate whether the response clearly identifies Starlette's purpose, highlights the core directory layout, and correctly points to the main application entry point with grounded file paths and citations. Do not reject a claim solely because external verification is unavailable; judge the coherence and groundedness of the presented evidence.",
+      "judge_model": "gpt-5.4-mini",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "component_implementation_trace",
+      "description": "Answer a focused source code question tracing a specific mechanism across multiple files with exact symbols and line references.",
+      "turns": [
+        {
+          "user_request": "In the public repository encode/starlette, trace how routing and HTTP request dispatching are implemented. Cite the primary routing classes, key methods that match and handle routes, and provide exact file paths with line references where available."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "repository",
+        "research_plan",
+        "subagent_results",
+        "evidence",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer, identifies encode/starlette, and preserves research_plan, subagent_results, evidence, and tool_history as structured list values. The validator should verify non-empty evidence and tool_history, leaving citation quality, line number accuracy, and implementation tracing depth to the LLM judge.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Evaluate the response for clarity and implementation-tracing quality: does it identify the main routing classes (such as Router or Route) and dispatch methods, citing specific files and line numbers where available? Penalize unsupported claims only when the response contradicts its own retrieved evidence.",
+      "judge_model": "gpt-5.4-mini",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "multi_agent_architecture_synthesis",
+      "description": "Coordinate up to three specialized subagents to investigate separate subsystems of a complex repository and synthesize an architectural overview.",
+      "turns": [
+        {
+          "user_request": "For the public repository langchain-ai/langgraph, conduct an architectural investigation across its main subsystems by assigning up to three focused research roles (e.g., graph compilation and state representation, checkpointer persistence mechanisms, and channel/stream execution). Coordinate their findings to explain how these subsystems fit together, citing source files and line references for each building block."
+        }
+      ],
+      "expected_outputs": [
+        "final_answer",
+        "repository",
+        "research_plan",
+        "subagent_results",
+        "evidence",
+        "tool_history"
+      ],
+      "deterministic_criteria": "The invocation returns a nonempty final_answer, identifies langchain-ai/langgraph, preserves research_plan, subagent_results, evidence, and tool_history as structured list values, and uses between two and three research roles or subagent results. The validator should not require a particular citation syntax; synthesis quality and coverage belong to the LLM judge.",
+      "llm_judge_needed": true,
+      "judge_criteria": "Evaluate the quality of multi-agent coordination and synthesis: does the plan divide the inquiry into distinct research roles across the requested subsystems, synthesize their findings into a cohesive architectural explanation, and include grounded citations with file paths and line references? Respect the three-subagent limit and read-only boundary.",
+      "judge_model": "gpt-5.4-mini",
+      "judge_provider": "openai",
+      "judge_web_search": true,
+      "modalities": [
+        "text"
+      ]
+    }
+  ]
+}

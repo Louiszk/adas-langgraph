@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import dill
 import pytest
 
 from adas_core.task_spec import TaskSpec
+from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from sandbox import run_meta
 
 
@@ -21,7 +23,6 @@ def sample_task_spec_file(tmp_path: Path) -> Path:
         "architecture_contract": {
             "execution_mode": "single_turn",
             "state_schema": {"problem": "str", "solution": "float"},
-            "persistence": {},
             "required_tools": [],
         },
         "resource_manifest": {"available_resources": [], "available_api_keys": []},
@@ -55,16 +56,21 @@ def test_run_meta_success_with_design_completed(
 
     monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
 
-    # Mock workflow.stream to yield design_completed
     mock_workflow = MagicMock()
-    mock_workflow.stream.return_value = [{"ToolExecution": {"design_completed": True, "messages": []}}]
-    monkeypatch.setattr("sandbox.run_meta.workflow", mock_workflow)
 
-    # Create dummy finalized pickle and py files so artifact existence check passes
-    final_pickle = sandbox_gen_dir / "MathSolverAgent.pkl"
-    final_pickle.write_bytes(b"dummy_pickle_bytes")
-    final_py = sandbox_gen_dir / "MathSolverAgent.py"
-    final_py.write_text("# dummy python file", encoding="utf-8")
+    def stream_and_write_artifacts(*args, **kwargs):
+        (sandbox_gen_dir / "MathSolverAgent.pkl").write_bytes(dill.dumps(VirtualAgenticSystem("MathSolverAgent")))
+        (sandbox_gen_dir / "MathSolverAgent.py").write_text("# generated python", encoding="utf-8")
+        yield {
+            "Finalize": {
+                "design_completed": True,
+                "finalization_succeeded": True,
+                "messages": [],
+            }
+        }
+
+    mock_workflow.stream.side_effect = stream_and_write_artifacts
+    monkeypatch.setattr("sandbox.run_meta.workflow", mock_workflow)
 
     argv = [
         "run_meta.py",
@@ -158,10 +164,6 @@ def test_run_meta_exits_with_code_1_when_pickle_exists_but_design_incomplete(
     monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
 
     # Existing pickle and py from a prior run (e.g. optimization baseline)
-    import dill
-
-    from adas_core.virtual_agentic_system import VirtualAgenticSystem
-
     old_pickle = sandbox_gen_dir / "OptimizedSystem.pkl"
     old_pickle.write_bytes(dill.dumps(VirtualAgenticSystem("OptimizedSystem")))
     old_py = sandbox_gen_dir / "OptimizedSystem.py"
@@ -189,6 +191,37 @@ def test_run_meta_exits_with_code_1_when_pickle_exists_but_design_incomplete(
     metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
     assert metrics["status"] == "error"
     assert "Design loop ended without design_completed flag" in metrics["error"]["message"]
+
+
+def test_run_meta_does_not_accept_stale_same_name_artifacts(
+    tmp_path: Path, sample_task_spec_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    sandbox_gen_dir = tmp_path / "generated_systems"
+    metrics_dir = sandbox_gen_dir / "metrics"
+    sandbox_gen_dir.mkdir(parents=True)
+    metrics_dir.mkdir(parents=True)
+    monkeypatch.setattr("sandbox.run_meta.SANDBOX_GENERATED_SYSTEMS_DIR", str(sandbox_gen_dir))
+
+    (sandbox_gen_dir / "StaleSystem.pkl").write_bytes(dill.dumps(VirtualAgenticSystem("StaleSystem")))
+    (sandbox_gen_dir / "StaleSystem.py").write_text("# stale artifact", encoding="utf-8")
+
+    mock_workflow = MagicMock()
+    mock_workflow.stream.return_value = [{"ToolExecution": {"design_completed": True, "messages": []}}]
+    monkeypatch.setattr("sandbox.run_meta.workflow", mock_workflow)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_meta.py",
+            "--task-spec",
+            str(sample_task_spec_file),
+            "--system-name",
+            "StaleSystem",
+        ],
+    )
+
+    assert run_meta.main() == 1
+    metrics = json.loads((metrics_dir / "StaleSystem.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "error"
 
 
 def test_run_meta_rejects_invalid_system_name(

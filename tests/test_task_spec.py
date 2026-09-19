@@ -1,8 +1,12 @@
 import json
+import py_compile
+from pathlib import Path
 
 import pytest
+import tiktoken
 from pydantic import ValidationError
 
+from adas_core.automatic_validation import is_validation_manifest_current, load_validation_module
 from adas_core.chat_model import ModelCapabilities, ModelRegistry
 from adas_core.task_spec import (
     ApiKeyRequirement,
@@ -11,10 +15,10 @@ from adas_core.task_spec import (
     DatabaseFixtureSpec,
     ExternalDatabaseSeedSpec,
     FileFixtureSpec,
-    HoldoutSuiteSpec,
     MCPFixtureSpec,
     MockServiceFixtureSpec,
     ModelSpec,
+    PersistenceContract,
     ResourceEntry,
     ResourceManifest,
     TaskSpec,
@@ -23,6 +27,7 @@ from adas_core.task_spec import (
     ToolRequirement,
 )
 from config import settings
+from create_setup import setup_manifest_is_current
 
 
 class TestTaskSpecModel:
@@ -53,7 +58,6 @@ class TestTaskSpecModel:
         assert '"schema_version": "1.0"' in context
         assert '"dev_suite"' not in context
         assert "case_1_addition" not in context
-        assert '"holdout_suite"' not in context
 
     def test_fixtures_private_description_defaults_and_design_context_stripping(self):
         file_fix = FileFixtureSpec(
@@ -158,6 +162,14 @@ class TestTaskSpecModel:
             ArchitectureContract(
                 execution_mode="multi_turn",
                 state_schema={"messages": "Annotated[list[AnyMessage], add_messages]"},
+            )
+
+    def test_single_turn_rejects_persistence(self):
+        with pytest.raises(ValidationError, match="Persistence is not supported for 'single_turn'"):
+            ArchitectureContract(
+                execution_mode="single_turn",
+                state_schema={"query": "str"},
+                persistence=PersistenceContract(checkpointer="memory"),
             )
 
     def test_full_fixtures_and_required_packages_serialization(self, tmp_path):
@@ -462,6 +474,26 @@ class TestTaskSpecModel:
                 ],
             )
 
+    def test_vision_judge_checks_default_model_capability(self, monkeypatch):
+        ModelRegistry.register_capabilities("openai", "text-default-model", ModelCapabilities(supports_vision=False))
+        monkeypatch.setattr(settings, "validation_model", "text-default-model")
+        with pytest.raises(ValidationError, match="not vision-capable"):
+            TaskSpec(
+                name="DefaultVisionTask",
+                system_goal="Assess a chart",
+                architecture_contract=ArchitectureContract(state_schema={"query": "str"}),
+                dev_suite=[
+                    TestCaseSpec(
+                        id="vision_default",
+                        description="Assess a chart",
+                        turns=[{"query": "go"}],
+                        llm_judge_needed=True,
+                        judge_criteria="The chart is readable.",
+                        modalities=["vision"],
+                    )
+                ],
+            )
+
     def test_unknown_modalities_are_rejected(self):
         with pytest.raises(ValidationError):
             TestCaseSpec.model_validate({"id": "audio", "description": "Audio", "turns": [{}], "modalities": ["audio"]})
@@ -508,54 +540,7 @@ class TestTaskSpecModel:
             )
 
 
-class TestHoldoutSuiteSpecModel:
-    def test_valid_holdout_suite_spec(self, tmp_path):
-        holdout = HoldoutSuiteSpec(
-            schema_version="1.0",
-            task_name="SimpleMathAgent",
-            holdout_suite=[
-                TestCaseSpec(
-                    id="holdout_1_division",
-                    description="Hidden division test",
-                    turns=[{"query": "What is 10 / 2?"}],
-                    expected_outputs=["answer"],
-                    deterministic_criteria="Output must contain '5'",
-                ),
-                TestCaseSpec(
-                    id="holdout_2_negative",
-                    description="Hidden negative addition",
-                    turns=[{"query": "What is -3 + 5?"}],
-                    expected_outputs=["answer"],
-                    deterministic_criteria="Output must contain '2'",
-                ),
-            ],
-        )
-
-        assert len(holdout.holdout_suite) == 2
-        file_path = tmp_path / "holdout.json"
-        holdout.save(file_path)
-
-        loaded = HoldoutSuiteSpec.from_file(file_path)
-        assert loaded.task_name == "SimpleMathAgent"
-        assert loaded.holdout_suite[1].id == "holdout_2_negative"
-
-    def test_empty_holdout_suite_rejected(self):
-        with pytest.raises(ValidationError):
-            HoldoutSuiteSpec(
-                task_name="EmptyHoldout",
-                holdout_suite=[],
-            )
-
-    def test_duplicate_holdout_ids_rejected(self):
-        with pytest.raises(ValidationError):
-            HoldoutSuiteSpec(
-                task_name="DupHoldout",
-                holdout_suite=[
-                    TestCaseSpec(id="dup", description="A", turns=[{"x": 1}]),
-                    TestCaseSpec(id="dup", description="B", turns=[{"x": 2}]),
-                ],
-            )
-
+class TestTaskSpecValidation:
     def test_duplicate_dev_suite_ids_rejected(self):
         with pytest.raises(ValidationError, match="Duplicate test case id 'case_1' in dev_suite"):
             TaskSpec(
@@ -709,6 +694,23 @@ class TestHoldoutSuiteSpecModel:
         )
         assert seed.namespace_env == "PGDATABASE"
 
+    def test_custom_external_database_seed_requires_explicit_safety_contract(self):
+        seed_kwargs = {
+            "name": "custom_seed",
+            "resource_name": "evaluation_db",
+            "db_type": "custom",
+            "driver": "vendor_driver",
+            "connection_env": {"uri": "EVALUATION_DB_URI"},
+            "namespace_kind": "namespace",
+            "namespace": "adas-test-custom",
+            "description": "Custom seed with namespace-scoped cleanup.",
+        }
+        with pytest.raises(ValidationError, match="safety_contract"):
+            ExternalDatabaseSeedSpec(**seed_kwargs)
+
+        seed = ExternalDatabaseSeedSpec(**seed_kwargs, safety_contract="namespace_scoped_cleanup")
+        assert seed.safety_contract == "namespace_scoped_cleanup"
+
         with pytest.raises(ValidationError, match="valid environment-variable name"):
             ExternalDatabaseSeedSpec(
                 name="invalid_env_seed",
@@ -824,35 +826,9 @@ class TestHoldoutSuiteSpecModel:
                 dev_suite=cases,
             )
 
-    def test_holdout_suite_rejects_colliding_sanitized_test_case_ids(self):
-        # eval-1 and eval_1 both sanitize to eval_1
-        from adas_core.task_spec import HoldoutSuiteSpec
-
-        cases = [
-            TestCaseSpec(id="eval-1", description="Eval 1", turns=[{"input": "1"}]),
-            TestCaseSpec(id="eval_1", description="Eval 1 duplicate", turns=[{"input": "2"}]),
-        ]
-        with pytest.raises(ValidationError, match="Duplicate sanitized test case id 'eval_1'"):
-            HoldoutSuiteSpec(
-                task_name="CollisionTest",
-                holdout_suite=cases,
-            )
-
-    def test_holdout_suite_rejects_unsupported_schema_version(self):
-        from adas_core.task_spec import HoldoutSuiteSpec
-
-        with pytest.raises(ValidationError, match="Unsupported schema_version '0.9'"):
-            HoldoutSuiteSpec(
-                schema_version="0.9",
-                task_name="OldTask",
-                holdout_suite=[TestCaseSpec(id="c1", description="d", turns=[{"q": "1"}])],
-            )
-
 
 class TestExampleSpecs:
     def test_example_specs_conform_to_schema(self):
-        from pathlib import Path
-
         repo_root = Path(__file__).resolve().parent.parent
         example_specs_dir = repo_root / "example_specs"
         assert example_specs_dir.is_dir(), "example_specs directory should exist"
@@ -863,9 +839,11 @@ class TestExampleSpecs:
         expected_dirs = {
             "botanical_agent",
             "data_analyst_agent",
+            "github_agent",
             "mcp_agent",
             "movie_agent",
             "neo4j_agent",
+            "research_agent",
             "social_agent",
         }
         found_dirs = {p.parent.name for p in spec_files}
@@ -878,11 +856,28 @@ class TestExampleSpecs:
             assert spec.architecture_contract.execution_mode in {"single_turn", "multi_turn"}
             assert len(spec.dev_suite) > 0, f"Spec at {spec_path} must have at least one test case in dev_suite"
 
+    def test_example_specs_test_cases_and_documentation_contract(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        example_specs_dir = repo_root / "example_specs"
+        spec_files = sorted(example_specs_dir.glob("*/task.json"))
+
+        for spec_path in spec_files:
+            spec = TaskSpec.from_file(spec_path)
+            case_ids = [case.id for case in spec.dev_suite]
+            assert len(case_ids) == len(set(case_ids)), f"Duplicate test case IDs in {spec_path}"
+            for case in spec.dev_suite:
+                assert case.id, f"Test case ID cannot be empty in {spec_path}"
+                assert case.description, f"Test case {case.id} in {spec_path} must have a description"
+                assert len(case.turns) > 0, f"Test case {case.id} in {spec_path} must have at least one turn"
+
+            for doc_path in spec.additional_documentation:
+                full_path = repo_root / doc_path
+                assert full_path.is_file(), f"Declared doc file {doc_path} for {spec_path} does not exist"
+                assert full_path.stat().st_size > 0, f"Declared doc file {doc_path} for {spec_path} is empty"
+
 
 class TestBenchmarkSpecs:
     def test_benchmark_specs_conform_to_schema(self):
-        from pathlib import Path
-
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
         assert benchmark_dir.is_dir(), "benchmark directory should exist"
@@ -905,11 +900,6 @@ class TestBenchmarkSpecs:
             assert spec.dev_suite[0].id.startswith("case_0_smoke"), f"First case in {spec_path} should be smoke test"
 
     def test_benchmark_setup_manifests_are_current(self):
-        from pathlib import Path
-
-        from adas_core.automatic_validation import is_validation_manifest_current
-        from create_setup import setup_manifest_is_current
-
         repo_root = Path(__file__).resolve().parent.parent
         benchmark_dir = repo_root / "benchmark"
         spec_files = sorted(benchmark_dir.glob("*/spec/task.json"))
@@ -927,8 +917,8 @@ class TestBenchmarkSpecs:
                 f"Expected exactly 1 *.validation.py file in {spec_dir}, found {len(validation_files)}"
             )
             validation_file = validation_files[0]
-            assert not setup_manifest_is_current(spec_path), (
-                "Frozen benchmark setup must be regenerated after the fixture lifecycle manifest-version change."
+            assert setup_manifest_is_current(spec_path), (
+                f"Frozen benchmark setup is stale or incomplete for {spec_path}; regenerate it before running benchmarks."
             )
             task_spec = TaskSpec.from_file(spec_path)
             assert is_validation_manifest_current(task_spec, spec_dir), (
@@ -936,10 +926,6 @@ class TestBenchmarkSpecs:
             )
 
             # Compile preflight and validator scripts to ensure valid Python syntax
-            import py_compile
-
-            from adas_core.automatic_validation import load_validation_module
-
             py_compile.compile(str(preflight_file), doraise=True)
             py_compile.compile(str(validation_file), doraise=True)
 
@@ -1050,8 +1036,6 @@ class TestBenchmarkSpecs:
         assert "# API Reference\nEndpoint details." in loaded
 
     def test_additional_documentation_skips_invalid_utf8_and_respects_token_budget(self, tmp_path, monkeypatch):
-        import tiktoken
-
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir()
         (docs_dir / "invalid.txt").write_bytes(b"\xff\xfe")

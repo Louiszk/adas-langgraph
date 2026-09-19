@@ -1,3 +1,4 @@
+import argparse
 import concurrent.futures
 import json
 import os
@@ -5,9 +6,13 @@ import shlex
 from collections.abc import Callable
 from typing import Any
 
+from packaging.requirements import Requirement
+
+from adas_core.chat_model import ChatModel
 from adas_core.environment import SANDBOX_GENERATED_SYSTEMS_DIR, SANDBOX_WORKSPACE_DIR
-from adas_core.helpers import validate_python_module_path
-from config.logging import get_logger
+from adas_core.helpers import parse_streaming_exit_code, validate_python_module_path
+from config.logging import get_logger, setup_logging
+from sandbox import sandbox
 
 logger = get_logger("benchmark_base")
 
@@ -135,8 +140,6 @@ def run_benchmark_parallel(
 
 def reset_target_usage() -> None:
     """Reset target usage telemetry in ChatModel."""
-    from adas_core.chat_model import ChatModel
-
     ChatModel.usage_metrics.setdefault("target_usage", {})["overall"] = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -147,8 +150,6 @@ def reset_target_usage() -> None:
 
 def extract_target_usage(duration_seconds: float) -> dict[str, Any]:
     """Extract captured target token and call usage from ChatModel."""
-    from adas_core.chat_model import ChatModel
-
     usage = ChatModel.usage_metrics.get("target_usage", {}).get("overall", {})
     return {
         "duration_seconds": duration_seconds,
@@ -166,6 +167,7 @@ def run_benchmark_in_sandbox(
     runner_script: str,
     extra_files: list[str] | None = None,
     required_packages: list[str] | None = None,
+    dataset_file: str | None = None,
 ) -> bool:
     """Shared implementation for executing benchmarks inside an isolated sandbox session."""
     try:
@@ -186,12 +188,22 @@ def run_benchmark_in_sandbox(
     if os.path.dirname(system_path):
         session.execute_command(f"mkdir -p {SANDBOX_WORKSPACE_DIR}/{os.path.dirname(system_path)}")
 
-    # Copy benchmark runner and target system files to sandbox
+    # Copy the shared benchmark implementation, runner, and target system files.
+    session.copy_to_runtime(
+        "benchmark/benchmark_base.py",
+        f"{SANDBOX_WORKSPACE_DIR}/benchmark/benchmark_base.py",
+    )
     session.copy_to_runtime(
         runner_script,
         f"{SANDBOX_WORKSPACE_DIR}/{runner_script}",
     )
     session.copy_to_runtime(system_path, f"{SANDBOX_WORKSPACE_DIR}/{system_path}")
+
+    if dataset_file:
+        if not os.path.isfile(dataset_file):
+            logger.error("Benchmark dataset was not found: %s", dataset_file)
+            return False
+        session.copy_to_runtime(dataset_file, f"{SANDBOX_WORKSPACE_DIR}/{dataset_file}")
 
     if extra_files:
         for fpath in extra_files:
@@ -199,8 +211,25 @@ def run_benchmark_in_sandbox(
 
     if required_packages:
         for pkg in required_packages:
-            if "not found" in str(session.execute_command(f"pip show {pkg}")):
-                session.execute_command(f"pip install {pkg}")
+            try:
+                requirement = Requirement(pkg)
+            except Exception as exc:
+                logger.error("Invalid benchmark dependency %r: %s", pkg, exc)
+                return False
+            show_result = session.execute_command(f"pip show {shlex.quote(requirement.name)}")
+            installed_version = None
+            for line in str(getattr(show_result, "stdout", "") or "").splitlines():
+                if line.startswith("Version:"):
+                    installed_version = line.partition(":")[2].strip()
+                    break
+            installed = getattr(show_result, "exit_code", 1) == 0 and installed_version is not None
+            if installed and requirement.specifier and installed_version is not None:
+                installed = installed_version in requirement.specifier
+            if not installed:
+                install_result = session.execute_command(f"pip install {shlex.quote(pkg)}")
+                if getattr(install_result, "exit_code", 1) != 0:
+                    logger.error("Failed to install benchmark dependency: %s", pkg)
+                    return False
 
     # Run the benchmark
     command = (
@@ -214,7 +243,8 @@ def run_benchmark_in_sandbox(
         output_chunks.append(chunk)
         print(chunk, end="", flush=True)
 
-    bench_succeeded = "__ADAS_BENCH_EXIT__0" in "".join(output_chunks)
+    exit_code = parse_streaming_exit_code(output_chunks, "BENCH")
+    bench_succeeded = exit_code == 0
     if not bench_succeeded:
         logger.error("Benchmark execution failed in container")
         return False
@@ -241,11 +271,6 @@ def benchmark_cli_main(
     run_in_sandbox_fn: Callable[[Any, str], bool],
 ) -> int:
     """Unified CLI entry point for benchmark sandbox runners."""
-    import argparse
-
-    from config.logging import setup_logging
-    from sandbox.sandbox import StreamingSandboxSession, setup_sandbox_environment
-
     setup_logging()
 
     parser = argparse.ArgumentParser(description=f"Run {benchmark_name} benchmark in a sandboxed environment")
@@ -275,7 +300,7 @@ def benchmark_cli_main(
         logger.error(str(exc))
         return 1
 
-    session = StreamingSandboxSession(
+    session = sandbox.StreamingSandboxSession(
         image=args.base_image,
         verbose=True,
         container_type=args.container,
@@ -285,7 +310,7 @@ def benchmark_cli_main(
         session.open()
         logger.info("Sandbox session opened")
 
-        if setup_sandbox_environment(session, args.reinstall):
+        if sandbox.setup_sandbox_environment(session, args.reinstall):
             success = run_in_sandbox_fn(session, args.system)
             if success:
                 logger.info("Benchmark finished successfully!")
@@ -297,8 +322,8 @@ def benchmark_cli_main(
             logger.error("Failed to set up sandbox environment")
             return 1
 
-    except Exception as e:
-        logger.exception(f"Error during benchmark execution: {e!s}")
+    except Exception:
+        logger.exception("Error during benchmark execution")
         return 1
     finally:
         logger.info("Closing session...")

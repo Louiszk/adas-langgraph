@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import sys
 import time
@@ -91,8 +92,6 @@ def custom_print_summary(results: dict):
 
 
 if __name__ == "__main__":
-    import argparse
-
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run FEVER benchmark in parallel with metric aggregation.")

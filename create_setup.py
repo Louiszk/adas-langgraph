@@ -202,13 +202,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    run_setup_for_task(
-        args.task_spec,
-        force=args.force,
-        reinstall=args.reinstall,
-        container=args.container,
-        base_image=args.base_image,
-    )
+    try:
+        run_setup_for_task(
+            args.task_spec,
+            force=args.force,
+            reinstall=args.reinstall,
+            container=args.container,
+            base_image=args.base_image,
+        )
+    except Exception:
+        logger.exception("Task setup failed for '%s'", args.task_spec)
+        return 1
     return 0
 
 

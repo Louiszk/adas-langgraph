@@ -26,11 +26,11 @@ setup_podman_service() {
     # This cleanup function is invoked indirectly by the EXIT/INT/TERM trap.
     # shellcheck disable=SC2317
     cleanup_podman() {
+        podman ps -aq --filter "label=io.adas.job=${UNIQUE_ID}" | xargs -r podman rm -f >/dev/null 2>&1 || true
         if [ -n "${PODMAN_PID:-}" ]; then
             kill "$PODMAN_PID" 2>/dev/null || true
             wait "$PODMAN_PID" 2>/dev/null || true
         fi
-        podman rm -af --ignore >/dev/null 2>&1 || true
         rm -rf "$XDG_RUNTIME_DIR"
     }
     trap cleanup_podman EXIT INT TERM

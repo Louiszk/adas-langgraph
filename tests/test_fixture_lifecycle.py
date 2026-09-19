@@ -1,11 +1,18 @@
 import os
 import socket
 import time
+from http.client import BadStatusLine
 from pathlib import Path
 
 import pytest
 
-from adas_core.fixture_lifecycle import FixtureStartupError, _script_path, _wait_for_port, process_fixture_lifecycle
+from adas_core.fixture_lifecycle import (
+    FixtureStartupError,
+    _script_path,
+    _wait_for_mcp_endpoint,
+    _wait_for_port,
+    process_fixture_lifecycle,
+)
 from adas_core.task_spec import MCPFixtureSpec, MockServiceFixtureSpec, TestFixturesSpec
 
 
@@ -83,9 +90,11 @@ def test_process_fixture_lifecycle_reports_crashing_script_output(tmp_path):
     )
     spec = TestFixturesSpec(mock_services=[MockServiceFixtureSpec(name="broken", port=port)])
 
-    with pytest.raises(FixtureStartupError, match="safe diagnostic"):
-        with process_fixture_lifecycle(spec, None, tmp_path, _workspace(tmp_path)):
-            pass
+    with (
+        pytest.raises(FixtureStartupError, match="safe diagnostic"),
+        process_fixture_lifecycle(spec, None, tmp_path, _workspace(tmp_path)),
+    ):
+        pass
 
 
 def test_process_fixture_lifecycle_rejects_an_already_occupied_port(tmp_path, monkeypatch):
@@ -99,11 +108,13 @@ def test_process_fixture_lifecycle_rejects_an_already_occupied_port(tmp_path, mo
     listener.listen()
     monkeypatch.delenv("WEATHER_BASE_URL", raising=False)
     try:
-        with pytest.raises(FixtureStartupError, match="already occupied before launch"):
-            with process_fixture_lifecycle(
+        with (
+            pytest.raises(FixtureStartupError, match="already occupied before launch"),
+            process_fixture_lifecycle(
                 TestFixturesSpec(mock_services=[fixture]), ["weather"], tmp_path, _workspace(tmp_path)
-            ):
-                pass
+            ),
+        ):
+            pass
     finally:
         listener.close()
     assert "WEATHER_BASE_URL" not in os.environ
@@ -123,11 +134,13 @@ def test_mcp_endpoint_readiness_accepts_post_only_route_and_rejects_wrong_path(t
     wrong_port = _free_port()
     (fixtures_dir / "mock_wrong_tools.py").write_text(_mcp_endpoint_script(wrong_port), encoding="utf-8")
     wrong_fixture = MCPFixtureSpec(name="wrong_tools", port=wrong_port, endpoint_path="/wrong", url_env="WRONG_MCP_URL")
-    with pytest.raises(FixtureStartupError, match="returned HTTP 404"):
-        with process_fixture_lifecycle(
+    with (
+        pytest.raises(FixtureStartupError, match="returned HTTP 404"),
+        process_fixture_lifecycle(
             TestFixturesSpec(mcps=[wrong_fixture]), ["wrong_tools"], tmp_path, _workspace(tmp_path / "wrong")
-        ):
-            pass
+        ),
+    ):
+        pass
     deadline = time.monotonic() + 2
     while True:
         try:
@@ -168,3 +181,33 @@ def test_script_path_accepts_a_fixtures_directory_directly(tmp_path):
     script.write_text("# fixture", encoding="utf-8")
     fixture = MockServiceFixtureSpec(name="weather", port=_free_port())
     assert _script_path(tmp_path, fixture) == script
+
+
+def test_wait_for_mcp_endpoint_retries_http_protocol_errors(tmp_path, monkeypatch):
+    class Process:
+        def poll(self):
+            return None
+
+    class Connection:
+        calls = 0
+
+        def request(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                raise BadStatusLine("incomplete response")
+
+        def getresponse(self):
+            class Response:
+                status = 405
+
+            return Response()
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setattr("adas_core.fixture_lifecycle.HTTPConnection", lambda *args, **kwargs: connection)
+    monkeypatch.setattr("adas_core.fixture_lifecycle.time.sleep", lambda _: None)
+    fixture = MCPFixtureSpec(name="tools", port=1234, endpoint_path="/mcp", url_env="TOOLS_MCP_URL")
+
+    _wait_for_mcp_endpoint(Process(), fixture, tmp_path / "stdout.log", tmp_path / "stderr.log")  # type: ignore[arg-type]

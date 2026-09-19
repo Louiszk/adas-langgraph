@@ -13,6 +13,7 @@ from adas_core.ast_parser import (
     extract_top_level_names,
     get_top_level_definitions,
 )
+from adas_core.environment import get_core_package_versions
 from adas_core.exceptions import GraphTopologyError
 from adas_core.helpers import escape_system_name, validate_identifier, validate_node_conditional_edge_signature
 
@@ -36,7 +37,7 @@ class VirtualAgenticSystem:
         self.edges = []  # List[(source, target)]
         self.conditional_edges = {}  # source_node -> {condition_code: str, path_map: dict}
 
-        self.packages_info = ["langchain-core 1.5.1", "langgraph 1.2.9"]
+        self.packages_info = get_core_package_versions()
         self.installed_packages = {}
         self.base_imports = [
             "from adas_core.chat_model import ChatModel",
@@ -85,25 +86,30 @@ class VirtualAgenticSystem:
         return "AgentState defined successfully."
 
     def _parse_from_import(self, imp_str: str):
-        """Parse strings like 'from module import a, b as c' into (module, set(names))"""
+        """Parse a from-import into its module and complete alias bindings."""
         clean = imp_str.strip()
         if not clean.startswith("from ") or " import " not in clean:
             return None, None
         try:
-            parts = clean.split(" import ", 1)
-            left = parts[0].strip()
-            module = left[len("from ") :].strip() if left.startswith("from ") else left
-            names_part = parts[1].strip()
-            names = {name.split(" as ")[0].strip() for name in names_part.split(",") if name.strip()}
-            return module, names
-        except Exception:
+            tree = ast.parse(clean)
+            if len(tree.body) != 1 or not isinstance(tree.body[0], ast.ImportFrom):
+                return None, None
+            node = tree.body[0]
+            module = "." * node.level + (node.module or "")
+            bindings = {(alias.name, alias.asname) for alias in node.names}
+            return module, bindings
+        except SyntaxError:
             return None, None
 
-    # It currently does not merge separate imports from the same module
-    def deduplicate_imports(self, new_import_statements: list[str]) -> list[str]:
-        # Build existing map for from-imports based ONLY on base_imports
+    def deduplicate_imports(
+        self,
+        new_import_statements: list[str],
+        existing_import_statements: list[str] | None = None,
+    ) -> list[str]:
+        existing_import_statements = self.imports if existing_import_statements is None else existing_import_statements
+        existing_imports = {imp.strip() for imp in existing_import_statements}
         existing_imports_map = {}
-        for imp_str in self.base_imports:
+        for imp_str in existing_import_statements:
             module, names = self._parse_from_import(imp_str)
             if module:
                 existing_imports_map.setdefault(module, set()).update(names)
@@ -112,7 +118,7 @@ class VirtualAgenticSystem:
         for new_imp_str in new_import_statements:
             clean_new = new_imp_str.strip()
 
-            if clean_new in self.base_imports:
+            if not clean_new or clean_new in existing_imports:
                 continue
 
             module, new_names = self._parse_from_import(clean_new)
@@ -122,8 +128,10 @@ class VirtualAgenticSystem:
                 if new_names.issubset(existing_imports_map.get(module, set())):
                     continue
                 truly_new_imports.append(clean_new)
+                existing_imports_map.setdefault(module, set()).update(new_names)
             else:
                 truly_new_imports.append(clean_new)
+            existing_imports.add(clean_new)
 
         return sorted(set(truly_new_imports))
 
@@ -132,7 +140,9 @@ class VirtualAgenticSystem:
         if not import_statements:
             return "WARNING: No import statements were found. No changes were made."
         try:
-            new_unique_imports = self.deduplicate_imports(import_statements)
+            new_unique_imports = self.deduplicate_imports(
+                import_statements, existing_import_statements=self.base_imports
+            )
             import_exec_globals = {}
             import_code = "\n".join(new_unique_imports)
             exec(import_code, import_exec_globals)
@@ -313,6 +323,24 @@ class VirtualAgenticSystem:
 
             func_def_node = None
             for node in tree.body:
+                # TODO: allow AsyncFunctionDef tools and nodes
+                if (
+                    isinstance(node, ast.AsyncFunctionDef)
+                    and component_type
+                    and component_type.lower()
+                    in [
+                        "node",
+                        "conditional_edge",
+                        "tool",
+                    ]
+                ):
+                    return (
+                        None,
+                        (
+                            "ERROR: Asynchronous tool, node, and conditional-edge functions are not currently supported. "
+                            "Use 'def'."
+                        ),
+                    )
                 if isinstance(node, ast.FunctionDef):
                     func_def_node = node
                     break
@@ -640,11 +668,10 @@ class VirtualAgenticSystem:
             return False
 
         for node in all_defined_nodes:
-            if node not in visited:
-                if _detect_standard_edge_cycle(node):
-                    errors.append(
-                        "The standard edges form a cycle, resulting in an infinite loop without an exit condition."
-                    )
-                    break
+            if node not in visited and _detect_standard_edge_cycle(node):
+                errors.append(
+                    "The standard edges form a cycle, resulting in an infinite loop without an exit condition."
+                )
+                break
 
         return sorted(set(errors))

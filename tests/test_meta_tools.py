@@ -11,6 +11,7 @@ from langgraph.graph import START
 
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.tools import (
+    end_design,
     install_package,
     manage_conditional_edge,
     manage_edge,
@@ -29,6 +30,34 @@ def meta_state(empty_system: VirtualAgenticSystem) -> dict:
 
 
 class TestMetaToolsSpecification:
+    def test_end_design_requires_passing_tests_in_strict_mode(self, monkeypatch):
+        monkeypatch.setattr("meta_system.tools.STRICT_END_DESIGN", True)
+        state = {"messages": [], "system_passed": False, "candidates": []}
+
+        result = end_design(message="The external service is unavailable.", state=state)
+
+        assert result.startswith("ERROR:")
+        assert "design_completed" not in state
+
+    def test_end_design_records_partial_completion_in_non_strict_mode(self, monkeypatch):
+        monkeypatch.setattr("meta_system.tools.STRICT_END_DESIGN", False)
+        state = {"messages": [], "system_passed": False, "candidates": []}
+
+        result = end_design(message="The remaining failure depends on an unavailable service.", state=state)
+
+        assert "partial candidate" in result
+        assert state["design_completed"] is True
+        assert state["design_status"] == "partial"
+        assert state["design_message"] == "The remaining failure depends on an unavailable service."
+
+    def test_end_design_requires_message_for_partial_completion(self, monkeypatch):
+        monkeypatch.setattr("meta_system.tools.STRICT_END_DESIGN", False)
+        state = {"messages": [], "system_passed": False, "candidates": []}
+
+        result = end_design(state=state)
+
+        assert result.startswith("ERROR:")
+
     def test_manage_node_and_tool(self, meta_state: dict, sample_node_researcher: str, sample_tool_calculator: str):
         """Contract: create actions add valid nodes and tools to state['target_agentic_system']."""
         res_node = manage_node(
@@ -75,6 +104,12 @@ class TestMetaToolsSpecification:
         assert "defined successfully" in res
         assert "context" in meta_state["target_agentic_system"].state_attributes
         assert meta_state["target_agentic_system"].state_attributes["context"] == "str"
+
+    def test_state_imports_are_not_accumulated_as_duplicates(self, meta_state: dict):
+        state_code = "from datetime import datetime\nclass AgentState(TypedDict):\n    value: str\n"
+        set_state(state_code=state_code, state=meta_state)
+        set_state(state_code=state_code, state=meta_state)
+        assert meta_state["target_agentic_system"].imports.count("from datetime import datetime") == 1
 
     def test_manage_utilities_create_and_delete(self, meta_state: dict):
         """Utility management uses explicit lifecycle actions and typed deletion targets."""

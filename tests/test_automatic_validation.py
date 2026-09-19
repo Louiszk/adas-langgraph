@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
+import create_validation
 from adas_core.automatic_validation import (
     CASE_VALIDATION_SYSTEM_PROMPT,
     AutomaticValidation,
@@ -13,11 +14,18 @@ from adas_core.automatic_validation import (
     discover_fixture_generators,
     ensure_automatic_validation,
     extract_validation_requirements,
+    filter_fixture_generators_for_case,
     is_validation_manifest_current,
     load_validation_module,
     sanitize_test_id,
 )
-from adas_core.task_spec import ArchitectureContract, TaskSpec, TestCaseSpec
+from adas_core.task_spec import (
+    ArchitectureContract,
+    FileFixtureSpec,
+    TaskSpec,
+    TestCaseSpec,
+    TestFixturesSpec,
+)
 from adas_core.virtual_agentic_system import VirtualAgenticSystem
 from meta_system.tools import test_system as run_test_system
 from sandbox.run_preflight import validation_requirements
@@ -121,8 +129,6 @@ class TestAutomaticValidation:
         assert is_validation_manifest_current(sample_task_spec, tmp_path)
 
     def test_create_validation_cli_verify_flag(self, sample_task_spec, tmp_path):
-        import create_validation
-
         spec_file = tmp_path / "task.json"
         sample_task_spec.save(spec_file)
 
@@ -294,8 +300,6 @@ class TestAutomaticValidation:
             assemble_validation_module(sample_task_spec, [(case, snippet)], [])
 
     def test_generates_per_case_with_scoped_fixtures(self, tmp_path):
-        from adas_core.task_spec import FileFixtureSpec, TestFixturesSpec
-
         task_spec = TaskSpec(
             name="ScopedAnalystAgent",
             system_goal="Analyze data scoped per case",
@@ -384,9 +388,6 @@ def validate_case_3(final_state, workspace_dirs):
         assert module.validate("non_existent", {}, {}) == (False, "No validator found for test case 'non_existent'")
 
     def test_filter_fixture_generators_exact_match_no_substring_false_positives(self):
-        from adas_core.automatic_validation import filter_fixture_generators_for_case
-        from adas_core.task_spec import FileFixtureSpec, TestFixturesSpec
-
         spec = TaskSpec(
             name="OrderAgent",
             system_goal="Process orders",

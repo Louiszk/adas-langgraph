@@ -15,7 +15,7 @@ from adas_core.environment import (
     SANDBOX_WORKSPACE_DIR,
     load_environment,
 )
-from adas_core.helpers import escape_system_name, sanitize_identifier, validate_identifier
+from adas_core.helpers import escape_system_name, parse_streaming_exit_code, sanitize_identifier, validate_system_name
 from adas_core.task_spec import TaskSpec
 from config import settings
 from config.logging import get_logger, setup_logging
@@ -64,7 +64,8 @@ def run_meta_system_in_sandbox(
         output_chunks.append(chunk)
         print(chunk, end="", flush=True)
 
-    meta_succeeded = "__ADAS_META_EXIT__0" in "".join(output_chunks)
+    exit_code = parse_streaming_exit_code(output_chunks, "META")
+    meta_succeeded = exit_code == 0
     if not meta_succeeded:
         logger.error("Meta system execution failed inside container")
         return False
@@ -157,54 +158,66 @@ def main() -> int:
     try:
         task_spec = TaskSpec.from_file(args.task_spec)
         if args.system_name:
-            validate_identifier(args.system_name, field_name="system name")
+            validate_system_name(args.system_name, field_name="system name")
         if args.optimize_system:
-            validate_identifier(args.optimize_system, field_name="optimize system name")
-    except ValueError as exc:
-        logger.error(str(exc))
+            validate_system_name(args.optimize_system, field_name="optimize system name")
+    except (OSError, ValueError) as exc:
+        logger.error("Failed to load TaskSpec or validate CLI arguments: %s", exc)
         return 1
 
     task_dir = args.task_spec.resolve().parent
     target_name = args.system_name or task_spec.name
 
-    validation_current = _is_validation_current(task_spec, task_dir)
-    setup_current = setup_manifest_is_current(args.task_spec)
+    if not task_spec.dev_suite:
+        logger.error(
+            "Design optimization requires at least one test case in dev_suite for TaskSpec '%s'.", task_spec.name
+        )
+        return 1
 
-    if not args.auto_setup:
-        if not setup_current:
-            logger.error(
-                "Frozen task setup is missing or stale for TaskSpec '%s'. "
-                "Regenerate it before design optimization: python create_setup.py --task-spec %s --force (or pass --auto-setup)",
-                task_spec.name,
-                args.task_spec,
-            )
-        if not validation_current:
-            logger.error(
-                "Frozen validation module is missing or stale for TaskSpec '%s'. "
-                "Regenerate it before design optimization: python create_validation.py --task-spec %s --force (or pass --auto-setup)",
-                task_spec.name,
-                args.task_spec,
-            )
-        if not setup_current or not validation_current:
-            return 1
-    else:
-        if not setup_current:
-            logger.info("Task setup is missing or stale; ensuring setup for %s...", args.task_spec)
-            run_setup_for_task(
-                args.task_spec,
-                force=True,
-                reinstall=args.reinstall,
-                container=args.container,
-                base_image=args.base_image,
-            )
-            validation_current = _is_validation_current(task_spec, task_dir)
+    try:
+        validation_current = _is_validation_current(task_spec, task_dir)
+        setup_current = setup_manifest_is_current(args.task_spec)
 
-        if not validation_current:
-            logger.info("Frozen validation module is missing or stale; generating validation for %s...", args.task_spec)
-            val_path = run_validation_for_task(args.task_spec, force=True)
-            if val_path is None:
-                logger.error("Failed to generate frozen validation module for TaskSpec '%s'.", task_spec.name)
+        if not args.auto_setup:
+            if not setup_current:
+                logger.error(
+                    "Frozen task setup is missing or stale for TaskSpec '%s'. "
+                    "Regenerate it before design optimization: python create_setup.py --task-spec %s --force (or pass --auto-setup)",
+                    task_spec.name,
+                    args.task_spec,
+                )
+            if not validation_current:
+                logger.error(
+                    "Frozen validation module is missing or stale for TaskSpec '%s'. "
+                    "Regenerate it before design optimization: python create_validation.py --task-spec %s --force (or pass --auto-setup)",
+                    task_spec.name,
+                    args.task_spec,
+                )
+            if not setup_current or not validation_current:
                 return 1
+        else:
+            if not setup_current:
+                logger.info("Task setup is missing or stale; ensuring setup for %s...", args.task_spec)
+                run_setup_for_task(
+                    args.task_spec,
+                    force=True,
+                    reinstall=args.reinstall,
+                    container=args.container,
+                    base_image=args.base_image,
+                )
+                validation_current = _is_validation_current(task_spec, task_dir)
+
+            if not validation_current:
+                logger.info(
+                    "Frozen validation module is missing or stale; generating validation for %s...", args.task_spec
+                )
+                val_path = run_validation_for_task(args.task_spec, force=True)
+                if val_path is None:
+                    logger.error("Failed to generate frozen validation module for TaskSpec '%s'.", task_spec.name)
+                    return 1
+    except Exception:
+        logger.exception("Task setup or validation failed for '%s'", task_spec.name)
+        return 1
 
     session = StreamingSandboxSession(
         image=args.base_image,
@@ -221,7 +234,7 @@ def main() -> int:
                 args.task_spec.resolve(),
                 task_spec.additional_documentation,
             )
-            if run_sandbox_preflight(session, runtime_task_dir):
+            if run_sandbox_preflight(session, runtime_task_dir, require_validation=True):
                 success = run_meta_system_in_sandbox(
                     session=session,
                     target_name=target_name,
@@ -238,8 +251,8 @@ def main() -> int:
         else:
             logger.error("Failed to set up sandbox environment")
             return 1
-    except Exception as e:
-        logger.exception(f"Error during execution: {e}")
+    except Exception:
+        logger.exception("Error during execution")
         return 1
     finally:
         logger.info("Session closed.")

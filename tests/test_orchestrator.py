@@ -2,6 +2,7 @@
 
 import json
 import sys
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -110,6 +111,77 @@ def test_parse_args_task_spec():
     assert args.task_spec == "specs/my_task/task.json"
 
 
+def test_container_manager_cleanup_is_scoped_to_tracked_job_resources():
+    class FakeContainers:
+        def __init__(self):
+            self.removed = []
+
+        def get(self, name):
+            return SimpleNamespace(remove=lambda force: self.removed.append((name, force)))
+
+    class FakeImages:
+        def __init__(self):
+            self.removed = []
+
+        def remove(self, image, force):
+            self.removed.append((image, force))
+
+    containers = FakeContainers()
+    images = FakeImages()
+    manager = ContainerManager.__new__(ContainerManager)
+    manager.unique_id = "job-123"
+    manager.client = SimpleNamespace(containers=containers, images=images)
+    manager._created_container_names = {"adas-temp-builder-job-123-1"}
+    manager._created_image_names = {"adas-temp-image-job-123"}
+
+    manager.cleanup_job_resources()
+
+    assert containers.removed == [("adas-temp-builder-job-123-1", True)]
+    assert images.removed == [("adas-temp-image-job-123", True)]
+    assert manager._created_container_names == set()
+    assert manager._created_image_names == set()
+
+
+def test_container_manager_untracks_successfully_removed_image():
+    images = SimpleNamespace(remove=lambda image, force: None)
+    manager = ContainerManager.__new__(ContainerManager)
+    manager.client = SimpleNamespace(images=images)
+    manager.container_type = "docker"
+    manager._created_image_names = {"adas-temp-image-job-123"}
+
+    manager.remove_image("adas-temp-image-job-123")
+
+    assert manager._created_image_names == set()
+
+
+def test_orchestrator_marks_invalid_dependency_metadata_as_failed(tmp_path: Path, monkeypatch):
+    work_dir = tmp_path / "work"
+    metrics_dir = work_dir / "generated_systems" / "metrics"
+    metrics_dir.mkdir(parents=True)
+    (work_dir / "generated_systems" / "ablationC_gsm1_gpt.py").write_text("", encoding="utf-8")
+    (metrics_dir / "ablationC_gsm1_gpt.json").write_text(
+        json.dumps({"installed_packages": ["not a valid requirement;"]}), encoding="utf-8"
+    )
+    results_dir = tmp_path / "results"
+    args = Namespace(
+        container="docker",
+        iterations="1",
+        benchmark="gsm",
+        type="ablationC",
+        cleanup_frequency=8,
+        timeout=1200,
+        results_dir=str(results_dir),
+    )
+    monkeypatch.chdir(work_dir)
+    orchestrator = Orchestrator(args)
+
+    with patch.object(DependencyParser, "get_installed_packages", side_effect=ValueError("invalid requirement")):
+        assert orchestrator.run_benchmark() == 1
+
+    summary = (results_dir / "results_summary.csv").read_text(encoding="utf-8")
+    assert "FAILED_INVALID_DEPENDENCIES" in summary
+
+
 def test_orchestrator_run_design_command_construction(tmp_path: Path):
     dummy_spec = tmp_path / "task.json"
     dummy_spec.write_text("{}", encoding="utf-8")
@@ -142,6 +214,58 @@ def test_orchestrator_run_design_command_construction(tmp_path: Path):
         assert "ablationC_gsm1_gpt" in cmd
 
 
+def test_orchestrator_uses_task_directory_name_for_canonical_task_spec(tmp_path: Path):
+    task_dir = tmp_path / "my_agent"
+    task_dir.mkdir()
+    dummy_spec = task_dir / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "design",
+            "--task-spec",
+            str(dummy_spec),
+            "--type",
+            "ablationC",
+            "--iterations",
+            "1",
+        ]
+    )
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        assert orchestrator.run_design() == 0
+        cmd = mock_run.call_args[0][0]
+        assert "ablationC_my_agent1_gpt" in cmd
+
+
+def test_orchestrator_sanitizes_hyphenated_task_spec_directory(tmp_path: Path):
+    task_dir = tmp_path / "my-agent"
+    task_dir.mkdir()
+    dummy_spec = task_dir / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "design",
+            "--task-spec",
+            str(dummy_spec),
+            "--type",
+            "ablationC",
+            "--iterations",
+            "1",
+        ]
+    )
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        assert orchestrator.run_design() == 0
+        cmd = mock_run.call_args[0][0]
+        assert "ablationC_my_agent1_gpt" in cmd
+
+
 def test_orchestrator_run_target_command_construction(tmp_path: Path):
     dummy_spec = tmp_path / "task.json"
     dummy_spec.write_text("{}", encoding="utf-8")
@@ -170,6 +294,37 @@ def test_orchestrator_run_target_command_construction(tmp_path: Path):
         assert "test_sys" in cmd
         assert "--task-spec" in cmd
         assert str(dummy_spec.resolve()) in cmd
+
+
+def test_orchestrator_run_target_forwards_batch_file(tmp_path: Path):
+    dummy_spec = tmp_path / "task.json"
+    dummy_spec.write_text("{}", encoding="utf-8")
+    batch_file = tmp_path / "batch.json"
+    batch_file.write_text("[]", encoding="utf-8")
+
+    args = parse_args(
+        [
+            "--task",
+            "target",
+            "--task-spec",
+            str(dummy_spec),
+            "--system-names",
+            "test_sys",
+            "--batch",
+            str(batch_file),
+            "--state",
+            '{"ignored": true}',
+        ]
+    )
+    orchestrator = Orchestrator(args)
+
+    with patch.object(ExecutionManager, "run_command", return_value={"exit_code": 0}) as mock_run:
+        assert orchestrator.run_target() == 0
+
+    cmd = mock_run.call_args[0][0]
+    assert "--batch" in cmd
+    assert str(batch_file.resolve()) in cmd
+    assert "--state" not in cmd
 
 
 def test_orchestrator_run_target_with_state_file(tmp_path: Path):

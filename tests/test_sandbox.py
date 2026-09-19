@@ -2,20 +2,39 @@
 Specification tests for sandbox runtime initialization and configuration.
 """
 
+import contextlib
+import hashlib
+import json
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from docker.errors import ImageNotFound
 
+from adas_core.environment import (
+    _PACKAGE_PATTERN,
+    SANDBOX_TASK_SETUP_DIR,
+    SANDBOX_WORKSPACE_DIR,
+    validate_package_requirement,
+)
+from adas_core.runtime_resources import RuntimeResourceProfile
 from config.dependencies import SANDBOX_DEPENDENCIES
-from sandbox.sandbox import StreamingSandboxSession
+from create_setup import _copy_tree_from_runtime, _restore_validation_section, setup_manifest_is_current
+from invoke_target import stage_runtime_profile_sources
+from sandbox import run_preflight
+from sandbox.run_setup import install_packages
+from sandbox.sandbox import (
+    StreamingSandboxSession,
+    copy_task_setup_to_sandbox,
+    ensure_cached_sandbox_image,
+    run_sandbox_preflight,
+    setup_sandbox_environment,
+)
 
 
 class TestSandboxSessionSpecification:
     def test_copy_dir_from_runtime_recursively_preserves_relative_paths(self, tmp_path, monkeypatch):
-        from types import SimpleNamespace
-
-        from sandbox.sandbox import StreamingSandboxSession
-
         session = object.__new__(StreamingSandboxSession)
         session.verbose = False
         copied = []
@@ -78,8 +97,6 @@ class TestSandboxSessionSpecification:
     @patch("docker.from_env")
     def test_reuses_existing_cached_default_image(self, mock_from_env):
         """The default runtime must not rebuild packages for each new session."""
-        from sandbox.sandbox import ensure_cached_sandbox_image
-
         mock_client = MagicMock()
         mock_from_env.return_value = mock_client
 
@@ -92,10 +109,6 @@ class TestSandboxSessionSpecification:
     @patch("docker.from_env")
     def test_builds_cached_image_with_configured_dependencies_when_absent(self, mock_from_env):
         """A new dependency set creates one new reusable image."""
-        from docker.errors import ImageNotFound
-
-        from sandbox.sandbox import ensure_cached_sandbox_image
-
         mock_client = MagicMock()
         mock_client.images.get.side_effect = ImageNotFound("missing")
         mock_from_env.return_value = mock_client
@@ -134,8 +147,6 @@ class TestSandboxSessionSpecification:
 
     def test_reuses_cached_image_with_provided_client(self):
         """When an explicit client (e.g., Podman) is passed, it should be used directly."""
-        from sandbox.sandbox import ensure_cached_sandbox_image
-
         mock_client = MagicMock()
         image = ensure_cached_sandbox_image(client=mock_client)
 
@@ -145,11 +156,7 @@ class TestSandboxSessionSpecification:
 
     def test_builds_cached_image_with_provided_client_when_absent(self):
         """When the image is absent in the provided client, build using that client."""
-        from sandbox.sandbox import ensure_cached_sandbox_image
-
         mock_client = MagicMock()
-        from docker.errors import ImageNotFound
-
         mock_client.images.get.side_effect = ImageNotFound("missing")
         image = ensure_cached_sandbox_image(client=mock_client)
 
@@ -161,8 +168,6 @@ class TestSandboxSessionSpecification:
 
     def test_propagates_cached_image_lookup_errors(self):
         """Daemon and permission failures must not be mistaken for a missing image."""
-        from sandbox.sandbox import ensure_cached_sandbox_image
-
         mock_client = MagicMock()
         mock_client.images.get.side_effect = RuntimeError("daemon unavailable")
 
@@ -172,7 +177,6 @@ class TestSandboxSessionSpecification:
 
     def test_setup_sandbox_environment_syncs_meta_system_and_core(self):
         """setup_sandbox_environment creates workspaces and syncs meta_system package."""
-        from sandbox.sandbox import setup_sandbox_environment
 
         mock_session = MagicMock()
         mock_check = MagicMock()
@@ -199,11 +203,6 @@ class TestSandboxSessionSpecification:
 
 class TestSetupSandboxUtilities:
     def test_setup_manifest_currentness_tracks_task_spec_contents(self, tmp_path):
-        import hashlib
-        import json
-
-        from create_setup import setup_manifest_is_current
-
         task_spec = tmp_path / "task.json"
         task_spec.write_text('{"name": "first"}', encoding="utf-8")
         digest = hashlib.sha256(task_spec.read_bytes()).hexdigest()
@@ -216,11 +215,6 @@ class TestSetupSandboxUtilities:
         assert not setup_manifest_is_current(task_spec)
 
     def test_setup_manifest_currentness_handles_crlf_and_lf(self, tmp_path):
-        import hashlib
-        import json
-
-        from create_setup import setup_manifest_is_current
-
         task_spec = tmp_path / "task.json"
         lf_content = b'{\n  "name": "cross_platform"\n}\n'
         crlf_content = b'{\r\n  "name": "cross_platform"\r\n}\r\n'
@@ -240,11 +234,6 @@ class TestSetupSandboxUtilities:
         assert setup_manifest_is_current(task_spec)
 
     def test_setup_manifest_currentness_checks_every_declared_artifact(self, tmp_path):
-        import hashlib
-        import json
-
-        from create_setup import setup_manifest_is_current
-
         task_spec = tmp_path / "task.json"
         task_spec.write_text('{"name": "complete"}\n', encoding="utf-8")
         fixture = tmp_path / "fixtures" / "input.csv"
@@ -266,10 +255,6 @@ class TestSetupSandboxUtilities:
         assert not setup_manifest_is_current(task_spec)
 
     def test_setup_regeneration_preserves_validation_section(self, tmp_path):
-        import json
-
-        from create_setup import _restore_validation_section
-
         manifest_path = tmp_path / "setup_manifest.json"
         manifest_path.write_text(json.dumps({"files": {"task.json": "new"}}), encoding="utf-8")
         validation = {"validator_hash": "old", "task_spec_hash": "old"}
@@ -279,9 +264,6 @@ class TestSetupSandboxUtilities:
         assert json.loads(manifest_path.read_text(encoding="utf-8"))["validation"] == validation
 
     def test_package_pattern_validation(self):
-        from adas_core.environment import _PACKAGE_PATTERN, validate_package_requirement
-        from sandbox.run_setup import install_packages
-
         valid_packages = [
             "neo4j",
             "neo4j>=5.0",
@@ -310,8 +292,6 @@ class TestSetupSandboxUtilities:
             install_packages(["safe-pkg", "bad; rm -rf"])
 
     def test_copy_tree_from_runtime_handles_object_and_string(self, tmp_path):
-        from create_setup import _copy_tree_from_runtime
-
         mock_session = MagicMock()
         # Case 1: command returns object with .stdout
         mock_result = MagicMock()
@@ -330,9 +310,6 @@ class TestSetupSandboxUtilities:
         assert mock_session.copy_from_runtime.call_count == 1
 
     def test_copy_task_setup_to_sandbox(self, tmp_path):
-        from adas_core.environment import SANDBOX_TASK_SETUP_DIR
-        from sandbox.sandbox import copy_task_setup_to_sandbox
-
         task_dir = tmp_path / "my_task"
         task_dir.mkdir()
         (task_dir / "setup.py").write_text("# setup")
@@ -365,9 +342,6 @@ class TestSetupSandboxUtilities:
         assert not any("__pycache__" in dest for dest in copied_destinations)
 
     def test_copy_task_setup_to_sandbox_stages_declared_documentation(self, tmp_path):
-        from adas_core.environment import SANDBOX_WORKSPACE_DIR
-        from sandbox.sandbox import copy_task_setup_to_sandbox
-
         task_dir = tmp_path / "task"
         task_dir.mkdir()
         docs_dir = task_dir / "docs"
@@ -385,9 +359,6 @@ class TestSetupSandboxUtilities:
         ]
 
     def test_run_sandbox_preflight_success(self):
-        from adas_core.environment import SANDBOX_TASK_SETUP_DIR
-        from sandbox.sandbox import run_sandbox_preflight
-
         mock_session = MagicMock()
         mock_result = MagicMock()
         mock_result.exit_code = 0
@@ -401,8 +372,6 @@ class TestSetupSandboxUtilities:
         )
 
     def test_run_sandbox_preflight_failure_text(self):
-        from sandbox.sandbox import run_sandbox_preflight
-
         mock_session = MagicMock()
         mock_result = MagicMock()
         mock_result.exit_code = 0
@@ -413,8 +382,6 @@ class TestSetupSandboxUtilities:
         assert run_sandbox_preflight(mock_session) is False
 
     def test_run_sandbox_preflight_passes_runtime_profile(self):
-        from sandbox.sandbox import run_sandbox_preflight
-
         mock_session = MagicMock()
         mock_session.execute_command.return_value = MagicMock(
             exit_code=0, stdout="Preflight verification passed", stderr=""
@@ -427,9 +394,6 @@ class TestSetupSandboxUtilities:
         assert "https://example.test" in command
 
     def test_stage_runtime_profile_sources_preserves_empty_directories(self, tmp_path):
-        from adas_core.runtime_resources import RuntimeResourceProfile
-        from invoke_target import stage_runtime_profile_sources
-
         source = tmp_path / "source"
         (source / "empty" / "nested").mkdir(parents=True)
         profile = RuntimeResourceProfile.model_validate(
@@ -444,8 +408,6 @@ class TestSetupSandboxUtilities:
         assert any("runtime_resources/docs/empty/nested" in command for command in commands)
 
     def test_run_sandbox_preflight_failure_exit_code(self):
-        from sandbox.sandbox import run_sandbox_preflight
-
         mock_session = MagicMock()
         mock_result = MagicMock()
         mock_result.exit_code = 1
@@ -454,3 +416,26 @@ class TestSetupSandboxUtilities:
         mock_session.execute_command.return_value = mock_result
 
         assert run_sandbox_preflight(mock_session) is False
+
+    def test_default_preflight_does_not_install_validation_packages(self, monkeypatch, tmp_path):
+
+        manifest_path = tmp_path / "setup_manifest.json"
+        manifest_path.write_text('{"required_packages": ["setup-package"]}', encoding="utf-8")
+        task_spec = MagicMock()
+        installed_packages = MagicMock()
+
+        monkeypatch.setattr(sys, "argv", ["run_preflight.py", "--task-dir", str(tmp_path)])
+        with (
+            patch.object(run_preflight.TaskSpec, "from_file", return_value=task_spec),
+            patch.object(run_preflight, "validation_requirements") as validation_requirements,
+            patch.object(run_preflight, "ensure_packages_installed", installed_packages),
+            patch.object(run_preflight, "fixture_paths_for_profile", return_value=[]),
+            patch.object(run_preflight, "isolated_case_workspace", return_value=contextlib.nullcontext({})),
+            patch.object(run_preflight, "process_fixture_lifecycle", return_value=contextlib.nullcontext()),
+            patch.object(run_preflight, "external_url_overrides", return_value=contextlib.nullcontext()),
+            patch.object(run_preflight, "run_preflight_check", return_value=(True, "ok")),
+        ):
+            assert run_preflight.main() == 0
+
+        validation_requirements.assert_not_called()
+        installed_packages.assert_called_once_with(["setup-package"])

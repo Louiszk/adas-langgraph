@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -22,10 +23,11 @@ from adas_core.chat_model import (
     _normalize_ai_message,
     convert_to_messages,
     execute_tool_calls,
+    has_image_content,
     usage_scope,
     validate_tool_history,
 )
-from adas_core.exceptions import ModelConfigurationError
+from adas_core.exceptions import ModelConfigurationError, ToolProtocolError
 
 
 @pytest.fixture(autouse=True)
@@ -298,16 +300,12 @@ class TestCompositionAndToolBinding:
         assert record.total_tokens == 16
 
     def test_normalize_ai_message_text_blocks(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[{"type": "text", "text": "Hello, world!", "index": 0}])
         normalized = _normalize_ai_message(msg)
         assert normalized.content == "Hello, world!"
         assert isinstance(normalized.content, str)
 
     def test_normalize_ai_message_tool_calls(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(
             content=[{"type": "function_call", "name": "calc", "arguments": "{}", "call_id": "c1"}],
             tool_calls=[{"name": "calc", "args": {}, "id": "c1"}],
@@ -318,23 +316,17 @@ class TestCompositionAndToolBinding:
         assert len(normalized.tool_calls) == 1
 
     def test_normalize_ai_message_empty_content(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[])
         normalized = _normalize_ai_message(msg)
         assert normalized.content == ""
         assert isinstance(normalized.content, str)
 
     def test_normalize_ai_message_preserves_multimodal(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         msg = AIMessage(content=[{"type": "image_url", "image_url": {"url": "http://img"}}])
         normalized = _normalize_ai_message(msg)
         assert isinstance(normalized.content, list)
 
     def test_normalize_ai_message_preserves_reasoning_in_additional_kwargs(self):
-        from adas_core.chat_model import _normalize_ai_message
-
         reasoning_block = {"type": "reasoning", "id": "rs_123", "summary": "Thinking about steps"}
         func_block = {"type": "function_call", "name": "foo", "call_id": "c1"}
         msg = AIMessage(
@@ -348,8 +340,6 @@ class TestCompositionAndToolBinding:
 
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_invoke_normalizes_responses_api_blocks_to_string(self, mock_chat_openai):
-        from adas_core.chat_model import ChatModel
-
         mock_model = MagicMock()
         mock_model.invoke.return_value = AIMessage(content=[{"type": "text", "text": "Normalized answer"}])
         mock_chat_openai.return_value = mock_model
@@ -361,12 +351,6 @@ class TestCompositionAndToolBinding:
 
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_invoke_with_tool_calls_and_execute_tool_calls(self, mock_chat_openai):
-        from langchain_core.messages import HumanMessage
-        from langchain_core.tools import tool
-
-        from adas_core.chat_model import ChatModel
-        from adas_core.tool_calls import execute_tool_calls, validate_tool_history
-
         @tool
         def add(a: int, b: int) -> int:
             """Add two numbers."""
@@ -400,7 +384,7 @@ class TestCompositionAndToolBinding:
         assert len(tool_msgs) == 1
         assert tool_msgs[0].content == "5"
         assert tool_msgs[0].tool_call_id == "call_123"
-        assert results["add"] == 5
+        assert results["call_123"] == 5
 
         # 4. Tool history passes validation
         history = [HumanMessage(content="Add 2 and 3"), res, tool_msgs[0]]
@@ -733,8 +717,61 @@ class TestExecuteToolCalls:
         tool_msgs, results = execute_tool_calls(response, tools_map)
         assert len(tool_msgs) == 2
         assert "12" in tool_msgs[0].content
-        assert results["multiply"] == 12
+        assert results["c1"] == 12
+        assert "not found" in results["c2"]
         assert "not found" in tool_msgs[1].content
+
+    def test_execute_tool_calls_runs_calls_in_parallel_and_keys_results_by_call_id(self):
+        barrier = threading.Barrier(2)
+
+        @tool
+        def wait_for_peer(value: str) -> str:
+            """Wait until the other call reaches this tool."""
+            barrier.wait(timeout=2)
+            return value
+
+        response = AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "call_a", "name": "wait_for_peer", "args": {"value": "a"}},
+                {"id": "call_b", "name": "wait_for_peer", "args": {"value": "b"}},
+            ],
+        )
+
+        tool_msgs, results = execute_tool_calls(response, {"wait_for_peer": wait_for_peer})
+
+        assert [message.tool_call_id for message in tool_msgs] == ["call_a", "call_b"]
+        assert results["call_a"] == "a"
+        assert results["call_b"] == "b"
+
+    def test_execute_tool_calls_invokes_a_tool_named_unknown(self):
+        @tool
+        def unknown() -> str:
+            """A valid tool whose name used to collide with a malformed-call sentinel."""
+            return "executed"
+
+        response = AIMessage(content="", tool_calls=[{"id": "call_unknown", "name": "unknown", "args": {}}])
+
+        tool_msgs, results = execute_tool_calls(response, {"unknown": unknown})
+
+        assert tool_msgs[0].content == "executed"
+        assert results["call_unknown"] == "executed"
+
+    def test_execute_tool_calls_rejects_duplicate_or_reserved_call_ids(self):
+        response = AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "duplicate", "name": "first", "args": {}},
+                {"id": "duplicate", "name": "second", "args": {}},
+            ],
+        )
+        with pytest.raises(ToolProtocolError, match="Duplicate tool call ID 'duplicate'"):
+            execute_tool_calls(response, {})
+
+        for reserved_id in ("errors", "invalid_tool_call_0", "malformed_tool_call_0"):
+            reserved_response = AIMessage(content="", tool_calls=[{"id": reserved_id, "name": "tool", "args": {}}])
+            with pytest.raises(ToolProtocolError, match=f"Tool call ID '{reserved_id}' is reserved"):
+                execute_tool_calls(reserved_response, {})
 
     def test_execute_tool_calls_skips_tool_messages_for_calls_lacking_ids_and_surfaces_errors(self):
         @tool
@@ -750,8 +787,8 @@ class TestExecuteToolCalls:
         # Must not emit protocol ToolMessage for tool calls lacking valid IDs
         assert len(tool_msgs) == 0
         # Error must be safely surfaced in results dictionary
-        assert "add" in results
-        assert "missing or invalid tool call ID" in results["add"]
+        assert "malformed_tool_call_0" in results
+        assert "missing or invalid tool call ID" in results["malformed_tool_call_0"]
         # History validation must pass without errors
         validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
 
@@ -764,8 +801,8 @@ class TestExecuteToolCalls:
         )
         tool_msgs, results = execute_tool_calls(response, tools_map)
         assert len(tool_msgs) == 0
-        assert "bad_call" in results
-        assert "bad syntax" in results["bad_call"]
+        assert "invalid_tool_call_0" in results
+        assert "bad syntax" in results["invalid_tool_call_0"]
         validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
 
     def test_execute_tool_calls_mixed_valid_and_missing_ids(self):
@@ -788,7 +825,7 @@ class TestExecuteToolCalls:
         assert tool_msgs[0].tool_call_id == "valid_call_1"
         assert "hello" in tool_msgs[0].content
         # The empty-ID call surfaces an error in results
-        assert "missing or invalid tool call ID" in results["echo"]
+        assert "missing or invalid tool call ID" in results["malformed_tool_call_1"]
         validate_tool_history([HumanMessage(content="run"), response, *tool_msgs])
 
     def test_execute_tool_calls_missing_name_without_id_surfaces_safely(self):
@@ -836,8 +873,6 @@ class TestVisionCapabilities:
         assert ModelRegistry.is_registered_model("openai", "gpt-5.6-luna-unintended-model") is False
 
     def test_has_image_content_detection(self):
-        from adas_core.chat_model import has_image_content
-
         msg_text = [HumanMessage(content="Simple text prompt")]
         assert has_image_content(msg_text) is False
 
@@ -933,7 +968,7 @@ class TestWebSearchCapabilities:
 
         llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
         assert llm.default_tools == ({"type": "web_search"},)
-        mock_instance.bind_tools.assert_called_once_with([{"type": "web_search"}])
+        mock_instance.bind_tools.assert_called_once_with([{"type": "web_search"}], parallel_tool_calls=False)
 
     @patch("adas_core.chat_model.ChatOpenAI")
     def test_chat_model_default_tools_unsupported_model(self, mock_chat_openai):
@@ -972,7 +1007,7 @@ class TestWebSearchCapabilities:
         # Target node explicitly equipping web search succeeds when authorized
         target_search_llm = ChatModel(model="gpt-5.6-luna", is_meta=False, default_tools=["web_search"])
         assert target_search_llm.default_tools == ({"type": "web_search"},)
-        mock_instance.bind_tools.assert_called_with([{"type": "web_search"}])
+        mock_instance.bind_tools.assert_called_with([{"type": "web_search"}], parallel_tool_calls=False)
 
         # Target node calling bind_tools(["web_search"]) is rejected with informative error
         with pytest.raises(ValueError, match="bind_tools is reserved for client-side tool instances"):
@@ -992,7 +1027,7 @@ class TestWebSearchCapabilities:
         llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
         bound_llm = llm.bind_tools([custom_calc])
 
-        mock_instance.bind_tools.assert_called_with([custom_calc, {"type": "web_search"}])
+        mock_instance.bind_tools.assert_called_with([custom_calc, {"type": "web_search"}], parallel_tool_calls=False)
         assert bound_llm.default_tools == ({"type": "web_search"},)
 
     @patch("adas_core.chat_model.ChatOpenAI")
@@ -1006,7 +1041,7 @@ class TestWebSearchCapabilities:
 
         schema = {"type": "object", "properties": {"is_pass": {"type": "boolean"}}}
         llm = ChatModel(model="gpt-5.6-luna", is_meta=True, default_tools=["web_search"])
-        structured_llm = llm.with_structured_output(schema)
+        structured_llm = llm.with_structured_output(schema, method="json_schema", strict=True)
 
         assert structured_llm._runnable is mock_structured
         mock_model.with_structured_output.assert_called_once_with(

@@ -1,9 +1,11 @@
+import argparse
 import importlib
 import sys
 import time
 
 from adas_core.environment import SANDBOX_WORKSPACE_DIR
 from benchmark.benchmark_base import extract_target_usage, reset_target_usage, run_benchmark_parallel
+from config.logging import setup_logging
 
 sys.path.append(SANDBOX_WORKSPACE_DIR)
 
@@ -49,10 +51,6 @@ def execute_problem(problem_item: dict, system_path: str) -> dict:
 
 
 if __name__ == "__main__":
-    import argparse
-
-    from config.logging import setup_logging
-
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Run GSM-Hard benchmark in parallel with metric aggregation.")

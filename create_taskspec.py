@@ -69,8 +69,8 @@ def main(argv: list[str] | None = None) -> int:
             task_name=args.name,
         )
         return 0 if spec is not None else 1
-    except Exception as exc:
-        logger.error("TaskSpec synthesis failed: %r", exc, exc_info=True)
+    except Exception:
+        logger.exception("TaskSpec synthesis failed")
         return 1
 
 

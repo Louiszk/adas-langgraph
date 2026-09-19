@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage
 
@@ -16,6 +16,7 @@ from adas_core.automatic_taskspec import (
     run_interactive_wizard,
 )
 from adas_core.task_spec import TaskSpec
+from create_taskspec import main, parse_args
 
 SAMPLE_VALID_TASKSPEC_DICT = {
     "schema_version": "1.0",
@@ -49,12 +50,12 @@ def test_format_assistant_message_for_display():
         f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```\n"
         "Please review the state schema and let me know if you want changes."
     )
-    saved_path = Path("specs/mathsolver/mathsolver.task.json")
+    saved_path = Path("specs/mathsolver/task.json")
     formatted = format_assistant_message_for_display(content, saved_path=saved_path)
 
     assert "I've drafted the schema for you!" in formatted
     assert "Please review the state schema" in formatted
-    assert "[Draft TaskSpec persisted to: specs/mathsolver/mathsolver.task.json]" in formatted
+    assert "[Draft TaskSpec persisted to: specs/mathsolver/task.json]" in formatted
     assert '"schema_version"' not in formatted  # Huge json is cleanly replaced
 
 
@@ -142,6 +143,10 @@ class TestAutomaticTaskSpecSynthesis:
         found_direct = find_existing_task_spec_file(output_dir=task_file)
         assert found_direct == task_file
 
+        # A staging directory named task.json is not itself a TaskSpec file.
+        (tmp_path / "task.json").mkdir()
+        assert find_existing_task_spec_file(output_dir=tmp_path) is None
+
     def test_save_task_spec_creates_file(self, tmp_path):
         gen = AutomaticTaskSpec(llm=MagicMock())
         spec = TaskSpec.model_validate(SAMPLE_VALID_TASKSPEC_DICT)
@@ -168,7 +173,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "MathSolver"
-        assert (tmp_path / "mathsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()
 
     def test_run_interactive_wizard_grilling_and_persistence(self, monkeypatch, tmp_path):
         mock_llm = MagicMock()
@@ -206,7 +211,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "MathSolver"
-        target_file = tmp_path / "mathsolver.task.json"
+        target_file = tmp_path / "task.json"
         assert target_file.exists()
 
     def test_run_interactive_wizard_refinement_conversation(self, monkeypatch, tmp_path):
@@ -238,7 +243,7 @@ class TestInteractiveWizard:
 
         assert spec is not None
         assert spec.name == "RefinedSolver"
-        assert (tmp_path / "refinedsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()
 
     def test_run_interactive_wizard_exit_before_spec(self, monkeypatch, tmp_path):
         gen = AutomaticTaskSpec(llm=MagicMock())
@@ -364,18 +369,12 @@ class TestInteractiveWizard:
 
 class TestCreateTaskSpecCLI:
     def test_parse_args(self):
-        from create_taskspec import parse_args
-
         args = parse_args(["--name", "CustomAgent", "--goal", "Do task", "--non-interactive"])
         assert args.name == "CustomAgent"
         assert args.goal == "Do task"
         assert args.non_interactive is True
 
     def test_main_cli_execution(self, monkeypatch, tmp_path):
-        from unittest.mock import patch
-
-        from create_taskspec import main
-
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = AIMessage(content=f"```json\n{json.dumps(SAMPLE_VALID_TASKSPEC_DICT)}\n```")
 
@@ -393,4 +392,4 @@ class TestCreateTaskSpecCLI:
             )
 
         assert ret == 0
-        assert (tmp_path / "mathsolver.task.json").exists()
+        assert (tmp_path / "task.json").exists()
